@@ -7,7 +7,6 @@ import (
 	"runtime"
 	"strings"
 
-	"github.com/s16e/hort/internal/daemon"
 	"github.com/s16e/hort/internal/store"
 	"golang.org/x/term"
 )
@@ -110,21 +109,9 @@ func FilterEntries(entries []store.EntryInfo, query string) []store.EntryInfo {
 
 // CmdSearch lists entries matching the query.
 func CmdSearch(query string, jsonOutput bool) error {
-	var entries []store.EntryInfo
-	if resp, ok, err := daemonCall(daemon.MethodList, map[string]any{"type": ""}); ok {
-		if err != nil {
-			return err
-		}
-		entries, err = daemon.DecodeEntries(resp)
-		if err != nil {
-			return err
-		}
-	} else {
-		var err error
-		entries, err = requireStore().List("")
-		if err != nil {
-			return err
-		}
+	entries, err := requireStore().List("")
+	if err != nil {
+		return err
 	}
 	fmt.Print(FormatList(FilterEntries(entries, query), jsonOutput))
 	return nil

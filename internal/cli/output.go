@@ -97,10 +97,9 @@ func FormatSourceList(items []SourceStatus, jsonOutput bool) string {
 	return b.String()
 }
 
-// FormatStatus formats combined vault + daemon status. Apps integrating Hort
+// FormatStatus formats primary vault status. Apps integrating Hort
 // can parse the JSON form as a single readiness check.
-func FormatStatus(unlocked bool, vaultPath string, secretCount, configCount int,
-	daemonRunning bool, socketPath string, jsonOutput bool) string {
+func FormatStatus(unlocked bool, vaultPath string, secretCount, configCount int, jsonOutput bool) string {
 	if jsonOutput {
 		status := map[string]any{
 			"primary": map[string]any{
@@ -108,10 +107,6 @@ func FormatStatus(unlocked bool, vaultPath string, secretCount, configCount int,
 				"vault_path":   vaultPath,
 				"secret_count": secretCount,
 				"config_count": configCount,
-			},
-			"daemon": map[string]any{
-				"running":     daemonRunning,
-				"socket_path": socketPath,
 			},
 			"ready": unlocked,
 		}
@@ -128,12 +123,6 @@ func FormatStatus(unlocked bool, vaultPath string, secretCount, configCount int,
 	fmt.Fprintf(&b, "Vault:    %s\n", vaultPath)
 	fmt.Fprintf(&b, "Secrets:  %d\n", secretCount)
 	fmt.Fprintf(&b, "Configs:  %d\n", configCount)
-	daemonState := "stopped"
-	if daemonRunning {
-		daemonState = "running"
-	}
-	fmt.Fprintf(&b, "Daemon:   %s\n", daemonState)
-	fmt.Fprintf(&b, "Socket:   %s\n", socketPath)
 	if !unlocked {
 		fmt.Fprintln(&b, "Next:     run `hort unlock` to use secrets")
 	}

@@ -31,7 +31,7 @@ hort source mount --name myapp-prod \
   --key-hex "$MYAPP_MASTER_KEY_HEX"
 ```
 
-Your app reads and writes via the same hort CLI (or the daemon socket) that it already uses for shell automation. The moment you do this, **the agents working on that app pick up the same secrets aus einem guss** — no separate credential system per integration, no copy-paste between the app's UI and the agent's context. Your app's `.env`-equivalent and your agent's `hort --secret` resolve to the same byte.
+Your app reads and writes via the same hort CLI that it already uses for shell automation. The moment you do this, **the agents working on that app pick up the same secrets aus einem guss** — no separate credential system per integration, no copy-paste between the app's UI and the agent's context. Your app's `.env`-equivalent and your agent's `hort --secret` resolve to the same byte.
 
 **Integration code.** Anywhere a script or service needs "this token for dev, that one for prod, a third for the Heine tenant on prod" — the `env + context` fallback chain covers it in one call.
 
@@ -95,9 +95,6 @@ go install github.com/sebastian-breitzke/hort/cmd/hort@latest && hort init
 
 After `hort init` you'll set a passphrase — that's it. Vault created, session
 unlocked, ready to store secrets.
-
-For apps that hit hort often, run `hort daemon install` once (macOS launchd agent). From then on the daemon starts at login, stays
-alive, and every CLI call routes through its Unix socket automatically.
 
 ## Usage
 
@@ -214,34 +211,42 @@ hort source unmount --name fachwerk-heine
 
 The vault file itself stays on disk between unmounts — unmount only clears the cached key and removes the registry entry. Mount names must be lowercase `a-z0-9._-`. `primary` is reserved.
 
-### Daemon
+### Removing an older daemon installation
 
-Apps that resolve dozens of secrets per request benefit from a long-running
-daemon instead of spawning a fresh CLI per call. Hort can install itself as a
-user-level service so this is transparent:
+Hort now accesses vault files directly through the CLI. Before upgrading an
+older macOS installation, remove its launchd service. For a user-level install:
 
 ```bash
-hort daemon install     # macOS: ~/Library/LaunchAgents
-hort daemon status      # running + primary-vault-unlocked in one shot
-hort daemon uninstall   # removes the launchd agent
+launchctl bootout "gui/$(id -u)/tech.s16e.hort.daemon"
+rm -f "$HOME/Library/LaunchAgents/tech.s16e.hort.daemon.plist"
 ```
 
-After `install` the daemon runs at login and stays alive across reboots. Every
-`hort --secret` / `--set-secret` / `--list` call detects the socket at
-`~/.hort/daemon.sock` and routes through it automatically; if the daemon is
-not running the CLI falls back to direct file access — apps don't need to
-care which path is used.
+For an installation made with `hort daemon install --system`:
 
-For one-shot or CI use, `hort daemon start` still runs the daemon in the
-foreground. `--system` on `install`/`uninstall` switches to
-`/Library/LaunchDaemons` (requires root).
+```bash
+sudo launchctl bootout system/tech.s16e.hort.daemon
+sudo rm -f /Library/LaunchDaemons/tech.s16e.hort.daemon.plist
+```
+
+If `bootout` reports that the service is not loaded, remove the plist anyway.
+After the service has stopped, remove its unused socket and PID file:
+
+```bash
+rm -f "$HOME/.hort/daemon.sock" "$HOME/.hort/daemon.pid"
+```
+
+Keep `~/.hort/vault.enc`, its backup, and the session/source files. No vault
+conversion is needed. Containers now run individual CLI commands; mount the
+vault directory at `/var/lib/hort/.hort` and pass the desired command (for
+example `init`, `status --json`, or `--list`).
+
+### Readiness
 
 Apps integrating Hort can use `hort status --json` as a single readiness
 check:
 
 ```json
 {
-  "daemon":  { "running": true,  "socket_path": "/Users/you/.hort/daemon.sock" },
   "primary": { "unlocked": true, "vault_path":  "/Users/you/.hort/vault.enc",
                "secret_count": 18, "config_count": 14 },
   "ready": true
@@ -249,8 +254,7 @@ check:
 ```
 
 `ready: true` means secrets can be resolved right now; `false` means the app
-should ask the user to run `hort unlock` (and, if `daemon.running` is also
-false, `hort daemon install`).
+should ask the user to run `hort unlock`.
 
 ## Agent Integration
 
@@ -297,18 +301,11 @@ internal/
 │   └── lock.go              Per-ref flock for concurrent writers
 ├── store/
 │   └── store.go             Multi-source merge reads, targeted writes, ambiguity detection
-├── daemon/
-│   ├── server.go            Unix-socket JSON-RPC-lite server
-│   ├── client.go            Short-lived client with auto-detect
-│   ├── protocol.go          Method names and request/response shape
-│   └── paths.go             Socket / PID / log paths
 ├── cli/
-│   ├── commands.go          Command implementations (with transparent daemon routing)
-│   ├── daemon.go            `hort daemon start/stop/status`
-│   ├── service.go           `hort daemon install/uninstall` (launchd)
+│   ├── commands.go          Command implementations (direct store access)
 │   └── output.go            Output formatting (plain text + JSON)
 ├── helptext/
-│   └── text.go              The `hort --help` string — served to the CLI and the daemon
+│   └── text.go              The `hort --help` string
 └── (...)
 
 ```

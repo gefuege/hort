@@ -1,5 +1,4 @@
-// Package helptext holds the hort CLI help text, split from internal/cli so
-// the daemon can serve it without creating an import cycle.
+// Package helptext holds the hort CLI help text.
 package helptext
 
 const HelpText = `Hort — Local secret and config store for humans and AI agents.
@@ -30,11 +29,6 @@ SOURCES:
   hort source mount --name <n> --path <p> --key-hex <hex> [--kdf raw|argon2id]
                                          Register a mounted source vault and cache its key
   hort source unmount --name <n>         Unmount a source (vault file stays on disk)
-
-DAEMON:
-  hort daemon start                      Run the background daemon in the foreground
-  hort daemon stop                       Send SIGTERM to a running daemon
-  hort daemon status [--json]            Check whether the daemon socket is responsive
 
 DELETE:
   hort --delete <name> [--env <env>] [--context <ctx>] [--source <name>]   Delete entry or override
@@ -70,13 +64,6 @@ ENVIRONMENTS AND CONTEXTS:
     hort --set-secret tenant-id --value "heine-prod" --env prod --context heine
     hort --secret tenant-id --env prod --context heine   → heine-prod
     hort --secret tenant-id --env staging                → default-123 (fallback)
-
-DAEMON MODE:
-  When 'hort daemon start' is running, the CLI detects the socket and routes
-  all reads/writes through the daemon instead of reopening vault files. This
-  gives lower latency for frequent callers (e.g. Fachwerk resolving brick
-  secrets). If the daemon is stopped, the CLI transparently falls back to
-  direct file access — no user-visible change.
 
 AGENT INSTRUCTIONS:
   Hort is designed to be used by AI agents (Claude, Codex, Gemini) as a local

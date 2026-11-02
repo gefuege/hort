@@ -6,7 +6,6 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/s16e/hort/internal/daemon"
 	"github.com/s16e/hort/internal/store"
 	"github.com/s16e/hort/internal/vault"
 	"golang.org/x/term"
@@ -41,6 +40,10 @@ func CmdInit(restore bool) error {
 		return fmt.Errorf("vault already exists — use `hort init --restore` to restore with existing passphrase")
 	}
 
+	if restore && !exists {
+		return fmt.Errorf("no vault found — place the existing vault at ~/.hort/vault.enc before running `hort init --restore`")
+	}
+
 	pass, err := ReadPassphrase("Enter passphrase: ")
 	if err != nil {
 		return err
@@ -61,7 +64,7 @@ func CmdInit(restore bool) error {
 		}
 	}
 
-	if restore && exists {
+	if restore {
 		key, err := vault.UnlockVault(ref, pass)
 		if err != nil {
 			return err
@@ -132,7 +135,7 @@ func CmdLock() error {
 	return nil
 }
 
-// CmdStatus shows vault + daemon status in a single call. Apps that depend
+// CmdStatus shows primary vault status in a single call. Apps that depend
 // on Hort can use `hort status --json` as their single readiness check.
 func CmdStatus(jsonOutput bool) error {
 	primaryUnlocked := vault.IsUnlocked()
@@ -160,11 +163,7 @@ func CmdStatus(jsonOutput bool) error {
 		}
 	}
 
-	daemonRunning := daemon.Available()
-	sockPath, _ := daemon.SocketPath()
-
-	fmt.Print(FormatStatus(primaryUnlocked, path, secretCount, configCount,
-		daemonRunning, sockPath, jsonOutput))
+	fmt.Print(FormatStatus(primaryUnlocked, path, secretCount, configCount, jsonOutput))
 	return nil
 }
 
@@ -178,32 +177,8 @@ func requireStore() *store.Store {
 	return s
 }
 
-// daemonCall tries the daemon first. If the socket isn't reachable, returns
-// (nil, false, nil) so the caller falls back to direct store access. If the
-// socket is reachable, returns (resp, true, err) where err carries the
-// daemon-side semantic error when present.
-func daemonCall(method string, params map[string]any) (*daemon.Response, bool, error) {
-	c, err := daemon.Dial()
-	if err != nil {
-		return nil, false, nil
-	}
-	defer c.Close()
-	resp, err := c.Call(daemon.Request{Method: method, Params: params})
-	return resp, true, err
-}
-
 // CmdGetSecret retrieves a secret from the merged view.
 func CmdGetSecret(name, env, context, source string) error {
-	if resp, ok, err := daemonCall(daemon.MethodGetSecret, map[string]any{
-		"name": name, "env": env, "context": context, "source": source,
-	}); ok {
-		if err != nil {
-			return err
-		}
-		fmt.Print(resp.Result["value"])
-		return nil
-	}
-
 	s := requireStore()
 	var val string
 	var err error
@@ -221,16 +196,6 @@ func CmdGetSecret(name, env, context, source string) error {
 
 // CmdGetConfig retrieves a config from the merged view.
 func CmdGetConfig(name, env, context, source string) error {
-	if resp, ok, err := daemonCall(daemon.MethodGetConfig, map[string]any{
-		"name": name, "env": env, "context": context, "source": source,
-	}); ok {
-		if err != nil {
-			return err
-		}
-		fmt.Print(resp.Result["value"])
-		return nil
-	}
-
 	s := requireStore()
 	var val string
 	var err error
@@ -249,17 +214,6 @@ func CmdGetConfig(name, env, context, source string) error {
 // CmdSetSecret stores a secret. Targets the source named via --source, or
 // primary if none specified.
 func CmdSetSecret(name, value, env, context, description, source string) error {
-	if _, ok, err := daemonCall(daemon.MethodSetSecret, map[string]any{
-		"name": name, "value": value, "env": env, "context": context,
-		"description": description, "source": source,
-	}); ok {
-		if err != nil {
-			return err
-		}
-		announceStored("secret", name, env, context, source)
-		return nil
-	}
-
 	s := requireStore()
 	if err := s.SetSecret(source, name, value, env, context, description); err != nil {
 		return err
@@ -270,17 +224,6 @@ func CmdSetSecret(name, value, env, context, description, source string) error {
 
 // CmdSetConfig stores a config.
 func CmdSetConfig(name, value, env, context, description, source string) error {
-	if _, ok, err := daemonCall(daemon.MethodSetConfig, map[string]any{
-		"name": name, "value": value, "env": env, "context": context,
-		"description": description, "source": source,
-	}); ok {
-		if err != nil {
-			return err
-		}
-		announceStored("config", name, env, context, source)
-		return nil
-	}
-
 	s := requireStore()
 	if err := s.SetConfig(source, name, value, env, context, description); err != nil {
 		return err
@@ -291,18 +234,6 @@ func CmdSetConfig(name, value, env, context, description, source string) error {
 
 // CmdList lists entries across all unlocked sources.
 func CmdList(typeFilter string, jsonOutput bool) error {
-	if resp, ok, err := daemonCall(daemon.MethodList, map[string]any{"type": typeFilter}); ok {
-		if err != nil {
-			return err
-		}
-		entries, err := daemon.DecodeEntries(resp)
-		if err != nil {
-			return err
-		}
-		fmt.Print(FormatList(entries, jsonOutput))
-		return nil
-	}
-
 	s := requireStore()
 	entries, err := s.List(typeFilter)
 	if err != nil {
@@ -314,18 +245,6 @@ func CmdList(typeFilter string, jsonOutput bool) error {
 
 // CmdDescribe shows entry details across sources.
 func CmdDescribe(name string, jsonOutput bool) error {
-	if resp, ok, err := daemonCall(daemon.MethodDescribe, map[string]any{"name": name}); ok {
-		if err != nil {
-			return err
-		}
-		entries, err := daemon.DecodeEntries(resp)
-		if err != nil {
-			return err
-		}
-		fmt.Print(FormatDescribe(entries, jsonOutput))
-		return nil
-	}
-
 	s := requireStore()
 	entries, err := s.Describe(name)
 	if err != nil {
@@ -337,16 +256,6 @@ func CmdDescribe(name string, jsonOutput bool) error {
 
 // CmdDelete removes an entry or specific env/context combination.
 func CmdDelete(name, env, context, source string) error {
-	if _, ok, err := daemonCall(daemon.MethodDelete, map[string]any{
-		"name": name, "env": env, "context": context, "source": source,
-	}); ok {
-		if err != nil {
-			return err
-		}
-		fmt.Fprintln(os.Stderr, "Deleted.")
-		return nil
-	}
-
 	s := requireStore()
 	if err := s.Delete(source, name, env, context); err != nil {
 		return err

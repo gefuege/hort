@@ -38,14 +38,9 @@ HORT_PASSPHRASE="test" ./hort init
 - `internal/vault/session.go` — Per-ref session key persistence
 - `internal/vault/lock.go` — Per-ref flock (concurrent-safe writers)
 - `internal/store/store.go` — Multi-source merge reads, targeted writes, ambiguity detection
-- `internal/daemon/*.go` — Unix-socket daemon (server, client, protocol, paths)
-- `internal/cli/commands.go` — Command implementations (transparently prefer daemon)
-- `internal/cli/daemon.go` — `hort daemon start/stop/status`
-- `internal/cli/service.go` — `hort daemon install/uninstall` (launchd template rendering)
-- `internal/cli/help.go` — Help text (serves as agent prompt)
+- `internal/cli/commands.go` — Command implementations (direct store access)
+- `internal/helptext/text.go` — Help text (serves as agent prompt)
 - `internal/cli/output.go` — Output formatting (plain/JSON)
-- `packaging/packaging.go` — `//go:embed` wrappers exposing the service templates
-- `packaging/launchd/tech.s16e.hort.daemon.plist.tmpl` — rendered by `hort daemon install` on macOS
 
 ## Sources
 
@@ -55,21 +50,6 @@ their vault files live wherever the mounter decides, their lock/session files
 under `~/.hort/sources/<name>.{lock,session}`. Reads merge across all unlocked
 sources. Writes default to primary; `--source <name>` targets a mount. Same
 key in multiple sources → ambiguity error with `--source` hint.
-
-## Daemon
-
-`hort daemon start` launches a foreground Unix-socket server at
-`~/.hort/daemon.sock` (override via `HORT_SOCKET_PATH` for tests — macOS
-limits socket paths to ~104 bytes). When the socket is up, every CLI call
-detects it and routes the request through the daemon instead of reopening
-vault files. Fallback to direct file access is automatic when the daemon is
-stopped.
-
-`hort daemon install` renders the embedded launchd plist (macOS) with `os.Executable()` and
-`$HOME`, drops it at `~/Library/LaunchAgents/`, and activates it with
-`launchctl bootstrap`. Idempotent. `--system` switches to
-`/Library/LaunchDaemons` (root only). `hort daemon uninstall` reverses it.
-Other platforms print "not supported".
 
 ## Release
 
@@ -88,5 +68,4 @@ Package: `@s16e/hort`. Do not automate npm publish via CI.
 - Errors on stderr, values on stdout (no decoration)
 - Exit code 2 = primary vault locked (mounts that are locked are skipped with a stderr warning)
 - `HORT_PASSPHRASE` env var bypasses terminal prompt
-- `HORT_SOCKET_PATH` env var overrides the daemon socket path (tests only)
 - `primary` is a reserved source name; mount names must match `[a-z0-9._-]+` and not start with `-` or `.`

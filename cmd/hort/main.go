@@ -194,64 +194,6 @@ func main() {
 
 	root.AddCommand(sourceCmd)
 
-	// Daemon subcommands
-	daemonCmd := &cobra.Command{
-		Use:   "daemon",
-		Short: "Manage the Hort background daemon (Unix socket)",
-	}
-	daemonStartCmd := &cobra.Command{
-		Use:   "start",
-		Short: "Run the daemon in the foreground",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			return cli.CmdDaemonStart()
-		},
-	}
-	daemonCmd.AddCommand(daemonStartCmd)
-	daemonCmd.AddCommand(&cobra.Command{
-		Use:   "stop",
-		Short: "Send SIGTERM to a running daemon",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			return cli.CmdDaemonStop()
-		},
-	})
-	daemonStatusCmd := &cobra.Command{
-		Use:   "status",
-		Short: "Check whether the daemon socket is responsive",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			j, _ := cmd.Flags().GetBool("json")
-			return cli.CmdDaemonStatus(j)
-		},
-	}
-	daemonStatusCmd.Flags().Bool("json", false, "JSON output")
-	daemonCmd.AddCommand(daemonStatusCmd)
-
-	daemonInstallCmd := &cobra.Command{
-		Use:   "install",
-		Short: "Install a launchd agent (macOS)",
-		Long: "Install a launchd agent (macOS) that " +
-			"launches `hort daemon start` at login and keeps it alive. " +
-			"Idempotent — safe to re-run after upgrades.",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			system, _ := cmd.Flags().GetBool("system")
-			return cli.CmdDaemonInstall(system)
-		},
-	}
-	daemonInstallCmd.Flags().Bool("system", false, "Install system-wide (requires root; default is user-level)")
-	daemonCmd.AddCommand(daemonInstallCmd)
-
-	daemonUninstallCmd := &cobra.Command{
-		Use:   "uninstall",
-		Short: "Remove the launchd agent",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			system, _ := cmd.Flags().GetBool("system")
-			return cli.CmdDaemonUninstall(system)
-		},
-	}
-	daemonUninstallCmd.Flags().Bool("system", false, "Operate on the system-wide install")
-	daemonCmd.AddCommand(daemonUninstallCmd)
-
-	root.AddCommand(daemonCmd)
-
 	if err := root.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)

@@ -1,20 +1,6 @@
-# Hort — minimal daemon image
-#
-# Stage 1: build the static Go binary.
-# Stage 2: minimal runtime that runs the daemon as PID 1.
-#
-# The daemon listens on a Unix socket. Mount /run/hort as a shared volume
-# between this container and any client (e.g. the Fachwerk engine) to
-# expose the socket; mount /var/lib/hort/.hort for persistent vault state.
-#
-# Build:
-#   docker build -t ghcr.io/s16e/hort:dev .
-# Run:
-#   docker run --rm \
-#     -e HORT_SOCKET_PATH=/run/hort/daemon.sock \
-#     -v hort-state:/var/lib/hort/.hort \
-#     -v hort-socket:/run/hort \
-#     ghcr.io/s16e/hort:dev
+# Hort — CLI image. Mount /var/lib/hort/.hort for persistent vault state.
+# Build: docker build -t ghcr.io/s16e/hort:dev .
+# Run: docker run --rm -it -v hort-state:/var/lib/hort/.hort ghcr.io/s16e/hort:dev init
 
 ARG GO_VERSION=1.26
 ARG DEBIAN_VERSION=bookworm-20241016-slim
@@ -48,19 +34,18 @@ RUN go build \
 FROM debian:${DEBIAN_VERSION} AS runtime
 
 RUN apt-get update -y \
- && apt-get install -y --no-install-recommends ca-certificates tini \
+ && apt-get install -y --no-install-recommends ca-certificates \
  && apt-get clean && rm -rf /var/lib/apt/lists/* \
  && useradd --create-home --home-dir /var/lib/hort --shell /usr/sbin/nologin --uid 1000 hort \
- && mkdir -p /var/lib/hort/.hort /run/hort \
- && chown -R hort:hort /var/lib/hort /run/hort
+ && mkdir -p /var/lib/hort/.hort \
+ && chown -R hort:hort /var/lib/hort
 
 COPY --from=builder /out/hort /usr/local/bin/hort
 
 USER hort
-ENV HOME=/var/lib/hort \
-    HORT_SOCKET_PATH=/run/hort/daemon.sock
+ENV HOME=/var/lib/hort
 
-VOLUME ["/var/lib/hort/.hort", "/run/hort"]
+VOLUME ["/var/lib/hort/.hort"]
 
-ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/hort"]
-CMD ["daemon", "start"]
+ENTRYPOINT ["/usr/local/bin/hort"]
+CMD ["--help"]
