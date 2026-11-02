@@ -63,6 +63,13 @@ func ParseFormat(data []byte) (FormatInfo, error) {
 		if version != 2 {
 			return FormatInfo{}, errors.New("unsupported vault format version")
 		}
+		// Headers are untrusted until decryption succeeds. Support positive
+		// Argon costs up to Hort's defaults, with no silent Argon memory clamp.
+		if kdf == KDFArgon2id && (params.Time < 1 || params.Time > DefaultArgonTime ||
+			params.Threads < 1 || params.Threads > DefaultArgonThreads ||
+			params.Memory < 8*uint32(params.Threads) || params.Memory > DefaultArgonMemory) {
+			return FormatInfo{}, errors.New("unsupported Argon2id parameters")
+		}
 		return FormatInfo{
 			Version:  2,
 			KDF:      kdf,

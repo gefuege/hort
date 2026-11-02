@@ -36,7 +36,7 @@ HORT_PASSPHRASE="test" ./hort init
 - `internal/vault/vault.go` — `VaultRef`, load/save/update by ref, primary helpers
 - `internal/vault/sources.go` — Mounted-source registry (~/.hort/sources/index.json)
 - `internal/vault/session.go` — Per-ref session key persistence
-- `internal/vault/lock.go` — Per-ref flock (concurrent-safe writers)
+- `internal/vault/lock.go` — File locks by canonical vault path (concurrent-safe writers)
 - `internal/store/store.go` — Multi-source merge reads, targeted writes, ambiguity detection
 - `internal/cli/commands.go` — Command implementations (direct store access)
 - `internal/helptext/text.go` — Help text (serves as agent prompt)
@@ -46,8 +46,9 @@ HORT_PASSPHRASE="test" ./hort init
 
 Primary vault at `~/.hort/vault.enc` (Argon2id KDF). Any number of mounted
 sources registered via `hort source mount --name <n> --path <p> --key-hex <hex>`;
-their vault files live wherever the mounter decides, their lock/session files
-under `~/.hort/sources/<name>.{lock,session}`. Reads merge across all unlocked
+their vault files live wherever the mounter decides. Session files remain under
+`~/.hort/sources/<name>.session`; locks use `~/.hort/locks/<path-digest>.lock`,
+so aliases of the same vault share one lock. Reads merge across all unlocked
 sources. Writes default to primary; `--source <name>` targets a mount. Same
 key in multiple sources → ambiguity error with `--source` hint.
 

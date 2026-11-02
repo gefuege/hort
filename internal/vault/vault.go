@@ -57,7 +57,7 @@ func NewVaultData() *VaultData {
 // PrimarySourceName is the reserved name for the primary vault.
 const PrimarySourceName = "primary"
 
-// VaultRef identifies a vault file and its co-located lock/session artifacts.
+// VaultRef identifies a vault file and its local lock/session artifacts.
 type VaultRef struct {
 	Name        string
 	Path        string
@@ -89,32 +89,38 @@ func PrimaryRef() (VaultRef, error) {
 	if err != nil {
 		return VaultRef{}, err
 	}
+	path := filepath.Join(dir, "vault.enc")
+	lockPath, err := vaultLockPath(path)
+	if err != nil {
+		return VaultRef{}, err
+	}
 	return VaultRef{
 		Name:        PrimarySourceName,
-		Path:        filepath.Join(dir, "vault.enc"),
-		LockPath:    filepath.Join(dir, "vault.lock"),
+		Path:        path,
+		LockPath:    lockPath,
 		SessionPath: filepath.Join(dir, ".session"),
 	}, nil
 }
 
 // MountedRefAt returns the VaultRef for a mount with the given name, using the
-// supplied vault file path. Lock and session files sit next to a per-name slot
-// inside the hort sources directory.
+// supplied vault file path. Sessions use a per-name slot; locks identify the
+// canonical vault file so aliases serialize the same writes.
 func MountedRefAt(name, vaultPath string) (VaultRef, error) {
-	if name == "" {
-		return VaultRef{}, fmt.Errorf("mount name must not be empty")
-	}
-	if name == PrimarySourceName {
-		return VaultRef{}, fmt.Errorf("mount name %q is reserved", PrimarySourceName)
+	if err := validateSourceName(name); err != nil {
+		return VaultRef{}, err
 	}
 	sourcesDir, err := SourcesDir()
+	if err != nil {
+		return VaultRef{}, err
+	}
+	lockPath, err := vaultLockPath(vaultPath)
 	if err != nil {
 		return VaultRef{}, err
 	}
 	return VaultRef{
 		Name:        name,
 		Path:        vaultPath,
-		LockPath:    filepath.Join(sourcesDir, name+".lock"),
+		LockPath:    lockPath,
 		SessionPath: filepath.Join(sourcesDir, name+".session"),
 	}, nil
 }
@@ -222,6 +228,11 @@ func SaveVault(ref VaultRef, data *VaultData, sessionKey []byte, existingRaw []b
 
 // UpdateVault serializes the full read-modify-write cycle for vault mutations.
 func UpdateVault(ref VaultRef, sessionKey []byte, mutate func(data *VaultData) error) error {
+	path, err := canonicalVaultPath(ref.Path)
+	if err != nil {
+		return fmt.Errorf("resolving vault path: %w", err)
+	}
+	ref.Path = path
 	unlock, err := lockVault(ref)
 	if err != nil {
 		return err

@@ -313,7 +313,7 @@ internal/
 ### Encryption
 
 Everything lives in a single file: `~/.hort/vault.enc`.
-Writes are serialized with a local file lock, and every successful update keeps the previous encrypted state in `~/.hort/vault.enc.bak`.
+Writes to the same canonical vault path share a local file lock, including mounted and symlink aliases. Locks live under `~/.hort/locks/`. Every successful update keeps the previous encrypted state in `~/.hort/vault.enc.bak`.
 
 **File format** (binary):
 
