@@ -33,7 +33,7 @@ func FormatList(entries []store.EntryInfo, jsonOutput bool) string {
 			prefix = fmt.Sprintf("[%s] ", e.Source)
 		}
 
-		line := fmt.Sprintf("%s%-8s %-30s %s  [env: %s]", prefix, e.Type, e.Name, desc, envs)
+		line := fmt.Sprintf("%s%-30s %s  [env: %s]", prefix, e.Name, desc, envs)
 		if len(e.Contexts) > 0 {
 			line += fmt.Sprintf("  [ctx: %s]", strings.Join(e.Contexts, ", "))
 		}
@@ -57,7 +57,6 @@ func FormatDescribe(entries []store.EntryInfo, jsonOutput bool) string {
 		}
 		fmt.Fprintf(&b, "Name:         %s\n", entry.Name)
 		fmt.Fprintf(&b, "Source:       %s\n", entry.Source)
-		fmt.Fprintf(&b, "Type:         %s\n", entry.Type)
 		fmt.Fprintf(&b, "Description:  %s\n", entry.Description)
 		fmt.Fprintf(&b, "Environments: %s\n", strings.Join(entry.Environments, ", "))
 		if len(entry.Contexts) > 0 {
@@ -99,14 +98,13 @@ func FormatSourceList(items []SourceStatus, jsonOutput bool) string {
 
 // FormatStatus formats primary vault status. Apps integrating Hort
 // can parse the JSON form as a single readiness check.
-func FormatStatus(unlocked bool, vaultPath string, secretCount, configCount int, jsonOutput bool) string {
+func FormatStatus(unlocked bool, vaultPath string, secretCount int, jsonOutput bool) string {
 	if jsonOutput {
 		status := map[string]any{
 			"primary": map[string]any{
 				"unlocked":     unlocked,
 				"vault_path":   vaultPath,
 				"secret_count": secretCount,
-				"config_count": configCount,
 			},
 			"ready": unlocked,
 		}
@@ -122,7 +120,6 @@ func FormatStatus(unlocked bool, vaultPath string, secretCount, configCount int,
 	}
 	fmt.Fprintf(&b, "Vault:    %s\n", vaultPath)
 	fmt.Fprintf(&b, "Secrets:  %d\n", secretCount)
-	fmt.Fprintf(&b, "Configs:  %d\n", configCount)
 	if !unlocked {
 		fmt.Fprintln(&b, "Next:     run `hort unlock` to use secrets")
 	}

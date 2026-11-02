@@ -1,8 +1,8 @@
 {
   "name": "@s16e/hort",
   "version": "0.2.6",
-  "description": "Local secret and config store for humans and AI agents",
-  "keywords": ["secrets", "vault", "config", "cli", "ai-agents"],
+  "description": "Local secret store for humans and AI agents",
+  "keywords": ["secrets", "vault", "cli", "ai-agents"],
   "license": "MIT",
   "author": "Sebastian Breitzke",
   "repository": {

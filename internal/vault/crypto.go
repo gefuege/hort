@@ -52,7 +52,8 @@ func GenerateSalt() ([]byte, error) {
 }
 
 // sealGCM encrypts plaintext under key with a fresh nonce and returns both.
-func sealGCM(plaintext, key []byte) ([]byte, []byte, error) {
+// v3 binds the header prefix as AAD; GCM authenticates the nonce itself.
+func sealGCM(plaintext, key, aad []byte) ([]byte, []byte, error) {
 	block, err := aes.NewCipher(key)
 	if err != nil {
 		return nil, nil, fmt.Errorf("creating cipher: %w", err)
@@ -65,11 +66,11 @@ func sealGCM(plaintext, key []byte) ([]byte, []byte, error) {
 	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
 		return nil, nil, fmt.Errorf("generating nonce: %w", err)
 	}
-	return gcm.Seal(nil, nonce, plaintext, nil), nonce, nil
+	return gcm.Seal(nil, nonce, plaintext, aad), nonce, nil
 }
 
 // openGCM decrypts ciphertext using key and nonce.
-func openGCM(ciphertext, nonce, key []byte) ([]byte, error) {
+func openGCM(ciphertext, nonce, key, aad []byte) ([]byte, error) {
 	block, err := aes.NewCipher(key)
 	if err != nil {
 		return nil, fmt.Errorf("creating cipher: %w", err)
@@ -78,7 +79,7 @@ func openGCM(ciphertext, nonce, key []byte) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("creating GCM: %w", err)
 	}
-	plaintext, err := gcm.Open(nil, nonce, ciphertext, nil)
+	plaintext, err := gcm.Open(nil, nonce, ciphertext, aad)
 	if err != nil {
 		return nil, errors.New("decryption failed — wrong key or corrupted vault")
 	}
@@ -105,7 +106,7 @@ func deriveSessionKey(fmtInfo FormatInfo, material []byte) ([]byte, error) {
 	}
 }
 
-// CreateEncrypted encodes plaintext as a v2 vault file using the given KDF mode
+// CreateEncrypted encodes plaintext as a v3 vault file using the given KDF mode
 // and key material. Returns the full file bytes plus the derived session key.
 func CreateEncrypted(plaintext, material []byte, kdf KDFMode) ([]byte, []byte, error) {
 	var salt []byte
@@ -130,12 +131,12 @@ func CreateEncrypted(plaintext, material []byte, kdf KDFMode) ([]byte, []byte, e
 		return nil, nil, err
 	}
 
-	ciphertext, nonce, err := sealGCM(plaintext, sessionKey)
+	ciphertext, nonce, err := sealGCM(plaintext, sessionKey, buildV3Header(kdf, salt, params, nil)[:HeaderSize-NonceSize])
 	if err != nil {
 		return nil, nil, err
 	}
 
-	header := buildV2Header(kdf, salt, params, nonce)
+	header := buildV3Header(kdf, salt, params, nonce)
 	return append(header, ciphertext...), sessionKey, nil
 }
 
@@ -145,14 +146,14 @@ func DecryptWithKey(data, sessionKey []byte) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	return openGCM(data[info.CipherAt:], info.Nonce, sessionKey)
+	return openGCM(data[info.CipherAt:], info.Nonce, sessionKey, data[:HeaderSize-NonceSize])
 }
 
 // UnlockWithMaterial parses the vault header, derives a session key from the
 // provided material per the stored KDF mode, verifies decryption succeeds, and
 // returns the session key.
 func UnlockWithMaterial(data, material []byte) ([]byte, error) {
-	info, err := ParseFormat(data)
+	info, err := parseFormat(data, true)
 	if err != nil {
 		return nil, err
 	}
@@ -160,7 +161,11 @@ func UnlockWithMaterial(data, material []byte) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	if _, err := openGCM(data[info.CipherAt:], info.Nonce, key); err != nil {
+	var aad []byte
+	if info.Version == 3 {
+		aad = data[:HeaderSize-NonceSize]
+	}
+	if _, err := openGCM(data[info.CipherAt:], info.Nonce, key, aad); err != nil {
 		return nil, errors.New("decryption failed — wrong passphrase/key or corrupted vault")
 	}
 	return key, nil
@@ -174,11 +179,11 @@ func EncryptPreservingFormat(plaintext, sessionKey, existingRaw []byte) ([]byte,
 	if err != nil {
 		return nil, err
 	}
-	ciphertext, nonce, err := sealGCM(plaintext, sessionKey)
+	ciphertext, nonce, err := sealGCM(plaintext, sessionKey, existingRaw[:HeaderSize-NonceSize])
 	if err != nil {
 		return nil, err
 	}
-	header := buildV2Header(info.KDF, info.Salt, info.Argon, nonce)
+	header := buildV3Header(info.KDF, info.Salt, info.Argon, nonce)
 	return append(header, ciphertext...), nil
 }
 

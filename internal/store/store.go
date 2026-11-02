@@ -9,70 +9,45 @@ import (
 	"github.com/s16e/hort/internal/vault"
 )
 
-// EntryInfo is a summary of an entry for listing.
 type EntryInfo struct {
 	Name         string        `json:"name"`
 	Source       string        `json:"source"`
-	Type         string        `json:"type"`
 	Description  string        `json:"description"`
 	Environments []string      `json:"environments"`
 	Contexts     []string      `json:"contexts"`
 	Variants     []VariantInfo `json:"variants,omitempty"`
 }
-
-// VariantInfo identifies an (env, context) pair that exists for an entry.
-// Values are deliberately excluded so callers that only need structure (UIs,
-// auditors) never materialize secret values without an explicit read.
 type VariantInfo struct {
 	Env     string `json:"env"`
 	Context string `json:"context"`
 }
-
-// Source is an unlocked vault mounted into the active store.
 type Source struct {
 	Name       string
 	Ref        vault.VaultRef
 	SessionKey []byte
 	Primary    bool
 }
-
-// Store provides high-level operations across the primary vault and any
-// unlocked mounted sources.
 type Store struct {
 	primary *Source
 	mounts  []*Source
 }
 
-// New creates a store over the given primary + mount sources.
-func New(primary *Source, mounts []*Source) *Store {
-	return &Store{primary: primary, mounts: mounts}
-}
+func New(primary *Source, mounts []*Source) *Store { return &Store{primary: primary, mounts: mounts} }
 
-// NewFromSession builds a store from on-disk session files. The primary vault
-// must be unlocked; mounted sources that are locked are skipped with a stderr
-// warning so merged reads stay best-effort.
 func NewFromSession() (*Store, error) {
-	primaryRef, err := vault.PrimaryRef()
+	ref, err := vault.PrimaryRef()
 	if err != nil {
 		return nil, err
 	}
-	primaryKey, err := vault.LoadSessionFor(primaryRef)
+	key, err := vault.LoadSessionFor(ref)
 	if err != nil {
 		return nil, err
 	}
-	primary := &Source{
-		Name:       primaryRef.Name,
-		Ref:        primaryRef,
-		SessionKey: primaryKey,
-		Primary:    true,
-	}
-
+	s := New(&Source{Name: ref.Name, Ref: ref, SessionKey: key, Primary: true}, nil)
 	records, err := vault.ListSources()
 	if err != nil {
 		return nil, err
 	}
-
-	var mounts []*Source
 	for _, rec := range records {
 		ref, err := vault.RefFromRecord(rec)
 		if err != nil {
@@ -84,26 +59,17 @@ func NewFromSession() (*Store, error) {
 			fmt.Fprintf(os.Stderr, "warning: mount %s is locked, skipping merged reads\n", rec.Name)
 			continue
 		}
-		mounts = append(mounts, &Source{
-			Name:       rec.Name,
-			Ref:        ref,
-			SessionKey: key,
-		})
+		s.mounts = append(s.mounts, &Source{Name: rec.Name, Ref: ref, SessionKey: key})
 	}
-
-	return &Store{primary: primary, mounts: mounts}, nil
+	return s, nil
 }
-
-// Sources returns every source in the store (primary first).
 func (s *Store) Sources() []*Source {
 	out := make([]*Source, 0, 1+len(s.mounts))
 	if s.primary != nil {
 		out = append(out, s.primary)
 	}
-	out = append(out, s.mounts...)
-	return out
+	return append(out, s.mounts...)
 }
-
 func (s *Store) sourceByName(name string) (*Source, error) {
 	if name == "" || name == vault.PrimarySourceName {
 		if s.primary == nil {
@@ -119,37 +85,46 @@ func (s *Store) sourceByName(name string) (*Source, error) {
 	return nil, fmt.Errorf("source %q is not mounted or not unlocked", name)
 }
 
-type resolvedHit struct {
-	Source string
-	Value  string
-}
-
-func collectHits(src *Source, entries map[string]vault.Entry, name, env, context string) (resolvedHit, bool) {
-	entry, ok := entries[name]
-	if !ok {
-		return resolvedHit{}, false
+func resolve(entry vault.Entry, env, context string) (string, bool) {
+	values, _, _ := entry.Current()
+	if env == "" {
+		env = "*"
 	}
-	val, ok := resolve(entry, env, context)
-	if !ok {
-		return resolvedHit{}, false
+	if context == "" {
+		context = "*"
 	}
-	return resolvedHit{Source: src.Name, Value: val}, true
+	for _, key := range []string{vault.MakeLookupKey(env, context), vault.MakeLookupKey(env, "*"), vault.MakeLookupKey("*", "*")} {
+		if value, ok := values[key]; ok {
+			return value, true
+		}
+	}
+	return "", false
 }
-
-// GetSecret retrieves a secret value with env+context fallback.
-// Merges across all unlocked sources. If more than one source has a value,
-// returns a disambiguation error listing the candidates.
 func (s *Store) GetSecret(name, env, context string) (string, string, error) {
-	return s.getMerged(name, env, context, secretsOf)
+	var value, source string
+	var names []string
+	for _, src := range s.Sources() {
+		data, _, err := vault.LoadVault(src.Ref, src.SessionKey)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "warning: source %s unreadable: %v\n", src.Name, err)
+			continue
+		}
+		if v, ok := resolve(data.Secrets[name], env, context); ok {
+			value = v
+			source = src.Name
+			names = append(names, src.Name)
+		}
+	}
+	if len(names) == 0 {
+		return "", "", fmt.Errorf("%q not found (env=%q, context=%q)", name, env, context)
+	}
+	if len(names) > 1 {
+		sort.Strings(names)
+		return "", "", fmt.Errorf("%q is ambiguous across sources [%s] — rerun with --source <name>", name, strings.Join(names, ", "))
+	}
+	return value, source, nil
 }
-
-// GetConfig behaves like GetSecret but for config entries.
-func (s *Store) GetConfig(name, env, context string) (string, string, error) {
-	return s.getMerged(name, env, context, configsOf)
-}
-
-// GetFrom retrieves a value from the named source (primary if empty).
-func (s *Store) GetFrom(source, name, env, context, entryType string) (string, error) {
+func (s *Store) GetFrom(source, name, env, context string) (string, error) {
 	src, err := s.sourceByName(source)
 	if err != nil {
 		return "", err
@@ -158,200 +133,108 @@ func (s *Store) GetFrom(source, name, env, context, entryType string) (string, e
 	if err != nil {
 		return "", err
 	}
-	var entries map[string]vault.Entry
-	switch entryType {
-	case "secret":
-		entries = data.Secrets
-	case "config":
-		entries = data.Configs
-	default:
-		return "", fmt.Errorf("unknown entry type %q", entryType)
+	if v, ok := resolve(data.Secrets[name], env, context); ok {
+		return v, nil
 	}
-	hit, ok := collectHits(src, entries, name, env, context)
-	if !ok {
-		return "", fmt.Errorf("%s %q not found in source %q (env=%q, context=%q)", entryType, name, src.Name, env, context)
-	}
-	return hit.Value, nil
+	return "", fmt.Errorf("secret %q not found in source %q (env=%q, context=%q)", name, src.Name, env, context)
 }
 
-func (s *Store) getMerged(name, env, context string, selector func(*vault.VaultData) map[string]vault.Entry) (string, string, error) {
-	var hits []resolvedHit
-	for _, src := range s.Sources() {
-		data, _, err := vault.LoadVault(src.Ref, src.SessionKey)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "warning: source %s unreadable: %v\n", src.Name, err)
-			continue
-		}
-		if hit, ok := collectHits(src, selector(data), name, env, context); ok {
-			hits = append(hits, hit)
-		}
-	}
-	switch len(hits) {
-	case 0:
-		return "", "", fmt.Errorf("%q not found (env=%q, context=%q)", name, env, context)
-	case 1:
-		return hits[0].Value, hits[0].Source, nil
-	default:
-		names := make([]string, len(hits))
-		for i, h := range hits {
-			names[i] = h.Source
-		}
-		sort.Strings(names)
-		return "", "", fmt.Errorf("%q is ambiguous across sources [%s] — rerun with --source <name>", name, strings.Join(names, ", "))
-	}
-}
-
-// SetSecret stores a secret in the target source (primary if source is empty).
 func (s *Store) SetSecret(source, name, value, env, context, description string) error {
-	return s.set(source, name, value, env, context, description, "secret")
-}
-
-// SetConfig stores a config in the target source.
-func (s *Store) SetConfig(source, name, value, env, context, description string) error {
-	return s.set(source, name, value, env, context, description, "config")
-}
-
-func (s *Store) set(source, name, value, env, context, description, entryType string) error {
 	src, err := s.sourceByName(source)
 	if err != nil {
 		return err
 	}
+	revision, err := vault.NewRevision("set", vault.MakeLookupKey(env, context), value)
+	if err != nil {
+		return err
+	}
+	var desc *vault.Revision
+	if description != "" {
+		r, err := vault.NewRevision("describe", "", description)
+		if err != nil {
+			return err
+		}
+		desc = &r
+	}
 	return vault.UpdateVault(src.Ref, src.SessionKey, func(data *vault.VaultData) error {
-		var entries map[string]vault.Entry
-		switch entryType {
-		case "secret":
-			entries = data.Secrets
-		case "config":
-			entries = data.Configs
-		default:
-			return fmt.Errorf("unknown entry type %q", entryType)
+		entry := data.Secrets[name]
+		entry.Revisions = append(entry.Revisions, revision)
+		if desc != nil {
+			entry.Revisions = append(entry.Revisions, *desc)
 		}
-		entry, ok := entries[name]
-		if !ok {
-			entry = vault.Entry{Values: make(map[string]string)}
-		}
-		if entry.Values == nil {
-			entry.Values = make(map[string]string)
-		}
-		key := vault.MakeLookupKey(env, context)
-		entry.Values[key] = value
-		if description != "" {
-			entry.Description = description
-		}
-		entries[name] = entry
+		data.Secrets[name] = entry
 		return nil
 	})
 }
-
-// List returns all entries across all sources, optionally filtered by type.
-func (s *Store) List(typeFilter string) ([]EntryInfo, error) {
-	var entries []EntryInfo
+func (s *Store) List() ([]EntryInfo, error) {
+	entries := []EntryInfo{}
 	for _, src := range s.Sources() {
 		data, _, err := vault.LoadVault(src.Ref, src.SessionKey)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "warning: source %s unreadable: %v\n", src.Name, err)
 			continue
 		}
-		if typeFilter == "" || typeFilter == "secret" {
-			for name, entry := range data.Secrets {
-				entries = append(entries, entryToInfo(name, src.Name, "secret", entry))
-			}
-		}
-		if typeFilter == "" || typeFilter == "config" {
-			for name, entry := range data.Configs {
-				entries = append(entries, entryToInfo(name, src.Name, "config", entry))
+		for name, entry := range data.Secrets {
+			if _, _, visible := entry.Current(); visible {
+				entries = append(entries, entryToInfo(name, src.Name, entry))
 			}
 		}
 	}
-
 	sort.Slice(entries, func(i, j int) bool {
 		if entries[i].Source != entries[j].Source {
 			return sourceSortKey(entries[i].Source) < sourceSortKey(entries[j].Source)
 		}
-		if entries[i].Type != entries[j].Type {
-			return entries[i].Type < entries[j].Type
-		}
 		return entries[i].Name < entries[j].Name
 	})
-
 	return entries, nil
 }
-
-// Describe returns all matches for a name across sources (one record per source+type hit).
 func (s *Store) Describe(name string) ([]EntryInfo, error) {
-	var matches []EntryInfo
-	for _, src := range s.Sources() {
-		data, _, err := vault.LoadVault(src.Ref, src.SessionKey)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "warning: source %s unreadable: %v\n", src.Name, err)
-			continue
-		}
-		if entry, ok := data.Secrets[name]; ok {
-			matches = append(matches, entryToInfo(name, src.Name, "secret", entry))
-		}
-		if entry, ok := data.Configs[name]; ok {
-			matches = append(matches, entryToInfo(name, src.Name, "config", entry))
+	entries, err := s.List()
+	if err != nil {
+		return nil, err
+	}
+	matches := []EntryInfo{}
+	for _, entry := range entries {
+		if entry.Name == name {
+			matches = append(matches, entry)
 		}
 	}
 	if len(matches) == 0 {
 		return nil, fmt.Errorf("entry %q not found", name)
 	}
-	sort.Slice(matches, func(i, j int) bool {
-		if matches[i].Source != matches[j].Source {
-			return sourceSortKey(matches[i].Source) < sourceSortKey(matches[j].Source)
-		}
-		return matches[i].Type < matches[j].Type
-	})
 	return matches, nil
 }
-
-// Delete removes an entry in the given source. An empty env+context deletes
-// the entire entry (all its env/context overrides) inside that source only.
 func (s *Store) Delete(source, name, env, context string) error {
 	src, err := s.sourceByName(source)
 	if err != nil {
 		return err
 	}
+	op, key := "delete", vault.MakeLookupKey(env, context)
+	if env == "" && context == "" {
+		op = "delete-entry"
+		key = ""
+	}
+	revision, err := vault.NewRevision(op, key, "")
+	if err != nil {
+		return err
+	}
 	return vault.UpdateVault(src.Ref, src.SessionKey, func(data *vault.VaultData) error {
-		deleted := false
-
-		if env == "" && context == "" {
-			if _, ok := data.Secrets[name]; ok {
-				delete(data.Secrets, name)
-				deleted = true
-			}
-			if _, ok := data.Configs[name]; ok {
-				delete(data.Configs, name)
-				deleted = true
-			}
-		} else {
-			key := vault.MakeLookupKey(env, context)
-			if entry, ok := data.Secrets[name]; ok {
-				if _, exists := entry.Values[key]; exists {
-					delete(entry.Values, key)
-					data.Secrets[name] = entry
-					deleted = true
-				}
-			}
-			if entry, ok := data.Configs[name]; ok {
-				if _, exists := entry.Values[key]; exists {
-					delete(entry.Values, key)
-					data.Configs[name] = entry
-					deleted = true
-				}
+		entry, ok := data.Secrets[name]
+		values, _, visible := entry.Current()
+		if !ok || !visible {
+			return fmt.Errorf("entry %q not found in source %q", name, src.Name)
+		}
+		if op == "delete" {
+			if _, ok := values[key]; !ok {
+				return fmt.Errorf("entry %q has no variant %q", name, key)
 			}
 		}
-
-		if !deleted {
-			return fmt.Errorf("entry %q not found in source %q (env=%q, context=%q)", name, src.Name, env, context)
-		}
+		entry.Revisions = append(entry.Revisions, revision)
+		data.Secrets[name] = entry
 		return nil
 	})
 }
-
-// ContextValues returns all context-specific values for an entry+env combination.
-// Searches the given source (primary if empty).
-func (s *Store) ContextValues(source, name, entryType, env string) (map[string]string, error) {
+func (s *Store) ContextValues(source, name, env string) (map[string]string, error) {
 	src, err := s.sourceByName(source)
 	if err != nil {
 		return nil, err
@@ -360,35 +243,15 @@ func (s *Store) ContextValues(source, name, entryType, env string) (map[string]s
 	if err != nil {
 		return nil, err
 	}
-
-	entries := map[string]vault.Entry{}
-	switch entryType {
-	case "secret":
-		entries = data.Secrets
-	case "config":
-		entries = data.Configs
-	default:
-		if e, ok := data.Secrets[name]; ok {
-			entries[name] = e
-		} else if e, ok := data.Configs[name]; ok {
-			entries[name] = e
-		}
-	}
-
-	entry, ok := entries[name]
-	if !ok {
-		return nil, fmt.Errorf("entry %q not found in source %q", name, src.Name)
-	}
-
 	if env == "" {
 		env = "*"
 	}
-	result := make(map[string]string)
-	prefix := env + ":"
-	for key, val := range entry.Values {
-		if strings.HasPrefix(key, prefix) {
+	result := map[string]string{}
+	values, _, _ := data.Secrets[name].Current()
+	for key, value := range values {
+		if strings.HasPrefix(key, env+":") {
 			_, ctx := vault.ParseLookupKey(key)
-			result[ctx] = val
+			result[ctx] = value
 		}
 	}
 	if len(result) == 0 {
@@ -397,43 +260,54 @@ func (s *Store) ContextValues(source, name, entryType, env string) (map[string]s
 	return result, nil
 }
 
-func secretsOf(d *vault.VaultData) map[string]vault.Entry { return d.Secrets }
-func configsOf(d *vault.VaultData) map[string]vault.Entry { return d.Configs }
-
-// resolve implements the fallback chain: env+ctx → env+* → *+*
-func resolve(entry vault.Entry, env, context string) (string, bool) {
-	if env == "" {
-		env = "*"
-	}
-	if context == "" {
-		context = "*"
-	}
-	if val, ok := entry.Values[vault.MakeLookupKey(env, context)]; ok {
-		return val, true
-	}
-	if context != "*" {
-		if val, ok := entry.Values[vault.MakeLookupKey(env, "*")]; ok {
-			return val, true
-		}
-	}
-	if env != "*" {
-		if val, ok := entry.Values[vault.MakeLookupKey("*", "*")]; ok {
-			return val, true
-		}
-	}
-	return "", false
+type HistoryInfo struct {
+	Source    string           `json:"source"`
+	Revisions []vault.Revision `json:"revisions"`
 }
 
-func entryToInfo(name, source, entryType string, entry vault.Entry) EntryInfo {
-	envSet := make(map[string]bool)
-	ctxSet := make(map[string]bool)
-	variants := make([]VariantInfo, 0, len(entry.Values))
+// History disambiguates on the entry's existence, including deleted entries.
+func (s *Store) History(source, name string) (HistoryInfo, error) {
+	sources := s.Sources()
+	if source != "" {
+		src, err := s.sourceByName(source)
+		if err != nil {
+			return HistoryInfo{}, err
+		}
+		sources = []*Source{src}
+	}
+	var hits []HistoryInfo
+	for _, src := range sources {
+		data, _, err := vault.LoadVault(src.Ref, src.SessionKey)
+		if err != nil {
+			return HistoryInfo{}, err
+		}
+		if entry, ok := data.Secrets[name]; ok {
+			hits = append(hits, HistoryInfo{Source: src.Name, Revisions: entry.History()})
+		}
+	}
+	if len(hits) == 0 {
+		return HistoryInfo{}, fmt.Errorf("entry %q not found", name)
+	}
+	if len(hits) > 1 {
+		names := []string{}
+		for _, hit := range hits {
+			names = append(names, hit.Source)
+		}
+		sort.Strings(names)
+		return HistoryInfo{}, fmt.Errorf("%q is ambiguous across sources [%s] — rerun with --source <name>", name, strings.Join(names, ", "))
+	}
+	return hits[0], nil
+}
 
-	for key := range entry.Values {
+func entryToInfo(name, source string, entry vault.Entry) EntryInfo {
+	values, description, _ := entry.Current()
+	envs, contexts := map[string]bool{}, map[string]bool{}
+	variants := make([]VariantInfo, 0, len(values))
+	for key := range values {
 		env, ctx := vault.ParseLookupKey(key)
-		envSet[env] = true
+		envs[env] = true
 		if ctx != "*" {
-			ctxSet[ctx] = true
+			contexts[ctx] = true
 		}
 		variants = append(variants, VariantInfo{Env: env, Context: ctx})
 	}
@@ -443,28 +317,16 @@ func entryToInfo(name, source, entryType string, entry vault.Entry) EntryInfo {
 		}
 		return variants[i].Context < variants[j].Context
 	})
-
-	return EntryInfo{
-		Name:         name,
-		Source:       source,
-		Type:         entryType,
-		Description:  entry.Description,
-		Environments: sortedSetKeys(envSet),
-		Contexts:     sortedSetKeys(ctxSet),
-		Variants:     variants,
-	}
+	return EntryInfo{Name: name, Source: source, Description: description, Environments: sortedSetKeys(envs), Contexts: sortedSetKeys(contexts), Variants: variants}
 }
-
 func sortedSetKeys(m map[string]bool) []string {
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
+	keys := []string{}
+	for key := range m {
+		keys = append(keys, key)
 	}
 	sort.Strings(keys)
 	return keys
 }
-
-// sourceSortKey places primary first, then alphabetical.
 func sourceSortKey(name string) string {
 	if name == vault.PrimarySourceName {
 		return "\x00" + name

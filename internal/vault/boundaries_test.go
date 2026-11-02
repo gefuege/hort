@@ -89,7 +89,7 @@ func TestVaultAliasesSerializeUpdates(t *testing.T) {
 				firstDone <- UpdateVault(first, key, func(data *VaultData) error {
 					close(entered)
 					<-release
-					data.Configs["first"] = Entry{Description: "first"}
+					data.Secrets["first"] = Entry{Revisions: []Revision{testRevision(t, "describe", "", "first")}}
 					return nil
 				})
 			}()
@@ -102,7 +102,7 @@ func TestVaultAliasesSerializeUpdates(t *testing.T) {
 			}
 			go func() {
 				secondDone <- UpdateVault(second, key, func(data *VaultData) error {
-					data.Configs["second"] = Entry{Description: "second"}
+					data.Secrets["second"] = Entry{Revisions: []Revision{testRevision(t, "describe", "", "second")}}
 					return nil
 				})
 			}()
@@ -129,8 +129,10 @@ func TestVaultAliasesSerializeUpdates(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if len(data.Configs) != 2 || data.Configs["first"].Description != "first" || data.Configs["second"].Description != "second" {
-					t.Fatalf("lost alias write via %s: %+v", ref.Name, data.Configs)
+				_, firstDesc, _ := data.Secrets["first"].Current()
+				_, secondDesc, _ := data.Secrets["second"].Current()
+				if len(data.Secrets) != 2 || firstDesc != "first" || secondDesc != "second" {
+					t.Fatalf("lost alias write via %s: %+v", ref.Name, data.Secrets)
 				}
 			}
 			if alias == "symlink" {
@@ -161,7 +163,7 @@ func TestParseFormatRejectsUnsafeArgonParameters(t *testing.T) {
 	}
 	for _, params := range cases {
 		t.Run(fmt.Sprint(params), func(t *testing.T) {
-			header := buildV2Header(KDFArgon2id, make([]byte, SaltSize), params, make([]byte, NonceSize))
+			header := buildV3Header(KDFArgon2id, make([]byte, SaltSize), params, make([]byte, NonceSize))
 			if _, err := ParseFormat(header); err == nil {
 				t.Fatal("unsafe Argon parameters accepted")
 			}
@@ -200,7 +202,7 @@ func TestCanonicalVaultPathKeepsDistinctCaseSensitiveFiles(t *testing.T) {
 
 func TestUnlockRejectsUnsafeArgonBeforeDerivation(t *testing.T) {
 	for _, params := range []ArgonParams{{0, 65536, 4}, {3, 0, 4}, {3, 65536, 0}, {^uint32(0), ^uint32(0), 255}} {
-		header := buildV2Header(KDFArgon2id, make([]byte, SaltSize), params, make([]byte, NonceSize))
+		header := buildV3Header(KDFArgon2id, make([]byte, SaltSize), params, make([]byte, NonceSize))
 		if _, err := UnlockWithMaterial(header, []byte("test")); err == nil || !strings.Contains(err.Error(), "Argon2id parameters") {
 			t.Fatalf("unlock must reject before derivation: %v", err)
 		}
@@ -209,7 +211,7 @@ func TestUnlockRejectsUnsafeArgonBeforeDerivation(t *testing.T) {
 
 func TestParseFormatSupportedArgonBounds(t *testing.T) {
 	for _, params := range []ArgonParams{{1, 8, 1}, {1, 32, 4}, DefaultArgonParams()} {
-		if _, err := ParseFormat(buildV2Header(KDFArgon2id, make([]byte, SaltSize), params, make([]byte, NonceSize))); err != nil {
+		if _, err := ParseFormat(buildV3Header(KDFArgon2id, make([]byte, SaltSize), params, make([]byte, NonceSize))); err != nil {
 			t.Fatal(err)
 		}
 	}

@@ -2,9 +2,11 @@ package cli
 
 import (
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/s16e/hort/internal/store"
 	"github.com/s16e/hort/internal/vault"
@@ -142,28 +144,23 @@ func CmdStatus(jsonOutput bool) error {
 	path, _ := vault.VaultPath()
 
 	secretCount := 0
-	configCount := 0
 
 	if primaryUnlocked {
 		s, err := store.NewFromSession()
 		if err == nil {
-			entries, err := s.List("")
+			entries, err := s.List()
 			if err == nil {
 				for _, e := range entries {
 					if e.Source != vault.PrimarySourceName {
 						continue
 					}
-					if e.Type == "secret" {
-						secretCount++
-					} else {
-						configCount++
-					}
+					secretCount++
 				}
 			}
 		}
 	}
 
-	fmt.Print(FormatStatus(primaryUnlocked, path, secretCount, configCount, jsonOutput))
+	fmt.Print(FormatStatus(primaryUnlocked, path, secretCount, jsonOutput))
 	return nil
 }
 
@@ -183,26 +180,9 @@ func CmdGetSecret(name, env, context, source string) error {
 	var val string
 	var err error
 	if source != "" {
-		val, err = s.GetFrom(source, name, env, context, "secret")
+		val, err = s.GetFrom(source, name, env, context)
 	} else {
 		val, _, err = s.GetSecret(name, env, context)
-	}
-	if err != nil {
-		return err
-	}
-	fmt.Print(val)
-	return nil
-}
-
-// CmdGetConfig retrieves a config from the merged view.
-func CmdGetConfig(name, env, context, source string) error {
-	s := requireStore()
-	var val string
-	var err error
-	if source != "" {
-		val, err = s.GetFrom(source, name, env, context, "config")
-	} else {
-		val, _, err = s.GetConfig(name, env, context)
 	}
 	if err != nil {
 		return err
@@ -222,20 +202,10 @@ func CmdSetSecret(name, value, env, context, description, source string) error {
 	return nil
 }
 
-// CmdSetConfig stores a config.
-func CmdSetConfig(name, value, env, context, description, source string) error {
-	s := requireStore()
-	if err := s.SetConfig(source, name, value, env, context, description); err != nil {
-		return err
-	}
-	announceStored("config", name, env, context, source)
-	return nil
-}
-
 // CmdList lists entries across all unlocked sources.
-func CmdList(typeFilter string, jsonOutput bool) error {
+func CmdList(jsonOutput bool) error {
 	s := requireStore()
-	entries, err := s.List(typeFilter)
+	entries, err := s.List()
 	if err != nil {
 		return err
 	}
@@ -407,4 +377,66 @@ func kdfLabel(m vault.KDFMode) string {
 	default:
 		return "unknown"
 	}
+}
+
+// CmdHistory exposes values only through an explicitly requested history read.
+func CmdHistory(name, source string, jsonOutput bool) error {
+	history, err := requireStore().History(source, name)
+	if err != nil {
+		return err
+	}
+	if jsonOutput {
+		encoded, err := json.MarshalIndent(history, "", "  ")
+		if err != nil {
+			return err
+		}
+		fmt.Println(string(encoded))
+		return nil
+	}
+	fmt.Printf("Source: %s\n", history.Source)
+	for _, r := range history.Revisions {
+		at := "unknown"
+		if r.RecordedAt != nil {
+			at = r.RecordedAt.UTC().Format(time.RFC3339Nano)
+		}
+		fmt.Printf("%s %s %s %q %q\n", at, r.ID, r.Op, r.Key, r.Value)
+	}
+	return nil
+}
+
+// CmdMigrate operates on one unlocked source without changing its session.
+func CmdMigrate(source string) error {
+	ref, err := vault.PrimaryRef()
+	if err != nil {
+		return err
+	}
+	if source != "" && source != vault.PrimarySourceName {
+		records, err := vault.ListSources()
+		if err != nil {
+			return err
+		}
+		found := false
+		for _, record := range records {
+			if record.Name == source {
+				ref, err = vault.RefFromRecord(record)
+				if err != nil {
+					return err
+				}
+				found = true
+				break
+			}
+		}
+		if !found {
+			return fmt.Errorf("source %q is not mounted", source)
+		}
+	}
+	key, err := vault.LoadSessionFor(ref)
+	if err != nil {
+		return err
+	}
+	if err := vault.MigrateVault(ref, key); err != nil {
+		return err
+	}
+	fmt.Fprintln(os.Stderr, "Vault migrated to v3; encrypted pre-v3 backup retained.")
+	return nil
 }

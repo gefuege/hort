@@ -22,11 +22,14 @@ const (
 
 const (
 	// Layout: [magic:4][version:1][kdf:1][salt:32][time:4][memory:4][threads:1][nonce:12][ciphertext+tag:...]
-	V2HeaderSize = len(V2Magic) + 1 + 1 + SaltSize + 4 + 4 + 1 + NonceSize
+	HeaderSize = len(V3Magic) + 1 + 1 + SaltSize + 4 + 4 + 1 + NonceSize
 )
 
-// V2Magic is the 4-byte prefix that marks a vault file.
+// V2Magic is accepted only for unlocking and explicit migration.
 const V2Magic = "HRT\x02"
+
+// V3Magic marks the current vault format.
+const V3Magic = "HRT\x03"
 
 // FormatInfo describes the header of a vault file after parsing.
 type FormatInfo struct {
@@ -40,11 +43,15 @@ type FormatInfo struct {
 
 // ParseFormat inspects the vault file header and returns layout information.
 func ParseFormat(data []byte) (FormatInfo, error) {
-	if len(data) >= len(V2Magic) && string(data[0:len(V2Magic)]) == V2Magic {
-		if len(data) < V2HeaderSize {
-			return FormatInfo{}, errors.New("vault file too short for v2 header")
+	return parseFormat(data, false)
+}
+
+func parseFormat(data []byte, allowLegacy bool) (FormatInfo, error) {
+	if len(data) >= len(V3Magic) && (string(data[:4]) == V3Magic || (allowLegacy && string(data[:4]) == V2Magic)) {
+		if len(data) < HeaderSize {
+			return FormatInfo{}, errors.New("vault file too short for header")
 		}
-		off := len(V2Magic)
+		off := len(V3Magic)
 		version := data[off]
 		off++
 		kdf := KDFMode(data[off])
@@ -60,7 +67,7 @@ func ParseFormat(data []byte) (FormatInfo, error) {
 		nonce := data[off : off+NonceSize]
 		off += NonceSize
 
-		if version != 2 {
+		if (version != 3 || string(data[:4]) != V3Magic) && !(allowLegacy && version == 2 && string(data[:4]) == V2Magic) {
 			return FormatInfo{}, errors.New("unsupported vault format version")
 		}
 		// Headers are untrusted until decryption succeeds. Support positive
@@ -71,23 +78,23 @@ func ParseFormat(data []byte) (FormatInfo, error) {
 			return FormatInfo{}, errors.New("unsupported Argon2id parameters")
 		}
 		return FormatInfo{
-			Version:  2,
+			Version:  int(version),
 			KDF:      kdf,
 			Salt:     salt,
 			Argon:    params,
 			Nonce:    nonce,
-			CipherAt: V2HeaderSize,
+			CipherAt: HeaderSize,
 		}, nil
 	}
 
-	return FormatInfo{}, errors.New("not a hort vault file (unsupported or legacy format)")
+	return FormatInfo{}, errors.New("not a v3 hort vault — legacy v2 requires explicit `hort migrate`")
 }
 
-// buildV2Header serializes a v2 header.
-func buildV2Header(kdf KDFMode, salt []byte, params ArgonParams, nonce []byte) []byte {
-	h := make([]byte, V2HeaderSize)
-	off := copy(h, V2Magic)
-	h[off] = 2
+// buildV3Header serializes a v3 header.
+func buildV3Header(kdf KDFMode, salt []byte, params ArgonParams, nonce []byte) []byte {
+	h := make([]byte, HeaderSize)
+	off := copy(h, V3Magic)
+	h[off] = 3
 	off++
 	h[off] = byte(kdf)
 	off++

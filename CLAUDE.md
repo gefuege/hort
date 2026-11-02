@@ -1,6 +1,6 @@
 # Hort
 
-Local secret and config store CLI. Go project.
+Local secret store CLI. Go project.
 
 ## Build
 
@@ -31,9 +31,11 @@ HORT_PASSPHRASE="test" ./hort init
 ## Structure
 
 - `cmd/hort/main.go` — Entry point, Cobra CLI wiring
-- `internal/vault/crypto.go` — AES-256-GCM, Argon2id KDF, v2 format helpers
-- `internal/vault/format.go` — v2 header layout + KDF flag byte (raw vs Argon2id)
+- `internal/vault/crypto.go` — AES-256-GCM, Argon2id KDF, v3 encryption helpers
+- `internal/vault/format.go` — v3 header layout + KDF flag byte (raw vs Argon2id)
 - `internal/vault/vault.go` — `VaultRef`, load/save/update by ref, primary helpers
+- `internal/vault/revisions.go` — Revision-only entries and deterministic current-value reduction
+- `internal/vault/migrate.go` — Explicit, locked v2-to-v3 conversion with encrypted permanent backup
 - `internal/vault/sources.go` — Mounted-source registry (~/.hort/sources/index.json)
 - `internal/vault/session.go` — Per-ref session key persistence
 - `internal/vault/lock.go` — File locks by canonical vault path (concurrent-safe writers)
@@ -70,3 +72,15 @@ Package: `@s16e/hort`. Do not automate npm publish via CI.
 - Exit code 2 = primary vault locked (mounts that are locked are skipped with a stderr warning)
 - `HORT_PASSPHRASE` env var bypasses terminal prompt
 - `primary` is a reserved source name; mount names must match `[a-z0-9._-]+` and not start with `-` or `.`
+
+## Vault contract
+
+Outer and inner versions are 3. Entries persist revisions only; descriptions are
+describe revisions. Normal reads and writes reject v2. Unlock may authenticate a
+v2 vault so `hort migrate [--source <name>]` can convert exactly one unlocked
+source. Never perform an implicit migration. Legacy names shared by secrets and
+configs stop conversion before backup or replacement.
+
+`hort history NAME [--source NAME] [--json]` explicitly returns revision values.
+List, describe and search remain metadata-only. Config commands, type filters
+and config counts were removed; all values use the secret interface.

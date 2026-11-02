@@ -14,9 +14,7 @@ import (
 func main() {
 	var (
 		flagSecret     string
-		flagConfig     string
 		flagSetSecret  string
-		flagSetConfig  string
 		flagEnv        string
 		flagContext    string
 		flagValue      string
@@ -25,14 +23,13 @@ func main() {
 		flagList       bool
 		flagDescribe   string
 		flagDelete     string
-		flagType       string
 		flagJSON       bool
 		flagSource     string
 	)
 
 	root := &cobra.Command{
 		Use:   "hort",
-		Short: "Hort — Local secret and config store for humans and AI agents",
+		Short: "Hort — Local secret store for humans and AI agents",
 		Long:  helptext.HelpText,
 		Args:  cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -42,9 +39,6 @@ func main() {
 			if flagSecret != "" {
 				return cli.CmdGetSecret(flagSecret, flagEnv, flagContext, flagSource)
 			}
-			if flagConfig != "" {
-				return cli.CmdGetConfig(flagConfig, flagEnv, flagContext, flagSource)
-			}
 			if flagSetSecret != "" {
 				value, err := writeValue(flagValue, flagValueStdin, cmd.InOrStdin())
 				if err != nil {
@@ -52,15 +46,8 @@ func main() {
 				}
 				return cli.CmdSetSecret(flagSetSecret, value, flagEnv, flagContext, flagDesc, flagSource)
 			}
-			if flagSetConfig != "" {
-				value, err := writeValue(flagValue, flagValueStdin, cmd.InOrStdin())
-				if err != nil {
-					return fmt.Errorf("set config: %w", err)
-				}
-				return cli.CmdSetConfig(flagSetConfig, value, flagEnv, flagContext, flagDesc, flagSource)
-			}
 			if flagList {
-				return cli.CmdList(flagType, flagJSON)
+				return cli.CmdList(flagJSON)
 			}
 			if flagDescribe != "" {
 				return cli.CmdDescribe(flagDescribe, flagJSON)
@@ -76,11 +63,9 @@ func main() {
 
 	// Read flags
 	root.Flags().StringVarP(&flagSecret, "secret", "g", "", "Get a secret value")
-	root.Flags().StringVar(&flagConfig, "config", "", "Get a config value")
 
 	// Write flags
 	root.Flags().StringVarP(&flagSetSecret, "set-secret", "s", "", "Store a secret")
-	root.Flags().StringVarP(&flagSetConfig, "set-config", "k", "", "Store a config")
 	root.Flags().StringVarP(&flagValue, "value", "v", "", "Value to store")
 	root.Flags().BoolVar(&flagValueStdin, "value-stdin", false, "Read the value to store from stdin")
 	root.Flags().StringVarP(&flagDesc, "description", "d", "", "Description for discovery")
@@ -93,11 +78,25 @@ func main() {
 	// Discovery flags
 	root.Flags().BoolVar(&flagList, "list", false, "List all entries")
 	root.Flags().StringVar(&flagDescribe, "describe", "", "Show entry details")
-	root.Flags().StringVar(&flagType, "type", "", "Filter by type: secret or config")
 	root.Flags().BoolVar(&flagJSON, "json", false, "JSON output for list/describe/status")
 
 	// Delete flag
 	root.Flags().StringVar(&flagDelete, "delete", "", "Delete an entry or specific env/context override")
+
+	historyCmd := &cobra.Command{Use: "history NAME", Short: "Show revision history including values", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
+		source, _ := cmd.Flags().GetString("source")
+		jsonOutput, _ := cmd.Flags().GetBool("json")
+		return cli.CmdHistory(args[0], source, jsonOutput)
+	}}
+	historyCmd.Flags().String("source", "", "Select a source when the entry is ambiguous")
+	historyCmd.Flags().Bool("json", false, "JSON output including values")
+	root.AddCommand(historyCmd)
+	migrateCmd := &cobra.Command{Use: "migrate", Short: "Explicitly migrate one unlocked v2 source to v3", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, args []string) error {
+		source, _ := cmd.Flags().GetString("source")
+		return cli.CmdMigrate(source)
+	}}
+	migrateCmd.Flags().String("source", "", "Source to migrate (default: primary)")
+	root.AddCommand(migrateCmd)
 
 	// Subcommands
 	initCmd := &cobra.Command{

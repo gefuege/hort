@@ -1,6 +1,6 @@
 # Hort
 
-**Local secret and config store for humans and AI agents.**
+**Local secret store for humans and AI agents.**
 
 <p align="center">
   <img src="hort.png" alt="Hort Logo" width="400">
@@ -143,15 +143,14 @@ hort --secret tenant-id --env staging               # → default-123 (fallback 
 
 Fallback chain: `env+context → env+* → *+*`. Specific wins, baseline catches the rest.
 
-### Configs
+### Service URLs and other values
 
-Non-sensitive values that still need environment/context awareness:
+Store service URLs, tenant IDs and tokens through the same secret interface:
 
 ```bash
-hort --set-config api-url --value "https://api.dev.example.com" --description "Base API URL"
-hort --set-config api-url --value "https://api.example.com" --env prod
-
-API_URL=$(hort --config api-url --env prod)
+hort --set-secret api-url --value "https://api.dev.example.com" --description "Base API URL"
+hort --set-secret api-url --value "https://api.example.com" --env prod
+API_URL=$(hort --secret api-url --env prod)
 ```
 
 ### Discovery
@@ -160,12 +159,11 @@ Agents need to know what's available. Hort makes everything discoverable:
 
 ```bash
 hort --list
-# config   api-url      Base API URL           [env: *, prod]
-# secret   tenant-id    SimpleChain tenant ID  [env: *, prod]  [ctx: heine, otto]
+# api-url      Base API URL           [env: *, prod]
+# tenant-id    SimpleChain tenant ID  [env: *, prod]  [ctx: heine, otto]
 
 hort --describe tenant-id
 # Name:         tenant-id
-# Type:         secret
 # Description:  SimpleChain tenant ID
 # Environments: *, prod
 # Contexts:     heine, otto
@@ -173,6 +171,35 @@ hort --describe tenant-id
 hort --list --json   # Machine-readable output
 hort --describe tenant-id --json
 ```
+
+### History and migration
+
+`hort history <name> [--source <name>] [--json]` shows all recorded revisions,
+including values and deletions. List, search and describe never show values.
+New changes record their local UTC time once. Imported legacy values have an
+unknown recorded time. Revisions sort by recorded time and then revision ID;
+unknown times sort first. A whole-entry deletion hides older values, including
+older variants that arrive later. A later set can revive its own scope.
+
+Existing v2 vaults need an explicit conversion after unlocking:
+
+```bash
+hort unlock
+hort migrate
+hort migrate --source myapp-prod
+```
+
+Each call converts exactly one unlocked source. Migration combines legacy secrets
+and configs into one secret collection and preserves exact keys, values and
+descriptions. If a name exists in both legacy collections, migration stops and
+reports the names without values. Resolve those collisions with the old CLI
+before migrating. The removed config flags have no aliases.
+
+Migration keeps the original encrypted bytes in `<vault>.pre-v3.bak` with mode
+0600. Ordinary saves do not overwrite that backup. Normal reads and writes reject
+v2 and never migrate automatically. The new outer and inner format versions are
+both 3; old binaries cannot read or write v3 vaults. Header fields are
+authenticated with the ciphertext. No sync transport is included.
 
 ### Vault Management
 
@@ -235,8 +262,7 @@ After the service has stopped, remove its unused socket and PID file:
 rm -f "$HOME/.hort/daemon.sock" "$HOME/.hort/daemon.pid"
 ```
 
-Keep `~/.hort/vault.enc`, its backup, and the session/source files. No vault
-conversion is needed. Containers now run individual CLI commands; mount the
+Keep `~/.hort/vault.enc`, its backup, and the session/source files. For v2 vaults, run the explicit migration described above. Containers now run individual CLI commands; mount the
 vault directory at `/var/lib/hort/.hort` and pass the desired command (for
 example `init`, `status --json`, or `--list`).
 
@@ -248,7 +274,7 @@ check:
 ```json
 {
   "primary": { "unlocked": true, "vault_path":  "/Users/you/.hort/vault.enc",
-               "secret_count": 18, "config_count": 14 },
+               "secret_count": 32 },
   "ready": true
 }
 ```
@@ -262,9 +288,9 @@ Hort is agent-first, not agent-compatible. The `--help` output includes an `AGEN
 
 **How agents use Hort:**
 
-1. `hort --list` — discover available secrets and configs
+1. `hort --list` — discover available secrets
 2. `hort --describe <name>` — see environments and contexts for an entry
-3. `hort --secret <name>` / `hort --config <name>` — read values
+3. `hort --secret <name>` — read values
 4. Output is raw on stdout, no decoration — safe for `$()` and pipes
 5. `--json` flag for structured output when agents prefer to parse
 6. Exit code 2 = vault locked → agent asks user to run `hort unlock`
@@ -293,8 +319,8 @@ hort unlock  # no terminal prompt
 cmd/hort/main.go            CLI entry point (Cobra)
 internal/
 ├── vault/
-│   ├── crypto.go            AES-256-GCM encrypt/decrypt, Argon2id KDF, v2 format parsing
-│   ├── format.go            v2 header layout + KDF flag
+│   ├── crypto.go            AES-256-GCM encrypt/decrypt, Argon2id KDF, v3 encryption
+│   ├── format.go            v3 header layout + KDF flag
 │   ├── vault.go             VaultRef, load/save/update by ref, primary helpers
 │   ├── sources.go           Mounted-source registry (~/.hort/sources/index.json)
 │   ├── session.go           Per-ref session key persistence
@@ -318,7 +344,7 @@ Writes to the same canonical vault path share a local file lock, including mount
 **File format** (binary):
 
 ```
-[magic:"HRT\x02"][version:1 byte][kdf:1 byte][salt:32][argon-time:4][argon-memory:4][argon-threads:1][nonce:12][ciphertext+tag:...]
+[magic:"HRT\x03"][version:1 byte (=3)][kdf:1 byte][salt:32][argon-time:4][argon-memory:4][argon-threads:1][nonce:12][ciphertext+tag:...]
 ```
 
 `kdf = 0` → Argon2id-derived key (salt + params are meaningful). `kdf = 1` → raw 32-byte key supplied by the mounter (salt/params fields are present but unused). Mounted sources typically use `kdf = 1` so the mounting app's own master key is used directly, no Argon2id pass.
@@ -334,31 +360,30 @@ The header (salt + Argon2id params) is unencrypted by design — these are not s
 
 ```json
 {
-  "version": 1,
+  "version": 3,
+  "source_id": "21e9dcc8a5eb4d029bd7410ae905b13b",
   "secrets": {
     "tenant-id": {
-      "description": "SimpleChain tenant ID",
-      "values": {
-        "*:*": "default-123",
-        "prod:*": "prod-123",
-        "prod:heine": "heine-456",
-        "prod:otto": "otto-789"
-      }
-    }
-  },
-  "configs": {
-    "api-url": {
-      "description": "Base API URL",
-      "values": {
-        "*:*": "https://api.dev.example.com",
-        "prod:*": "https://api.example.com"
-      }
+      "revisions": [
+        {
+          "id": "e88fb43536b544158b2c63bd4bbfdc86",
+          "recorded_at": "2026-11-02T12:00:00Z",
+          "op": "set",
+          "key": "*:*",
+          "value": "default-123"
+        }
+      ]
     }
   }
 }
 ```
 
-Values are keyed by `env:context`. `*` is the baseline for either dimension.
+Each entry stores only revisions: `set`, `delete`, `delete-entry` and `describe`.
+Current values and descriptions are reduced on read; there is no persisted
+current-value copy. Scoped revisions retain the exact `env:context` key.
+`*` is the baseline for either dimension. Source IDs and revision IDs are
+random 128-bit identities. Sources remain independent; the same name in several
+sources requires disambiguation.
 
 ### Session
 

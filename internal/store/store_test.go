@@ -56,7 +56,7 @@ func TestConcurrentMutationsKeepAllEntries(t *testing.T) {
 			if i%2 == 0 {
 				err = s.SetSecret("", name, value, "dev", "spuerhund", "test entry")
 			} else {
-				err = s.SetConfig("", name, value, "dev", "spuerhund", "test entry")
+				err = s.SetSecret("", name, value, "dev", "spuerhund", "test entry")
 			}
 			if err != nil {
 				errCh <- err
@@ -93,12 +93,12 @@ func TestConcurrentMutationsKeepAllEntries(t *testing.T) {
 				t.Fatalf("GetSecret(%s) source = %q, want primary", name, src)
 			}
 		} else {
-			value, _, err := s.GetConfig(name, "dev", "spuerhund")
+			value, _, err := s.GetSecret(name, "dev", "spuerhund")
 			if err != nil {
-				t.Fatalf("GetConfig(%s): %v", name, err)
+				t.Fatalf("GetSecret(%s): %v", name, err)
 			}
 			if value != expected {
-				t.Fatalf("GetConfig(%s) = %q, want %q", name, value, expected)
+				t.Fatalf("GetSecret(%s) = %q, want %q", name, value, expected)
 			}
 		}
 	}
@@ -168,7 +168,7 @@ func TestMergedReadsAcrossMounts(t *testing.T) {
 	}
 
 	// Targeted read resolves the conflict
-	v, err := s3.GetFrom("mnt-a", "dup", "*", "*", "secret")
+	v, err := s3.GetFrom("mnt-a", "dup", "*", "*")
 	if err != nil || v != "from-mount" {
 		t.Fatalf("GetFrom(mnt-a, dup): got (%q, %v)", v, err)
 	}
@@ -181,7 +181,7 @@ func TestListIncludesSourceField(t *testing.T) {
 		t.Fatalf("set alpha: %v", err)
 	}
 
-	entries, err := s.List("")
+	entries, err := s.List()
 	if err != nil {
 		t.Fatalf("List(): %v", err)
 	}

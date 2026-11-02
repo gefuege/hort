@@ -32,26 +32,24 @@ func ParseLookupKey(key LookupKey) (env, context string) {
 	return key, "*"
 }
 
-// Entry represents a single secret or config entry.
-type Entry struct {
-	Description string               `json:"description"`
-	Values      map[LookupKey]string `json:"values"`
-}
-
 // VaultData is the decrypted vault content.
 type VaultData struct {
-	Version int              `json:"version"`
-	Secrets map[string]Entry `json:"secrets"`
-	Configs map[string]Entry `json:"configs"`
+	Version  int              `json:"version"`
+	SourceID string           `json:"source_id"`
+	Secrets  map[string]Entry `json:"secrets"`
 }
 
 // NewVaultData creates an empty vault.
-func NewVaultData() *VaultData {
-	return &VaultData{
-		Version: 1,
-		Secrets: make(map[string]Entry),
-		Configs: make(map[string]Entry),
+func NewVaultData() (*VaultData, error) {
+	id, err := newID()
+	if err != nil {
+		return nil, err
 	}
+	return &VaultData{
+		Version:  3,
+		SourceID: id,
+		Secrets:  make(map[string]Entry),
+	}, nil
 }
 
 // PrimarySourceName is the reserved name for the primary vault.
@@ -153,14 +151,18 @@ func RefExists(ref VaultRef) (bool, error) {
 	return err == nil, err
 }
 
-// CreateVault creates a new v2 vault file at ref using the given KDF mode and
+// CreateVault creates a new v3 vault file at ref using the given KDF mode and
 // material. Returns the derived session key for immediate caching.
 func CreateVault(ref VaultRef, material []byte, kdf KDFMode) ([]byte, error) {
 	if err := os.MkdirAll(filepath.Dir(ref.Path), 0700); err != nil {
 		return nil, fmt.Errorf("creating vault directory: %w", err)
 	}
 
-	plaintext, err := json.Marshal(NewVaultData())
+	data, err := NewVaultData()
+	if err != nil {
+		return nil, err
+	}
+	plaintext, err := json.Marshal(data)
 	if err != nil {
 		return nil, fmt.Errorf("marshaling vault: %w", err)
 	}
@@ -177,7 +179,7 @@ func CreateVault(ref VaultRef, material []byte, kdf KDFMode) ([]byte, error) {
 }
 
 // CreatePrimaryVault creates the primary vault with a passphrase (Argon2id
-// KDF, v2 format).
+// KDF, v3 format).
 func CreatePrimaryVault(passphrase []byte) ([]byte, error) {
 	ref, err := PrimaryRef()
 	if err != nil {
@@ -197,21 +199,18 @@ func LoadVault(ref VaultRef, sessionKey []byte) (*VaultData, []byte, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	var data VaultData
-	if err := json.Unmarshal(plaintext, &data); err != nil {
+	data, err := decodeVault(plaintext)
+	if err != nil {
 		return nil, nil, fmt.Errorf("parsing vault %s: %w", ref.Name, err)
 	}
-	if data.Secrets == nil {
-		data.Secrets = make(map[string]Entry)
-	}
-	if data.Configs == nil {
-		data.Configs = make(map[string]Entry)
-	}
-	return &data, raw, nil
+	return data, raw, nil
 }
 
 // SaveVault encrypts and writes the vault data back, preserving the file format.
 func SaveVault(ref VaultRef, data *VaultData, sessionKey []byte, existingRaw []byte) error {
+	if err := validateVault(data); err != nil {
+		return err
+	}
 	plaintext, err := json.Marshal(data)
 	if err != nil {
 		return fmt.Errorf("marshaling vault: %w", err)

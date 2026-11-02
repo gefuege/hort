@@ -83,14 +83,14 @@ func copyToClipboard(text string) error {
 	return cmd.Run()
 }
 
-// FilterEntries keeps entries whose name, description, type, environments,
+// FilterEntries keeps entries whose name, description, environments,
 // contexts or source contain every whitespace-separated term (case-insensitive).
 func FilterEntries(entries []store.EntryInfo, query string) []store.EntryInfo {
 	terms := strings.Fields(strings.ToLower(query))
 	var out []store.EntryInfo
 	for _, e := range entries {
 		hay := strings.ToLower(strings.Join([]string{
-			e.Name, e.Description, e.Type, e.Source,
+			e.Name, e.Description, e.Source,
 			strings.Join(e.Environments, " "), strings.Join(e.Contexts, " "),
 		}, " "))
 		match := true
@@ -109,7 +109,7 @@ func FilterEntries(entries []store.EntryInfo, query string) []store.EntryInfo {
 
 // CmdSearch lists entries matching the query.
 func CmdSearch(query string, jsonOutput bool) error {
-	entries, err := requireStore().List("")
+	entries, err := requireStore().List()
 	if err != nil {
 		return err
 	}

@@ -6,6 +6,15 @@ import (
 	"time"
 )
 
+func testRevision(t *testing.T, op, key, value string) Revision {
+	t.Helper()
+	r, err := NewRevision(op, key, value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return r
+}
+
 func primaryRefOrFatal(t *testing.T) VaultRef {
 	t.Helper()
 	ref, err := PrimaryRef()
@@ -86,12 +95,7 @@ func TestSaveVaultCreatesBackup(t *testing.T) {
 		t.Fatalf("LoadVault(): %v", err)
 	}
 
-	data.Secrets["demo"] = Entry{
-		Description: "demo",
-		Values: map[LookupKey]string{
-			MakeLookupKey("dev", "spuerhund"): "value",
-		},
-	}
+	data.Secrets["demo"] = Entry{Revisions: []Revision{testRevision(t, "set", MakeLookupKey("dev", "spuerhund"), "value"), testRevision(t, "describe", "", "demo")}}
 
 	if err := SaveVault(ref, data, key, raw); err != nil {
 		t.Fatalf("SaveVault(): %v", err)
@@ -111,7 +115,7 @@ func TestSaveVaultCreatesBackup(t *testing.T) {
 	}
 }
 
-func TestCreateV2RawKeyRoundTrip(t *testing.T) {
+func TestCreateV3RawKeyRoundTrip(t *testing.T) {
 	setHomeDir(t, t.TempDir())
 
 	ref, err := MountedRefAt("test", t.TempDir()+"/test.enc")
@@ -140,7 +144,7 @@ func TestCreateV2RawKeyRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadVault(): %v", err)
 	}
-	data.Secrets["k"] = Entry{Values: map[LookupKey]string{MakeLookupKey("*", "*"): "v"}}
+	data.Secrets["k"] = Entry{Revisions: []Revision{testRevision(t, "set", MakeLookupKey("*", "*"), "v")}}
 	if err := SaveVault(ref, data, sessionKey, raw); err != nil {
 		t.Fatalf("SaveVault(): %v", err)
 	}
@@ -154,7 +158,8 @@ func TestCreateV2RawKeyRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reload: %v", err)
 	}
-	if data2.Secrets["k"].Values[MakeLookupKey("*", "*")] != "v" {
+	values, _, _ := data2.Secrets["k"].Current()
+	if values[MakeLookupKey("*", "*")] != "v" {
 		t.Fatalf("expected round-trip value, got %+v", data2.Secrets)
 	}
 }
