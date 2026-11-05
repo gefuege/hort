@@ -199,7 +199,7 @@ Migration keeps the original encrypted bytes in `<vault>.pre-v3.bak` with mode
 0600. Ordinary saves do not overwrite that backup. Normal reads and writes reject
 v2 and never migrate automatically. The new outer and inner format versions are
 both 3; old binaries cannot read or write v3 vaults. Header fields are
-authenticated with the ciphertext. No sync transport is included.
+authenticated with the ciphertext.
 
 ### Vault Management
 
@@ -237,6 +237,36 @@ hort source unmount --name fachwerk-heine
 ```
 
 The vault file itself stays on disk between unmounts — unmount only clears the cached key and removes the registry entry. Mount names must be lowercase `a-z0-9._-`. `primary` is reserved.
+
+### Device sync
+
+Hort keeps the primary vault of several devices in step through a folder that
+a sync service of your choice, such as iCloud Drive, already replicates. Hort
+itself stays offline: it only reads and writes files in that folder.
+
+```bash
+# First device
+hort sync setup --path ~/path/to/sync-folder
+
+# Second device: same vault, same passphrase
+mkdir -p ~/.hort
+cp ~/path/to/sync-folder/hort-<id>.enc ~/.hort/vault.enc
+hort init --restore
+hort sync setup --path ~/path/to/sync-folder
+
+hort sync    # Exchange now and report; reads and writes also do this on their own
+```
+
+Each device writes one encrypted copy of its vault into the folder and merges
+the revisions of every other copy. The revision with the later time wins, and
+the other one stays in `hort history`, whichever device delivers first. Reads
+and writes keep working offline; changes travel on the next use with the folder
+in reach. A missing or unresponsive folder costs a warning on stderr and a few
+seconds at most.
+
+All devices share one passphrase. A vault created separately has a different
+key, so `hort sync setup` stops without changing anything. Mounted sources are
+not synced.
 
 ### Removing an older daemon installation
 
@@ -406,7 +436,8 @@ Subsequent CLI calls read the session key and use it to decrypt the vault on eve
 - **Encryption:** AES-256-GCM — authenticated, tamper-proof
 - **Key derivation:** Argon2id — memory-hard, resistant to GPU/ASIC attacks
 - **Session key:** File-based, chmod 600, scoped to OS user
-- **No network:** Zero network access, no telemetry, no cloud sync, no phone-home
+- **No network:** Zero network access, no telemetry, no phone-home. Hort has no cloud service of its own; device sync only uses a local folder that a third-party service replicates
+- **Sync folder:** Holds encrypted vault copies, never plaintext or keys. Header and salt are included, so anyone who reads the folder can attack the passphrase offline: use a long random one. Deleted values stay in the encrypted history there as well
 - **Threat model:** Protects against other OS users and casual file access. Root access = game over — accepted for a local development tool
 - **Portability:** Same passphrase decrypts the vault on any machine. Copy `vault.enc`, run `hort init --restore`
 

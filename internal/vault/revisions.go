@@ -38,6 +38,19 @@ func NewRevision(op, key, value string) (Revision, error) {
 	return Revision{ID: id, RecordedAt: &now, Op: op, Key: key, Value: value}, nil
 }
 
+// Append stamps r behind every revision the entry already knows, so a local
+// change is never outranked by a pulled revision from a clock running ahead.
+func (e *Entry) Append(r Revision) {
+	at := time.Now().UTC()
+	for _, known := range e.Revisions {
+		if known.RecordedAt != nil && !known.RecordedAt.Before(at) {
+			at = known.RecordedAt.UTC().Add(time.Nanosecond)
+		}
+	}
+	r.RecordedAt = &at
+	e.Revisions = append(e.Revisions, r)
+}
+
 // History orders unknown import times first, then UTC time and identity.
 func (e Entry) History() []Revision {
 	out := append([]Revision(nil), e.Revisions...)

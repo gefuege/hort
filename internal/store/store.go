@@ -158,9 +158,9 @@ func (s *Store) SetSecret(source, name, value, env, context, description string)
 	}
 	return vault.UpdateVault(src.Ref, src.SessionKey, func(data *vault.VaultData) error {
 		entry := data.Secrets[name]
-		entry.Revisions = append(entry.Revisions, revision)
+		entry.Append(revision)
 		if desc != nil {
-			entry.Revisions = append(entry.Revisions, *desc)
+			entry.Append(*desc)
 		}
 		data.Secrets[name] = entry
 		return nil
@@ -229,7 +229,7 @@ func (s *Store) Delete(source, name, env, context string) error {
 				return fmt.Errorf("entry %q has no variant %q", name, key)
 			}
 		}
-		entry.Revisions = append(entry.Revisions, revision)
+		entry.Append(revision)
 		data.Secrets[name] = entry
 		return nil
 	})

@@ -171,6 +171,7 @@ func requireStore() *store.Store {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(ExitLocked)
 	}
+	syncBeforeUse()
 	return s
 }
 
@@ -198,6 +199,7 @@ func CmdSetSecret(name, value, env, context, description, source string) error {
 	if err := s.SetSecret(source, name, value, env, context, description); err != nil {
 		return err
 	}
+	syncAfterWrite()
 	announceStored("secret", name, env, context, source)
 	return nil
 }
@@ -230,6 +232,7 @@ func CmdDelete(name, env, context, source string) error {
 	if err := s.Delete(source, name, env, context); err != nil {
 		return err
 	}
+	syncAfterWrite()
 	fmt.Fprintln(os.Stderr, "Deleted.")
 	return nil
 }

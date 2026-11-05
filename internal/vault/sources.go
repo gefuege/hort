@@ -19,8 +19,9 @@ type SourceRecord struct {
 
 // SourceRegistry is the on-disk list of mounted sources.
 type SourceRegistry struct {
-	Version int            `json:"version"`
-	Sources []SourceRecord `json:"sources"`
+	Version  int            `json:"version"`
+	Sources  []SourceRecord `json:"sources"`
+	SyncFile string         `json:"sync_file,omitempty"` // this device's file in the sync folder
 }
 
 // SourceRegistryPath returns the path to sources/index.json.

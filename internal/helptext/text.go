@@ -26,6 +26,10 @@ MANAGE:
   hort unlock                            Unlock primary vault with passphrase
   hort lock                              Lock primary vault (clears session key)
 
+SYNC (primary vault only, between devices sharing one passphrase):
+  hort sync setup --path <dir>           Connect to an existing folder a sync service keeps in step
+  hort sync                              Exchange with the folder now and report the result
+
 SOURCES:
   hort source list [--json]              List primary + mounted sources with lock status
   hort source mount --name <n> --path <p> --key-hex <hex> [--kdf raw|argon2id]
@@ -98,6 +102,10 @@ AGENT INSTRUCTIONS:
   7. Do NOT parse vault files directly. Always use the CLI.
   8. Do NOT store hort output in files or logs.
   9. Use --json with --list and --describe for structured output.
+
+  10. Sync: Once set up, every read and write exchanges with the sync folder on
+      its own. A missing or slow folder only prints a warning on stderr; the
+      command still runs locally with an unchanged exit code.
 
 EXAMPLES:
   # Read a secret via fallback chain

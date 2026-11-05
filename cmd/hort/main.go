@@ -137,6 +137,27 @@ func main() {
 	statusCmd.Flags().Bool("json", false, "JSON output")
 	root.AddCommand(statusCmd)
 
+	syncCmd := &cobra.Command{
+		Use:   "sync",
+		Short: "Exchange the primary vault with the sync folder now",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return cli.CmdSync()
+		},
+	}
+	syncSetupCmd := &cobra.Command{
+		Use:   "setup",
+		Short: "Connect the primary vault to a folder a sync service keeps in step",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			path, _ := cmd.Flags().GetString("path")
+			return cli.CmdSyncSetup(path)
+		},
+	}
+	syncSetupCmd.Flags().String("path", "", "Existing sync folder")
+	syncCmd.AddCommand(syncSetupCmd)
+	root.AddCommand(syncCmd)
+
 	// Source subcommands: mount / unmount / list
 	sourceCmd := &cobra.Command{
 		Use:   "source",
