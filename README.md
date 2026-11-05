@@ -303,6 +303,16 @@ hort init    # no terminal prompt
 hort unlock  # no terminal prompt
 ```
 
+### Claude Code plugin: enter secrets without the chat
+
+The `hort-secrets` plugin lets an agent ask for secrets without seeing them. The agent calls `request_secrets` with name, description and optional env and context per secret. A bar above the prompt shows one field per secret. Enter stores the value through `hort --set-secret --value-stdin`, and the chat only learns the stored name.
+
+```text
+/plugin install hort-secrets --marketplace sebastian-breitzke/hort
+```
+
+Click the field or press `ctrl+x tab` before typing: text typed into the prompt goes to the chat. The field shows the value in plain text. On the mobile app the bar only says that the input needs the Mac. `hort` must be on the `PATH` of the Claude Code process.
+
 ## Exit Codes
 
 | Code | Meaning |

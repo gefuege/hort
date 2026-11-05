@@ -1,0 +1,6 @@
+{
+  "name": "hort-secrets",
+  "version": "0.1.0",
+  "description": "Bar über dem Prompt: Secrets eintragen und direkt in Hort speichern, der Chat erfährt nur den Namen.",
+  "types": "./types/index.d.ts"
+}
