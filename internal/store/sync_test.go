@@ -357,7 +357,7 @@ func TestSyncSurvivesDeliveryProblems(t *testing.T) {
 }
 
 func TestSyncReadsOnlyRegularHortFiles(t *testing.T) {
-	a, _ := twoDevices(t)
+	a, b := twoDevices(t)
 	for _, name := range []string{".hort-x.enc.icloud", "notes.txt"} {
 		if err := os.WriteFile(filepath.Join(a.folder, name), []byte("not a vault"), 0600); err != nil {
 			t.Fatal(err)
@@ -366,9 +366,15 @@ func TestSyncReadsOnlyRegularHortFiles(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(a.folder, "hort-dir"), 0700); err != nil {
 		t.Fatal(err)
 	}
-	if got := a.sync(); len(got.Unreadable) != 0 {
+	b.record("behind-link", "set", "*:*", "value", at16)
+	b.sync()
+	if err := os.Symlink(ownFile(t, b), filepath.Join(a.folder, "hort-link.enc")); err != nil {
+		t.Fatal(err)
+	}
+	if got := a.sync(); len(got.Unreadable) != 0 || got.NewRevisions != 0 {
 		t.Fatalf("foreign names were read: %+v", got)
 	}
+	a.wantGone("behind-link")
 }
 
 func TestSyncRestoresOwnFile(t *testing.T) {
@@ -432,7 +438,7 @@ func TestSetupRefusesForeignKeyWithoutChanges(t *testing.T) {
 	folderBefore := folderFiles(t, a.folder)
 
 	_, err = vault.SetupSync(ref, key, a.folder)
-	if err == nil || !strings.Contains(err.Error(), "cannot decrypt") {
+	if err == nil || !strings.Contains(err.Error(), "cannot read or decrypt") {
 		t.Fatalf("setup: %v", err)
 	}
 	after, err := os.ReadFile(ref.Path)
@@ -484,6 +490,21 @@ func TestNewVaultDoesNotOverwriteOwnOldFile(t *testing.T) {
 	}
 	if !bytes.Equal(before, after) {
 		t.Fatal("own old file was overwritten")
+	}
+
+	// The way out the warning names: remove the file, the next run rewrites it.
+	if err := os.Remove(own); err != nil {
+		t.Fatal(err)
+	}
+	if got := a.sync(); !got.Pushed || got.OwnUnreadable {
+		t.Fatalf("after removal: %+v", got)
+	}
+	raw, err := os.ReadFile(own)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := vault.ProbeKey(raw, key); err != nil {
+		t.Fatalf("rewritten file: %v", err)
 	}
 }
 

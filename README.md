@@ -268,6 +268,16 @@ All devices share one passphrase. A vault created separately has a different
 key, so `hort sync setup` stops without changing anything. Mounted sources are
 not synced.
 
+Migrate a v2 vault before it joins, then bring it to the second device as a copy
+of the migrated v3 file plus `hort init --restore`. Two vaults migrated
+separately with the same key do merge, but migrated revisions have no recorded
+time, so current values can flip to the other device's.
+
+If a device cannot read or decrypt its own file in the folder, it stops pushing
+and warns on every use. Remove that file from the folder by hand and the next run
+writes it anew. After a fresh `hort init` the file still holds the old vault, so
+keep a copy if you need it.
+
 ### Removing an older daemon installation
 
 Hort now accesses vault files directly through the CLI. Before upgrading an

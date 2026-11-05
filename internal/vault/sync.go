@@ -139,7 +139,7 @@ func Sync(ref VaultRef, key []byte) (SyncResult, error) {
 		return SyncResult{}, fmt.Errorf("merging sync folder: %w", err)
 	}
 
-	// An undecryptable own file may be all that is left of an earlier key.
+	// An unreadable own file may be all that is left of an earlier key.
 	if folder.ownUnreadable {
 		return result, nil
 	}
@@ -158,7 +158,7 @@ func Sync(ref VaultRef, key []byte) (SyncResult, error) {
 }
 
 // SetupSync connects this device to path and runs the first exchange. It changes
-// nothing while the folder holds a file this vault cannot decrypt.
+// nothing while the folder holds a file this vault cannot read or decrypt.
 func SetupSync(ref VaultRef, key []byte, path string) (SyncResult, error) {
 	dir, err := checkSyncDir(path)
 	if err != nil {
@@ -184,7 +184,7 @@ func SetupSync(ref VaultRef, key []byte, path string) (SyncResult, error) {
 		return SyncResult{}, err
 	}
 	if len(folder.unreadable) > 0 {
-		return SyncResult{}, fmt.Errorf("sync folder holds files this vault cannot decrypt (%s) — all devices need the same vault key; nothing changed", strings.Join(folder.unreadable, ", "))
+		return SyncResult{}, fmt.Errorf("sync folder holds files this vault cannot read or decrypt (%s), possibly from a different vault key; nothing changed", strings.Join(folder.unreadable, ", "))
 	}
 	err = UpdateSourceRegistry(func(reg *SourceRegistry) error {
 		reg.SyncFile = filepath.Join(dir, name)

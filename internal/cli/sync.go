@@ -57,10 +57,10 @@ func warnSyncFailed(err error) {
 
 func warnSyncFiles(result vault.SyncResult) {
 	for _, name := range result.Unreadable {
-		fmt.Fprintf(os.Stderr, "warning: skipped sync file %s: cannot decrypt it\n", name)
+		fmt.Fprintf(os.Stderr, "warning: skipped sync file %s: cannot read or decrypt it\n", name)
 	}
 	if result.OwnUnreadable {
-		fmt.Fprintln(os.Stderr, "warning: this device's sync file cannot be decrypted, so nothing was pushed")
+		fmt.Fprintln(os.Stderr, "warning: this device's sync file cannot be read or decrypted, so nothing was pushed; remove it from the sync folder by hand and the next run writes it anew")
 	}
 }
 
