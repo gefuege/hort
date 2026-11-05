@@ -311,7 +311,7 @@ The `hort-secrets` plugin lets an agent ask for secrets without seeing them. The
 /plugin install hort-secrets --marketplace sebastian-breitzke/hort
 ```
 
-Click the field or press `ctrl+x tab` before typing: text typed into the prompt goes to the chat. The field shows the value in plain text. On the mobile app the bar only says that the input needs the Mac. `hort` must be on the `PATH` of the Claude Code process.
+Click the field or press `ctrl+x tab` before typing: text typed into the prompt goes to the chat. The field shows the value in plain text. `hort` must be on the `PATH` of the Claude Code process.
 
 ## Exit Codes
 

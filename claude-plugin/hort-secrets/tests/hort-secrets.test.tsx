@@ -27,7 +27,12 @@ type Run = { argv: readonly string[]; init?: { stdin?: string } }
 
 // Stands for the engine: answers hort with `exit`, records what reaches it, and
 // keeps every event the plugin raises so a test can look for the value.
-const setUp = ($: any, on: any, exit: Exit | Error = { exitCode: 0 }) => {
+const setUp = (
+  $: any,
+  on: any,
+  exit: Exit | Error = { exitCode: 0 },
+  surfaces: readonly string[] = ['desktop'],
+) => {
   const runs: Run[] = []
   const messages: string[] = []
   const events: { name: string; text: string }[] = []
@@ -37,6 +42,7 @@ const setUp = ($: any, on: any, exit: Exit | Error = { exitCode: 0 }) => {
     return next(e)
   })
   on('tool.register', () => ({ value: { tool: TOOL } }))
+  on('session.surfaces', () => ({ value: surfaces }))
   on('session.start', (_: unknown, e: { cwd: string }) => ({ cwd: e.cwd }))
   on('process.run', (_: unknown, e: Run) => {
     runs.push(e)
@@ -71,6 +77,13 @@ const ask = async ($: any, secrets: unknown) => {
   return $.tool.call({ tool: TOOL, secrets })
 }
 
+const expectNoBand = async ($: any) => {
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+
+  expect(await ui.find({ type: 'Text', text: /Secret eintragen/ })).toBeUndefined()
+  await ui.unmount()
+}
+
 test('the band offers one field per secret on terminal and desktop', async ($, on) => {
   setUp($, on)
   await ask($, [API_KEY, TOKEN])
@@ -89,7 +102,7 @@ test('the band offers one field per secret on terminal and desktop', async ($, o
 
 test('the value reaches hort by stdin and nowhere else', async ($, on) => {
   const { runs, messages, events } = setUp($, on)
-  const answer = await ask($, [API_KEY])
+  await ask($, [API_KEY])
   const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
 
   await ui.input({ key: API_KEY_FIELD, text: VALUE })
@@ -101,6 +114,10 @@ test('the value reaches hort by stdin and nowhere else', async ($, on) => {
   ])
   expect(runs[0].init?.stdin).toBe(VALUE)
   expect(messages).toEqual(['Secret gespeichert als api-key.'])
+
+  // Asked again once the value exists, the tool's answer still lacks it.
+  const answer = await $.tool.call({ tool: TOOL, secrets: [API_KEY] })
+  expect(answer.result).toContain('api-key')
   expect(JSON.stringify(answer)).not.toContain(VALUE)
 
   // Beyond the engine's own carriers of the typing, no event holds the value.
@@ -184,17 +201,81 @@ test('a name that starts with a dash is refused', async ($, on) => {
 
   expect(answer.deny).toContain('„--delete“')
   expect(runs).toEqual([])
-  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
-  expect(await ui.find({ type: 'Text', text: /Secret eintragen/ })).toBeUndefined()
+  await expectNoBand($)
 })
 
-test('mobile says the input needs the Mac', async ($, on) => {
-  setUp($, on)
-  await ask($, [API_KEY])
-  const ui = await $.ui.mount({ ...BAND, surface: 'mobile' })
+test('without a terminal or desktop the tool says the input needs the Mac', async ($, on) => {
+  setUp($, on, { exitCode: 0 }, ['mobile', 'vscode'])
+  const answer = await ask($, [API_KEY])
 
-  expect(await ui.find({ type: 'Text', text: /am Mac nötig/ })).toBeDefined()
-  expect(await ui.find({ key: API_KEY_FIELD })).toBeUndefined()
+  expect(answer.deny).toContain('am Mac nötig')
+  await expectNoBand($)
+})
+
+test('a terminal beside a phone is enough', async ($, on) => {
+  setUp($, on, { exitCode: 0 }, ['terminal', 'mobile'])
+  const answer = await ask($, [API_KEY])
+
+  expect(answer.deny).toBeUndefined()
+})
+
+test('a leading dash in description, env and context stays one argv element', async ($, on) => {
+  const { runs } = setUp($, on)
+  await ask($, [{ name: 'dash', description: '-d', env: '-e', context: '-c' }])
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+
+  await ui.input({ key: `value:${JSON.stringify(['dash', '-e', '-c'])}`, text: VALUE })
+
+  expect(runs[0].argv).toEqual([
+    'hort', '--set-secret', 'dash', '--value-stdin',
+    '--description', '-d', '--env', '-e', '--context', '-c',
+  ])
+})
+
+test('without env and context the argv names neither', async ($, on) => {
+  const { runs } = setUp($, on)
+  await ask($, [TOKEN])
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+
+  await ui.input({ key: TOKEN_FIELD, text: VALUE })
+
+  expect(runs[0].argv).toEqual([
+    'hort', '--set-secret', 'token', '--value-stdin', '--description', 'Token für Bar',
+  ])
+})
+
+test('a control character in any field is refused and draws nothing', async ($, on) => {
+  setUp($, on)
+
+  for (const field of ['name', 'description', 'env', 'context']) {
+    const answer = await ask($, [{ ...API_KEY, [field]: 'a\u0007b' }])
+
+    expect(answer.deny).toContain('Steuerzeichen')
+  }
+  await expectNoBand($)
+})
+
+test('whitespace in a name is refused', async ($, on) => {
+  setUp($, on)
+  const answer = await ask($, [{ name: 'api key', description: 'x' }])
+
+  expect(answer.deny).toContain('Leerzeichen')
+  await expectNoBand($)
+})
+
+test('the same secret twice in one call is refused', async ($, on) => {
+  setUp($, on)
+  const answer = await ask($, [API_KEY, API_KEY])
+
+  expect(answer.deny).toContain('nur einmal')
+  await expectNoBand($)
+})
+
+test('one name for two environments is two secrets', async ($, on) => {
+  setUp($, on)
+  const answer = await ask($, [API_KEY, { ...API_KEY, env: 'staging' }])
+
+  expect(answer.deny).toBeUndefined()
 })
 
 test('the tool result names the secrets and asks for no value', async ($, on) => {

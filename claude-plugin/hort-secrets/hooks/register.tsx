@@ -16,20 +16,31 @@ const keyOf = ({ name, env, context }: SecretRequest) =>
 const isOptionalText = (value: unknown) =>
   value === undefined || typeof value === 'string'
 
+// The engine refuses a drawing that holds a control character, and with it the
+// whole band: such a request must never reach `pending`.
+const hasControl = (value: unknown) =>
+  typeof value === 'string' && /\p{Cc}/u.test(value)
+
 const parseRequest = (raw: unknown): SecretRequest | string => {
   const { name, description, env, context } = (raw ?? {}) as Record<string, unknown>
 
   if (typeof name !== 'string' || name === '') {
     return 'Jedes Secret braucht einen Namen.'
   }
-  if (name.startsWith('-')) {
-    return `Der Name „${name}“ ist ungültig: Er darf nicht mit „-“ beginnen.`
-  }
   if (typeof description !== 'string' || description === '') {
     return `Das Secret „${name}“ braucht eine Beschreibung.`
   }
   if (!isOptionalText(env) || !isOptionalText(context)) {
     return `Env und Kontext von „${name}“ müssen Text sein.`
+  }
+  if ([name, description, env, context].some(hasControl)) {
+    return 'Name, Beschreibung, Env und Kontext dürfen keine Steuerzeichen enthalten.'
+  }
+  if (name.startsWith('-')) {
+    return `Der Name „${name}“ ist ungültig: Er darf nicht mit „-“ beginnen.`
+  }
+  if (/\s/.test(name)) {
+    return `Der Name „${name}“ ist ungültig: Er darf keine Leerzeichen enthalten.`
   }
 
   return {
@@ -78,6 +89,7 @@ export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     await $.tool.register({
       name: TOOL,
+      isDeferred: false,
       description:
         'Fragt Secrets bei der Person ab, ohne dass der Wert in den Chat gelangt. Nutze das Tool immer, statt im Chat nach einem Secret zu fragen. Über dem Prompt am Mac erscheint je Secret ein Feld. Das Tool kehrt sofort zurück; gespeicherte Namen, Abbruch und Fehler kommen danach als eigene Nachricht.',
       inputSchema: {
@@ -107,7 +119,11 @@ export const register: Register = on => {
 
   on('tool.call', { tool: `mcp__hort-secrets__${TOOL}` }, async ($, e) => {
     const { secrets } = e as { secrets?: unknown }
+    const surfaces = await $.session.surfaces()
 
+    if (!surfaces.includes('terminal') && !surfaces.includes('desktop')) {
+      return { deny: 'Die Eingabe ist am Mac nötig: Hier gibt es keine Bar über dem Prompt.' }
+    }
     if (!Array.isArray(secrets) || secrets.length === 0) {
       return { deny: 'Es wurde kein Secret angefragt.' }
     }
@@ -121,6 +137,10 @@ export const register: Register = on => {
 
     const requests = parsed as SecretRequest[]
     const asked = new Set(requests.map(keyOf))
+
+    if (asked.size < requests.length) {
+      return { deny: 'Jedes Secret darf je Env und Kontext nur einmal angefragt werden.' }
+    }
 
     await update($, pending, open => [
       ...open.filter(other => !asked.has(keyOf(other))),
@@ -146,8 +166,8 @@ export const register: Register = on => {
         return
       }
 
-      // Gone from the band before hort runs: the field empties and a second
-      // Enter cannot store twice.
+      // Gone from the band before hort runs, so the field empties at once. A
+      // second Enter before the redraw can still start a second run.
       await remove($, request)
       await $.prompt.submit({ text: await store($, request, value) })
     }
@@ -167,25 +187,20 @@ export const register: Register = on => {
     return (
       <Box flexDirection="column">
         <Text dimColor>
-          {e.surface !== 'mobile'
-            ? 'Secret eintragen: Klick ins Feld oder ctrl+x tab, nicht in den Prompt tippen. Enter speichert in Hort.'
-            : 'Die Eingabe ist am Mac nötig.'}
+          Secret eintragen: Klick ins Feld oder ctrl+x tab, nicht in den Prompt
+          tippen. Enter speichert in Hort.
         </Text>
         {requests.map((request, index) => (
           <Box key={keyOf(request)} flexDirection="column">
             <Text dimColor>{detail(request)}</Text>
             <Box>
-              {e.surface === 'mobile' ? (
-                <Text>{request.name}</Text>
-              ) : (
-                <Input
-                  key={`value:${keyOf(request)}`}
-                  label={request.name}
-                  submitLabel="speichern"
-                  {...(index === 0 ? { autoFocus: true as const } : {})}
-                  onSubmit={value => save(request, value)}
-                />
-              )}
+              <Input
+                key={`value:${keyOf(request)}`}
+                label={request.name}
+                submitLabel="speichern"
+                {...(index === 0 ? { autoFocus: true as const } : {})}
+                onSubmit={value => save(request, value)}
+              />
               <Button
                 key={`cancel:${keyOf(request)}`}
                 label="Abbrechen"
