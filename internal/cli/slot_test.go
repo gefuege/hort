@@ -14,14 +14,16 @@ import (
 	"github.com/gefuege/hort/internal/vault"
 )
 
-// slotServer answers PUT /slots/passphrase with putStatus and GET
-// /accounts/{id}/slot with akPub and slot.
+// slotServer answers PUT /slots/passphrase with putStatus, GET
+// /accounts/{id}/slot with akPub and slot, and GET /revisions with an empty
+// page that reports slotVersion.
 type slotServer struct {
-	mu        sync.Mutex
-	putStatus int
-	puts      []uint64
-	akPub     []byte
-	slot      api.Slot
+	mu          sync.Mutex
+	putStatus   int
+	puts        []uint64
+	akPub       []byte
+	slot        api.Slot
+	slotVersion uint64
 }
 
 func (s *slotServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -37,6 +39,8 @@ func (s *slotServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.puts = append(s.puts, slot.Version)
 		w.WriteHeader(s.putStatus)
 		_, _ = w.Write([]byte("{}"))
+	case r.Method == "GET" && r.URL.Path == "/api/v1/revisions":
+		_ = json.NewEncoder(w).Encode(map[string]any{"revisions": []any{}, "cursor": 0, "more": false, "devices_version": 0, "slot_version": s.slotVersion})
 	case r.Method == "GET" && strings.HasSuffix(r.URL.Path, "/slot"):
 		slot := s.slot
 		slot.ID = vault.PassphraseSlotID
@@ -169,6 +173,29 @@ func TestSyncTakesOnlyANewerSignedServerSlot(t *testing.T) {
 	}
 	if len(fake.pushed()) != 0 {
 		t.Fatal("pushed while taking the server slot")
+	}
+}
+
+// Another device set version 2 while this one, still at 1, sets a passphrase:
+// the sync before the change takes version 2, so the new one is 3 and wins.
+func TestPassphraseAfterAnotherDeviceSetTheSameVersion(t *testing.T) {
+	fake, srv := slotServerFor(t)
+	ref, vk := registeredVault(t, srv, "old")
+	sk := mustSecretKey(t, ref)
+	raw, err := os.ReadFile(ref.Path)
+	must(t, err)
+	must(t, vault.ChangePassphrase(ref, vk, []byte("other"), sk))
+	_, other, err := vault.OpenAccount(ref, vk)
+	must(t, err)
+	must(t, os.WriteFile(ref.Path, raw, 0600))
+	fake.akPub = other.Keys.AK.Public().(ed25519.PublicKey)
+	fake.slot = api.Slot{Version: other.Slot.Version, Bytes: other.Slot.Bytes, AKSig: other.Slot.AKSig}
+	fake.slotVersion = 2
+
+	t.Setenv("HORT_PASSPHRASE", "mine")
+	must(t, CmdPassphrase())
+	if got := fake.pushed(); len(got) != 1 || got[0] != 3 || slotVersion(t, ref, vk) != 3 {
+		t.Fatalf("pushes %v, local version %d", got, slotVersion(t, ref, vk))
 	}
 }
 

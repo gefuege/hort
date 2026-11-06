@@ -283,6 +283,9 @@ func CmdPassphrase() error {
 	if err != nil {
 		return err
 	}
+	// A sync first takes a passphrase set on another device, so the new slot
+	// version is normally the server's plus one.
+	autoSync(ref, key)
 	if err := vault.ChangePassphrase(ref, key, pass, secretKey); err != nil {
 		return err
 	}
@@ -302,9 +305,9 @@ func CmdPassphrase() error {
 	return nil
 }
 
-// slotConflict explains a passphrase changed here while another device set a
-// newer one on the server.
-const slotConflict = "the server holds a passphrase set on another device that is at least as new and kept it. This device uses your new passphrase until a sync brings the other one; to make yours the account's passphrase, run `hort sync` and then `hort passphrase` again"
+// slotConflict explains a passphrase changed here while another device set
+// one at least as new on the server.
+const slotConflict = "the account keeps the passphrase set on another device; this device unlocks with your new one for now. Run `hort passphrase` again here to make yours the account's passphrase"
 
 // CmdGet retrieves one value.
 func CmdGet(name, field, env, context string) error {
