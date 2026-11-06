@@ -26,6 +26,7 @@ import {
   type AccountKeys,
   type SlotRecord,
 } from "./vault-core";
+import { REQUEST_PATH, requestView } from "./request-view";
 
 // ---------------------------------------------------------------------------
 // State, memory only
@@ -354,7 +355,7 @@ function unlockedPanel(): HTMLElement {
   );
 }
 
-function loginView(main: HTMLElement): void {
+function loginView(main: HTMLElement, onUnlocked: () => void = () => render("/login")): void {
   if (unlocked && signedIn) {
     main.append(unlockedPanel());
     return;
@@ -372,7 +373,7 @@ function loginView(main: HTMLElement): void {
     out.set("Waiting for your passkey …");
     const { result, unlockedNow } = await passkeySignIn((t) => out.set(t));
     if (unlockedNow) {
-      render("/login");
+      onUnlocked();
       return;
     }
     button.hidden = true;
@@ -383,7 +384,7 @@ function loginView(main: HTMLElement): void {
         { class: "panel" },
         h("h2", { class: "panel-h" }, "Signed in, vault still locked"),
         h("p", {}, "This passkey signs you in but cannot unlock your vault. Some passkey providers do not support that. Enter your passphrase and Secret Key to unlock."),
-        kitForm(() => render("/login"), result.account_id),
+        kitForm(onUnlocked, result.account_id),
       ),
     );
   });
@@ -568,8 +569,33 @@ const routes: Record<string, { tag: string; title: string; view: (main: HTMLElem
   "/devices": { tag: "// devices", title: "Devices", view: devicesView },
 };
 
+// /r/<id>: an agent's secret request (contract §7.3).
+const requestRoute = {
+  tag: "// request",
+  title: "Secret request",
+  view: (main: HTMLElement) =>
+    requestView(
+      main,
+      {
+        h,
+        status,
+        messageOf,
+        api,
+        ok,
+        keys: () => (unlocked && signedIn ? unlocked.keys : null),
+        sessionLost: () => {
+          signedIn = false;
+        },
+        login: (into, done) => loginView(into, done),
+      },
+      location.pathname,
+    ),
+};
+
+const routeFor = (path: string) => routes[path] ?? (REQUEST_PATH.test(path) ? requestRoute : undefined);
+
 function render(path: string): void {
-  const route = routes[path];
+  const route = routeFor(path)!;
   const main = document.querySelector("main")!;
   document.getElementById("kit")?.remove();
   document.title = `${route.title} – Hort`;
@@ -583,13 +609,13 @@ function render(path: string): void {
 
 document.addEventListener("click", (e) => {
   const a = (e.target as Element).closest?.("a");
-  if (!a || a.origin !== location.origin || !routes[a.pathname] || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+  if (!a || a.origin !== location.origin || !routeFor(a.pathname) || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
   e.preventDefault();
   if (a.pathname !== location.pathname) history.pushState(null, "", a.pathname);
   render(a.pathname);
 });
-window.addEventListener("popstate", () => routes[location.pathname] && render(location.pathname));
+window.addEventListener("popstate", () => routeFor(location.pathname) && render(location.pathname));
 window.addEventListener("pagehide", forget);
 // A page restored from the back-forward cache shows the state it had, but its memory was dropped.
-window.addEventListener("pageshow", (e) => e.persisted && routes[location.pathname] && render(location.pathname));
-if (routes[location.pathname]) render(location.pathname);
+window.addEventListener("pageshow", (e) => e.persisted && routeFor(location.pathname) && render(location.pathname));
+if (routeFor(location.pathname)) render(location.pathname);

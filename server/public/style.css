@@ -130,8 +130,14 @@ code{font-family:var(--f-mono);font-size:.9em}
 .form{max-width:44ch}
 .field{margin:0 0 16px}
 .field label{display:block;font:700 13px var(--f-mono);margin:0 0 6px}
-.field input{width:100%;font:15px/1.4 var(--f-mono);padding:10px 12px;color:var(--ink);background:var(--surface);border:1px solid var(--line-strong);border-radius:var(--r)}
-.field input:focus-visible{outline:2px solid var(--ink);outline-offset:1px}
+.field input:not([type=checkbox]),.field textarea{width:100%;font:15px/1.4 var(--f-mono);padding:10px 12px;color:var(--ink);background:var(--surface);border:1px solid var(--line-strong);border-radius:var(--r)}
+.field input:focus-visible,.field textarea:focus-visible{outline:2px solid var(--ink);outline-offset:1px}
+.field textarea{resize:vertical}
+.field .check{display:flex;align-items:center;gap:8px;font:400 14px var(--f-body);margin:10px 0 0}
+.facts{display:grid;grid-template-columns:max-content 1fr;gap:6px 20px;margin:20px 0 0;max-width:72ch}
+.facts dt{font:700 12px var(--f-mono);text-transform:uppercase;letter-spacing:.06em;color:var(--muted);padding-top:3px}
+.facts dd{margin:0;overflow-wrap:anywhere}
+@media (max-width:760px){.facts{grid-template-columns:1fr;gap:0}.facts dd{margin-bottom:12px}}
 .hint{color:var(--muted);font-size:14px;margin:6px 0 0}
 .status{min-height:1.6em;margin:8px 0;color:var(--muted)}
 .status-error{color:#B3261E}
