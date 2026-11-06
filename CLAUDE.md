@@ -45,6 +45,7 @@ HORT_PASSPHRASE="test" ./hort init
 - `internal/cli/sync.go` — `hort sync`, `hort sync setup`, time-limited sync around reads and writes
 - `internal/helptext/text.go` — Help text (serves as agent prompt)
 - `internal/cli/output.go` — Output formatting (plain/JSON)
+- `site/` — hort.pm landing page (static assets, assets-only Cloudflare Worker `hort-site`; see `site/README.md`)
 
 ## Sources
 

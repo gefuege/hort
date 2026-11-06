@@ -1,0 +1,6 @@
+{
+  "name": "hort-site",
+  "compatibility_date": "2026-08-01",
+  "assets": { "directory": "./public" },
+  "routes": [{ "pattern": "hort.pm", "custom_domain": true }]
+}

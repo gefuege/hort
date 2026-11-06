@@ -1,0 +1,171 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Hort – secrets for you and your agents</title>
+<meta name="description" content="Hort is an open-source secret manager for developers and their coding agents. One encrypted vault for your API keys, tokens and passwords. Your keys never leave your devices.">
+<meta name="color-scheme" content="light dark">
+<link rel="icon" type="image/png" href="/favicon.png">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<link rel="preload" href="/fonts/jetbrains-mono-latin-800-normal.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<nav class="m-nav">
+  <a class="brand" href="/"><span class="chev">&lt;</span><img src="/img/logo.png" alt="" width="32" height="32"><span class="chev">&gt;</span>Hort</a>
+  <div class="m-links"><a href="#agents">agents</a><a href="#security">security</a><a href="#install">install</a><a href="https://github.com/gefuege/hort">github ↗</a></div>
+</nav>
+
+<main>
+<div class="section hero wrap">
+  <div>
+    <p class="eyebrow">Open source · Keys stay on your devices</p>
+    <div class="hero-mark" aria-hidden="true"><span class="chev">&lt;</span><img src="/img/logo.png" alt="" width="72" height="72"><span class="chev">&gt;</span></div>
+    <h1>Hort – secrets for you and your agents.<span class="cur" aria-hidden="true"></span></h1>
+    <p class="lede">One encrypted vault for your API keys, tokens and passwords. You use it. Your coding agents use it. Your keys never leave your devices.</p>
+    <div class="ctas"><a class="btn btn-primary" href="#install">Install the CLI →</a><a class="btn btn-ghost" href="https://github.com/gefuege/hort">View on GitHub</a></div>
+    <p class="hero-note">The CLI works today. Sync, passkeys and the web app arrive with Hort 1.0. No account needed to start.</p>
+  </div>
+  <div class="term hero-term">
+    <div class="term-bar"><i></i><i></i><i></i><span>zsh — ~/shop</span></div>
+<pre><span class="t-p">$</span> hort --list
+<span class="t-v">openai-key</span>     <span class="t-m">OpenAI API key</span>        <span class="t-m">[env: *]</span>
+<span class="t-v">db-password</span>    <span class="t-m">PostgreSQL password</span>   <span class="t-m">[env: *, prod]</span>
+
+<span class="t-p">$</span> hort --secret db-password --env prod
+<span class="t-a">••••••••••••</span></pre>
+  </div>
+</div>
+
+<div class="section wrap" id="agents">
+  <p class="sec-tag">// agents</p>
+  <h2 class="sec-h">Your agent asks. You answer. It never sees the secret.</h2>
+  <p class="sec-intro">Agents need credentials. Today you paste them into the chat, the agent forgets, and next session it asks again. Hort gives your agents one place to look, and one polite way to ask for what's missing.</p>
+  <div class="cards">
+    <div class="card"><span class="num">[01]</span><h3>Discover</h3><p>The agent runs <code>hort --list</code> and sees what exists: names, descriptions, environments. No values.</p></div>
+    <div class="card"><span class="num">[02]</span><h3>Read</h3><p><code>hort --secret &lt;name&gt;</code> prints just the value on stdout. Ready for <code>$(...)</code> and pipes. Locked vault? Exit code 2, and the agent asks you to unlock.</p></div>
+    <div class="card"><span class="num">[03]</span><h3>Ask for what's missing<span class="tag tag-soon">Coming with 1.0</span></h3><p>The agent requests a secret by name via MCP. You get a link, open hort.pm and type the value there. The agent only learns that the secret now exists.</p></div>
+  </div>
+
+  <div class="examples">
+    <div class="example">
+      <p class="label">Today</p>
+      <div class="term"><pre><span class="t-m"># What's there?</span>
+<span class="t-p">$</span> hort --list --json
+
+<span class="t-m"># Use it</span>
+<span class="t-p">$</span> export STRIPE_KEY=$(hort --secret stripe-key --env prod)
+
+<span class="t-m"># Different value per customer</span>
+<span class="t-p">$</span> hort --secret tenant-id --env prod --context acme</pre></div>
+      <p class="caption">Fallback built in: <code>env+context → env+* → *+*</code>. Specific wins, the baseline catches the rest.</p>
+    </div>
+    <div class="example">
+      <p class="label soon">Coming with 1.0</p>
+      <div class="term"><pre><span class="t-a">agent</span>  › I need the Stripe client ID for this integration.
+<span class="t-p">hort</span>   › Requested "stripe / client_id". Waiting for you on hort.pm …
+<span class="t-v">you</span>    › <span class="t-m">(open the link, enter the value, done)</span>
+<span class="t-a">agent</span>  › $ hort get stripe client_id</pre></div>
+      <p class="caption">The value goes from your browser into your vault. The chat only ever sees the name.</p>
+    </div>
+  </div>
+  <p class="aside-note">Using Claude Code? The <code>hort-secrets</code> plugin already lets an agent ask for a secret without seeing it: you type the value into a field above the prompt, Hort stores it, the chat gets the name.</p>
+</div>
+
+<div class="section wrap" id="features">
+  <p class="sec-tag">// features</p>
+  <h2 class="sec-h">Small tool. Sharp edges where they belong.</h2>
+  <h3 class="sub-h">Available today</h3>
+  <ul class="feat">
+    <li><strong>One encrypted vault.</strong><span>AES-256-GCM, key derived with Argon2id. One file on your disk.</span></li>
+    <li><strong>Built for agents.</strong><span><code>hort --help</code> teaches an agent the whole interface in one call. Plain values on stdout, errors on stderr, <code>--json</code> when it wants structure.</span></li>
+    <li><strong>Environments and contexts.</strong><span>One name, many values: dev, prod, per tenant or customer. Lookups fall back to the baseline.</span></li>
+    <li><strong>History.</strong><span>Every change is a revision. <code>hort history &lt;name&gt;</code> shows what changed and when.</span></li>
+    <li><strong>Offline first.</strong><span>No network calls, no telemetry. Hort works on a plane.</span></li>
+    <li><strong>Device sync through a folder.</strong><span>Point Hort at a folder that iCloud Drive or another sync service already replicates. Hort writes encrypted copies only.</span></li>
+    <li><strong>Values stay out of your shell history.</strong><span><code>--value-stdin</code> keeps secrets out of process arguments.</span></li>
+  </ul>
+  <h3 class="sub-h">Coming with 1.0</h3>
+  <ul class="feat">
+    <li><strong>Secret Key + passphrase.<span class="tag tag-soon">Coming with 1.0</span></strong><span>Unlock with your passphrase plus a device-generated Secret Key. A stolen copy of your vault is useless without both.</span></li>
+    <li><strong>Passkey unlock in the browser.<span class="tag tag-soon">Coming with 1.0</span></strong><span>Unlock hort.pm with a passkey (WebAuthn PRF). No passphrase typing on every visit.</span></li>
+    <li><strong>Named fields.<span class="tag tag-soon">Coming with 1.0</span></strong><span>One secret, several parts: <code>hort get stripe client_id</code>, <code>hort get stripe secret</code>.</span></li>
+    <li><strong>Encrypted sync, hosted in the EU.<span class="tag tag-soon">Coming with 1.0</span></strong><span>Sync runs on Cloudflare in the EU. The server stores ciphertext and never sees a key.</span></li>
+    <li><strong>hort.pm web app.<span class="tag tag-soon">Coming with 1.0</span></strong><span>Read, copy and set secrets in the browser, on any device you trust.</span></li>
+    <li><strong>Agents ask, you answer.<span class="tag tag-soon">Coming with 1.0</span></strong><span>Agents request missing secrets via MCP. You enter them on hort.pm; the agent gets the name, not the value.</span></li>
+  </ul>
+</div>
+
+<div class="section security wrap" id="security">
+  <p class="sec-tag">// security</p>
+  <h2 class="sec-h">Where your secrets live, honestly.</h2>
+  <p class="sec-intro">A secret manager earns trust by saying what it protects and what it doesn't. Here's ours.</p>
+  <div class="cols">
+    <div>
+      <h3>What Hort protects</h3>
+      <ul>
+        <li>Keys and plaintext exist only on your devices, and in your browser while hort.pm is unlocked.<span class="tag tag-soon">Browser part: 1.0</span></li>
+        <li>The vault is encrypted with AES-256-GCM. Tampering is detected.</li>
+        <li>The sync server stores ciphertext only. It cannot read your secrets.<span class="tag tag-soon">Coming with 1.0</span></li>
+        <li>Agents get values through the CLI on your machine. With the 1.0 request flow, they never get values you type for them.<span class="tag tag-soon">Coming with 1.0</span></li>
+      </ul>
+    </div>
+    <div>
+      <h3>What Hort does not protect against</h3>
+      <ul>
+        <li><strong>Someone who controls your machine.</strong> Root or malware on an unlocked device can read what you can read. That's true for every local secret manager.</li>
+        <li><strong>Whoever controls the hort.pm deployment.</strong><span class="tag tag-soon">Coming with 1.0</span> The web app is JavaScript served by hort.pm. Whoever controls that deployment could ship code that reads secrets after you unlock in the browser. We reduce the risk: strict Content Security Policy, no third-party scripts, open source code you can check. If you don't want this risk at all, use only the CLI. Or run the backend yourself.</li>
+        <li><strong>Losing both Secret Key and passphrase.</strong><span class="tag tag-soon">Coming with 1.0</span> Then your data is gone. Nobody can reset it, including us. Print your Emergency Kit and keep it somewhere safe.</li>
+      </ul>
+    </div>
+  </div>
+  <p class="today-note"><strong>Today, specifically:</strong> The CLI never talks to a server. Folder sync puts encrypted vault copies in your sync folder; anyone who can read that folder can try to guess your passphrase offline. Use a long, random one.</p>
+</div>
+
+<div class="section wrap" id="install">
+  <p class="sec-tag">// install</p>
+  <h2 class="sec-h">Install in one line.</h2>
+  <div class="install-grid">
+    <div><h3>macOS (Homebrew)</h3><div class="term"><pre>brew install sebastian-breitzke/tap/hort &amp;&amp; hort init</pre></div></div>
+    <div><h3>npm (any OS)</h3><div class="term"><pre>npm install -g @s16e/hort &amp;&amp; hort init</pre></div></div>
+    <div><h3>Windows (Scoop)</h3><div class="term"><pre>scoop bucket add sebastian-breitzke https://github.com/sebastian-breitzke/scoop-bucket
+scoop install hort
+hort init</pre></div></div>
+    <div><h3>Go</h3><div class="term"><pre>go install github.com/sebastian-breitzke/hort/cmd/hort@latest &amp;&amp; hort init</pre></div></div>
+  </div>
+  <p>Linux and Windows binaries → <a href="https://github.com/gefuege/hort/releases">GitHub Releases</a></p>
+  <h3 class="sub-h after">After install</h3>
+  <div class="term"><pre>hort --set-secret openai-key --value-stdin --description "OpenAI API key"
+hort --secret openai-key</pre></div>
+  <p class="after-line">Set a passphrase during <code>hort init</code>. That's it. Then tell your agent to run <code>hort --help</code>.</p>
+</div>
+
+<div class="section about wrap" id="open-source">
+  <p class="sec-tag">// open source</p>
+  <h2 class="sec-h">Yours to read, run and keep.</h2>
+  <p>Hort is open source under the MIT license. Read the code, audit the crypto, send a pull request.</p>
+  <p>The CLI needs no server at all. When Hort 1.0 brings sync and the web app, you can use the hosted service at hort.pm or run the backend yourself.<span class="tag tag-soon">Coming with 1.0</span></p>
+  <h3 class="sub-h">Why "Hort"?</h3>
+  <p class="why">"Hort" is German for a safe place, and for a treasure hoard, like the Nibelungenhort. The logo is a key in a nest: your secrets, kept safe, close to home.</p>
+  <div class="ctas"><a class="btn btn-primary" href="https://github.com/gefuege/hort">Star or fork on GitHub →</a></div>
+</div>
+</main>
+
+<footer class="m-footer">
+  <div class="wrap">
+    <p class="foot-brand">Hort – secrets for you and your agents.</p>
+    <div class="row">
+      <a href="https://github.com/gefuege/hort">GitHub</a>
+      <a href="https://github.com/gefuege/hort/releases">Releases</a>
+      <a href="https://www.npmjs.com/package/@s16e/hort">npm (@s16e/hort)</a>
+      <a href="#security">Security model</a>
+      <a href="/impressum">Impressum</a>
+      <a href="/privacy">Privacy</a>
+    </div>
+    <p>No tracking cookies. No tracking. No third-party scripts.</p>
+    <p>© 2026 Sebastian Breitzke · MIT License</p>
+  </div>
+</footer>
+</body>
+</html>
