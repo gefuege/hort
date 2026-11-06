@@ -1,6 +1,6 @@
 {
   "name": "@s16e/hort",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "Local secret store for humans and AI agents",
   "keywords": [
     "secrets",
