@@ -126,6 +126,15 @@ func ArgonSlotParams(salt []byte, p ArgonParams) []byte {
 	return canon("hort/v4/argon\n", salt, be32(p.Time), be32(p.Memory), []byte{p.Threads})
 }
 
+// PasskeySlot returns slot_id and slot_params of the passkey slot of a WebAuthn
+// credential (§2.2, spec/vectors/passkey-slot.json): cred_hash =
+// SHA-256(credential ID), slot_id = "passkey:" + hex(cred_hash) and
+// slot_params = canon("hort/v4/passkey\n", cred_hash).
+func PasskeySlot(credentialID []byte) (slotID string, params []byte) {
+	sum := sha256.Sum256(credentialID)
+	return "passkey:" + hex.EncodeToString(sum[:]), canon("hort/v4/passkey\n", sum[:])
+}
+
 func slotAAD(accountID []byte, slotID string, version uint64, params []byte) []byte {
 	return canon("hort/v4/slot\n", accountID, []byte(slotID), be64(version), params)
 }

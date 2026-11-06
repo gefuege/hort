@@ -35,6 +35,7 @@ func TestVectors(t *testing.T) {
 		{"keys.json", keyVectors},
 		{"kek.json", kekVectors},
 		{"slot.json", slotVectors},
+		{"passkey-slot.json", passkeySlotVectors},
 		{"envelope.json", envelopeVectors},
 		{"request.json", requestVectors},
 		{"secret-key.json", secretKeyVectors},
@@ -257,6 +258,47 @@ func slotVectors(t *testing.T) any {
 		Vectors: []vec{{vecAccountID, vecVK, kek, PassphraseSlotID, version, vecSlotSalt, argonOf(params), slotParams,
 			slotAAD(vecAccountID, PassphraseSlotID, version, slotParams), nonce, wrapped, slotBytes, msg,
 			hexBytes(keys.AK.Public().(ed25519.PublicKey)), sig}},
+	}
+}
+
+func passkeySlotVectors(t *testing.T) any {
+	keys := must(DeriveAccountKeys(vecVK, vecAccountID))
+	credentialID := fixed("credential-id", 20)
+	prf := fixed("prf-output", PRFSize)
+	kek := must(PasskeyKEK(prf, vecAccountID))
+	nonce := fixed("nonce/passkey-slot", NonceSize)
+	const version = 1
+	slotID, slotParams := PasskeySlot(credentialID)
+	credHash := sha256.Sum256(credentialID)
+	wrapped := must(wrapVK(kek, vecVK, vecAccountID, slotID, version, slotParams, nonce))
+	if vk := must(UnwrapVK(kek, nonce, wrapped, vecAccountID, slotID, version, slotParams)); !bytes.Equal(vk, vecVK) {
+		t.Fatal("passkey slot does not round-trip")
+	}
+	slotBytes := SlotBytes(slotParams, nonce, wrapped)
+	msg := SlotSigMessage(vecAccountID, slotID, version, slotBytes)
+	type vec struct {
+		AccountID    hexBytes `json:"account_id_hex"`
+		VK           hexBytes `json:"vk_hex"`
+		CredentialID hexBytes `json:"credential_id_hex"`
+		CredHash     hexBytes `json:"cred_hash_hex"`
+		PRF          hexBytes `json:"prf_output_hex"`
+		KEK          hexBytes `json:"kek_hex"`
+		SlotID       string   `json:"slot_id"`
+		SlotVersion  uint64   `json:"slot_version"`
+		SlotParams   hexBytes `json:"slot_params_hex"`
+		AAD          hexBytes `json:"aad_hex"`
+		Nonce        hexBytes `json:"wrap_nonce_hex"`
+		Wrapped      hexBytes `json:"wrapped_vk_hex"`
+		SlotBytes    hexBytes `json:"slot_bytes_hex"`
+		SigMessage   hexBytes `json:"sig_message_hex"`
+		AKPublic     hexBytes `json:"ak_public_hex"`
+		AKSig        hexBytes `json:"ak_sig_hex"`
+	}
+	return vectorFile{
+		Description: "Passkey slot (contract §2.2; encoding fixed by S6.2). cred_hash = SHA-256(credential ID); slot_id = \"passkey:\" || lowercase hex(cred_hash); slot_params = canon(\"hort/v4/passkey\\n\", cred_hash); KEK = HKDF(PRF output, account_id, hort/v4/kek-passkey) as in kek.json; wrapped_vk, slot_bytes and ak_sig as in slot.json.",
+		Vectors: []vec{{vecAccountID, vecVK, credentialID, credHash[:], prf, kek, slotID, version, slotParams,
+			slotAAD(vecAccountID, slotID, version, slotParams), nonce, wrapped, slotBytes, msg,
+			hexBytes(keys.AK.Public().(ed25519.PublicKey)), ed25519.Sign(keys.AK, msg)}},
 	}
 }
 

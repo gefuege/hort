@@ -35,6 +35,7 @@ Never edit these files by hand. A changed byte means a changed contract.
 | `keys.json` | §2.1 | `FK`, `RK`, `AKs` = HKDF-SHA256(ikm=VK, salt=account_id, info=`hort/v4/file` / `hort/v4/revision` / `hort/v4/account-auth`, 32 bytes); `ak_public_hex` = Ed25519 public key from seed `AKs`. |
 | `kek.json` | §2.2 | Passphrase 2SKD: `A` = Argon2id(NFC(passphrase), slot_salt, t, m, p, 32); `S` = HKDF(secret_key, account_id, `hort/v4/secret-key`); `KEK` = HKDF(A XOR S, slot_salt, `hort/v4/kek`). One vector at production parameters, two at test parameters: the NFC and the NFD spelling of the same passphrase give the same KEK. Passkey: `prf_eval_salt` = SHA-256(`"hort/v4/prf\n"` ‖ account_id), plain concatenation; `KEK` = HKDF(PRF output, account_id, `hort/v4/kek-passkey`). |
 | `slot.json` | §2.2, §2.3, Rev 2.1 pt. 2 | Passphrase slot with `slot_id` = `"passphrase"`, `slot_version` = 7, KEK from the production vector in `kek.json`. `slot_params` = canon(`"hort/v4/argon\n"`, salt, u32 t, u32 m, u8 p); `aad` = canon(`"hort/v4/slot\n"`, account_id, slot_id, u64 slot_version, slot_params); `wrapped_vk` = ciphertext ‖ tag (48 bytes); `slot_bytes` = canon(`"hort/v4/slot-bytes\n"`, slot_params, wrap_nonce, wrapped_vk); `ak_sig` = Ed25519_AK(canon(`"hort/v4/slot-sig\n"`, account_id, slot_id, u64 slot_version, slot_bytes)). |
+| `passkey-slot.json` | §2.2 | Passkey slot, `slot_version` = 1, KEK from the PRF output in `kek.json`. `cred_hash` = SHA-256(credential ID); `slot_id` = `"passkey:"` ‖ lowercase hex(`cred_hash`); `slot_params` = canon(`"hort/v4/passkey\n"`, cred_hash). AAD, `wrapped_vk`, `slot_bytes` and `ak_sig` follow `slot.json`. |
 | `envelope.json` | §6.4 | `envelope` = nonce(12) ‖ AES-256-GCM(RK, plaintext, aad = canon(`"hort/v4/rev\n"`, account_id, revision id bytes)). Cases: default field, named field with env and context, describe, delete-entry, imported revision without a time (`recorded_at: null`). |
 | `request.json` | §7.2 step 3, §6.2 | `meta_ct` = nonce(12) ‖ AES-256-GCM(RK, meta JSON, aad = canon(`"hort/v4/req-meta\n"`, account_id, request id bytes)). Signature message = canon(`"hort/v4/req\n"`, account_id, device field, METHOD, PATH_WITH_QUERY, u64 timestamp, SHA-256(exact body bytes)); one device-key POST with a body, one AK GET with a query and an empty body. |
 | `secret-key.json` | §2.5, §2.6 | Secret Keys (zero, all 0xff, all symbols `1`, fixture) as data symbols, check symbol and display form; parse variants (lowercase, spaces, no separators, without `H4`, `O` for `0`, `I`/`l` for `1`); mistyped cases (data symbol, check symbol, missing symbol, `U`); account IDs. |
@@ -85,12 +86,13 @@ These points are open or ambiguous in the contract and are fixed here.
     visible unless a later-ordered `delete-entry` hid it, and only `set` revives
     a deleted entry. The values map keys on (field, lookup key). Resolution with
     an empty env or context means `*`, and it never leaves the requested field.
+12. **Passkey slot encoding (S6.2):** the contract's "credential-ID hash" is
+    SHA-256 over the raw credential ID bytes. The server derives `slot_id` from
+    the credential it verified and accepts a passkey slot only when
+    `slot_params` carries that same hash.
 
-## Not covered yet
+## Argon2id
 
-- **Passkey slot `slot_params` and `slot_id`:** the contract says
-  `passkey:<cred-hash>` and "credential-ID hash" without fixing the hash or its
-  encoding. Wrap and `ak_sig` work for any slot_id and slot_params; S6.2 fixes
-  the passkey encoding and adds its vector.
-- **Argon2id:** the vectors come from `golang.org/x/crypto/argon2` (RFC 9106,
-  version 0x13). The browser WASM build must reproduce `argon_output_hex`.
+The vectors come from `golang.org/x/crypto/argon2` (RFC 9106, version 0x13).
+The browser WASM build (`server/web/vendor/`) reproduces `argon_output_hex`;
+`server/test-web/vault-core.test.ts` checks it.
