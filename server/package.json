@@ -5,6 +5,7 @@
   "scripts": {
     "dev": "wrangler dev",
     "test": "vitest run",
+    "check:web": "node scripts/check-web.mjs",
     "typecheck": "wrangler types && tsc --noEmit"
   },
   "devDependencies": {

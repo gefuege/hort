@@ -31,11 +31,35 @@ npm run typecheck   # generates worker-configuration.d.ts, then tsc --noEmit
 
 Local workerd does not implement Durable Object jurisdictions and throws on `jurisdiction("eu")`. The tests record those calls instead (`test/setup.ts`), so the EU placement itself is only effective on Cloudflare. The same limit applies to `wrangler dev` without `--remote`.
 
+## Web app and landing page
+
+The same Worker serves hort.pm. `wrangler.jsonc` sets `run_worker_first: ["/api/*"]`; every other path is a static asset from `public/`:
+
+- `index.html`, `impressum.html`, `privacy.html`, `style.css`, `fonts/`, `img/`: the landing page and legal pages (design B · Phosphor, self-hosted fonts under OFL, no third-party requests).
+- `vault.html`, `recover.html`, `devices.html` and `r.html` (served for `/r/<id>` through `_redirects`): the web app shell with layout, navigation and a one-sentence placeholder per page. The functions follow with S6.2 to S6.4.
+- `_headers` carries the security headers for assets. Cloudflare does not apply that file to Worker responses, so `src/entry.ts` sets the same list on `/api/*`; `test/web.test.ts` keeps both identical. The CSP allows `script-src 'self' 'wasm-unsafe-eval'` for the Argon2id WASM and loads nothing from another origin.
+
+`npm run check:web [base-url]` requests the pages and `/api/v1/nope` of a running Worker (default `http://localhost:8787` from `npx wrangler dev`) and checks status and headers.
+
+### Switch hort.pm from hort-site to hort-api
+
+The assets-only Worker `hort-site` (formerly `site/`) holds the custom domain `hort.pm` today, and a domain can only be bound to one Worker.
+
+1. `npm ci && npm test && npm run typecheck` in `server/`.
+2. In the Cloudflare dashboard, remove the custom domain `hort.pm` from the Worker `hort-site` (Workers & Pages, hort-site, Settings, Domains & Routes). The landing page is down from here until step 3 finishes.
+3. `cd server && npx wrangler deploy`. This binds `hort.pm` to `hort-api` and uploads `public/`.
+4. `npm run check:web https://hort.pm`, then open `/` and `/vault` in a browser.
+5. Delete the Worker `hort-site` once `hort.pm` is confirmed.
+
+Rollback before step 5: remove the domain from `hort-api` and bind it to `hort-site` again.
+
 ## Self-host
 
 ```bash
 npx wrangler deploy
 npx wrangler secret put REGISTRATION_TOKEN   # optional: invite-only registration
 ```
+
+Replace the `routes` entry in `wrangler.jsonc` with your own domain or remove it to use the `workers.dev` address.
 
 Without `REGISTRATION_TOKEN`, anyone can create an account. Point the CLI at your Worker with `--server`.
