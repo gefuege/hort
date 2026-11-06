@@ -208,6 +208,12 @@ type revisionEnvelope struct {
 	Revision Revision `json:"revision"`
 }
 
+// marshalEnvelope is the one encoding of the revision envelope plaintext,
+// shared by sealing and the write size check.
+func marshalEnvelope(name string, r Revision) ([]byte, error) {
+	return json.Marshal(revisionEnvelope{Name: name, Revision: r})
+}
+
 // SealRevision encrypts one revision for the wire (§6.4).
 func SealRevision(rk, accountID []byte, name string, r Revision) ([]byte, error) {
 	nonce, err := randomNonce()
@@ -222,7 +228,7 @@ func sealRevision(rk, accountID []byte, name string, r Revision, nonce []byte) (
 	if err != nil {
 		return nil, err
 	}
-	plaintext, err := json.Marshal(revisionEnvelope{Name: name, Revision: r})
+	plaintext, err := marshalEnvelope(name, r)
 	if err != nil {
 		return nil, err
 	}

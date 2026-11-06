@@ -59,6 +59,7 @@ func TestAgentLine(t *testing.T) {
 	for _, test := range []struct{ name, field, env, ctx, want string }{
 		{"token", "", "", "", "Ich habe das Secret `token` im Hort gespeichert. Abruf: `hort get token`"},
 		{"db", "password", "prod", "heine", "Ich habe das Secret `db` (Field: password, Env: prod, Context: heine) im Hort gespeichert. Abruf: `hort get db password --env prod --context heine`"},
+		{"=x", "", "", "", "Ich habe das Secret `=x` im Hort gespeichert. Abruf: `hort get '=x'`"},
 		{"a;b", "", "it's", "", "Ich habe das Secret `a;b` (Env: it's) im Hort gespeichert. Abruf: `hort get 'a;b' --env 'it'\\''s'`"},
 	} {
 		if got := AgentLine(test.name, test.field, test.env, test.ctx); got != test.want {

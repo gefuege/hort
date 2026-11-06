@@ -1,8 +1,6 @@
 package vault
 
 import (
-	"bytes"
-	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -58,13 +56,17 @@ func validateScopePart(label, part string) error {
 	if part == "*" {
 		return nil
 	}
+	if !utf8.ValidString(part) {
+		return fmt.Errorf("%s must be valid UTF-8", label)
+	}
 	if strings.ContainsAny(part, ":*") {
 		return fmt.Errorf("%s must not contain : or *", label)
 	}
 	return checkText(label, part)
 }
 
-func validateKey(key LookupKey) error {
+// ValidateKey applies the env and context rules to one lookup key.
+func ValidateKey(key LookupKey) error {
 	if strings.Count(key, ":") != 1 {
 		return fmt.Errorf("env and context must not contain :")
 	}
@@ -81,14 +83,7 @@ func validateKey(key LookupKey) error {
 func EnvelopePlaintext(name string, r Revision) ([]byte, error) {
 	longest := time.Date(2000, 1, 1, 0, 0, 0, 123456789, time.UTC)
 	r.RecordedAt = &longest
-	var buf bytes.Buffer
-	enc := json.NewEncoder(&buf)
-	enc.SetEscapeHTML(false)
-	err := enc.Encode(struct {
-		Name     string   `json:"name"`
-		Revision Revision `json:"revision"`
-	}{name, r})
-	return bytes.TrimRight(buf.Bytes(), "\n"), err
+	return marshalEnvelope(name, r)
 }
 
 func validateSize(name string, r Revision) error {
@@ -114,7 +109,7 @@ func validateSize(name string, r Revision) error {
 func ValidateWrite(name string, r Revision) error {
 	switch r.Op {
 	case "set":
-		for _, err := range []error{ValidateName(name), ValidateField(r.Field), validateKey(r.Key)} {
+		for _, err := range []error{ValidateName(name), ValidateField(r.Field), ValidateKey(r.Key)} {
 			if err != nil {
 				return err
 			}

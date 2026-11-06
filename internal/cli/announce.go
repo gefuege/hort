@@ -35,9 +35,10 @@ func AgentLine(name, field, env, context string) string {
 	return fmt.Sprintf("Ich habe das Secret `%s`%s im Hort gespeichert. Abruf: `%s`", name, where, retrieve)
 }
 
-// shellWord quotes s for a POSIX shell unless it is plainly safe.
+// shellWord quotes s for a POSIX shell unless it is plainly safe. A leading =
+// is quoted too, since zsh expands it as a command path.
 func shellWord(s string) string {
-	if strings.Trim(s, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-/@%+=,") == "" && s != "" {
+	if strings.Trim(s, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-/@%+=,") == "" && s != "" && s[0] != '=' {
 		return s
 	}
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"

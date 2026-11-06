@@ -46,39 +46,53 @@ func (s *Store) GetSecret(name, field, env, context string) (string, error) {
 	return "", fmt.Errorf("%q not found (field=%q, env=%q, context=%q)", name, field, env, context)
 }
 
-// validated checks the new revisions of one write. A failure on an entry that
-// already exists points at deleting and re-creating it.
-func (s *Store) validated(name string, revisions ...vault.Revision) error {
+// validated checks the new revisions of one write. A failure points at
+// deleting and re-creating the entry only when the entry already holds what
+// breaks the rules: its name, or the key being written.
+func validated(name string, entry vault.Entry, exists bool, revisions ...vault.Revision) error {
 	for _, r := range revisions {
 		err := vault.ValidateWrite(name, r)
 		if err == nil {
 			continue
 		}
-		if data, loadErr := s.load(); loadErr == nil {
-			if _, exists := data.Secrets[name]; exists {
-				err = vault.WithLegacyHint(err)
-			}
+		if exists && (vault.ValidateName(name) != nil || (vault.ValidateKey(r.Key) != nil && holdsKey(entry, r.Key))) {
+			err = vault.WithLegacyHint(err)
 		}
 		return err
 	}
 	return nil
 }
 
+func holdsKey(entry vault.Entry, key vault.LookupKey) bool {
+	values, _, _ := entry.Current()
+	for k := range values {
+		if k.Key == key {
+			return true
+		}
+	}
+	return false
+}
+
 func (s *Store) SetSecret(name, field, value, env, context, description string) error {
+	data, err := s.load()
+	if err != nil {
+		return err
+	}
+	entry, exists := data.Secrets[name]
 	revision, err := vault.NewRevision("set", vault.MakeLookupKey(env, context), value)
 	if err != nil {
 		return err
 	}
 	revision.Field = field
 	revisions := []vault.Revision{revision}
-	if description != "" {
+	if _, current, _ := entry.Current(); description != "" && description != current {
 		desc, err := vault.NewRevision("describe", "", description)
 		if err != nil {
 			return err
 		}
 		revisions = append(revisions, desc)
 	}
-	if err := s.validated(name, revisions...); err != nil {
+	if err := validated(name, entry, exists, revisions...); err != nil {
 		return err
 	}
 	return vault.UpdateVault(s.ref, s.key, func(data *vault.VaultData) error {
