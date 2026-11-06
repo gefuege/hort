@@ -1,5 +1,5 @@
-// Hort web app: /login, /recover and /devices (contract §5.4, §8.1, §8.2).
-// The vault key lives only in this module's memory. The three pages are one
+// Hort web app: /login, /recover, /devices and /vault (contract §5.4, §8.1, §8.2).
+// The vault key lives only in this module's memory. The pages are one
 // app: links between them swap the view without a page load, so an unlocked
 // vault stays unlocked; closing the tab or signing out drops everything.
 // No innerHTML anywhere: the CSP requires Trusted Types for script sinks.
@@ -27,12 +27,13 @@ import {
   type SlotRecord,
 } from "./vault-core";
 import { REQUEST_PATH, requestView } from "./request-view";
+import { forgetVault, vaultView } from "./vault-view";
 
 // ---------------------------------------------------------------------------
 // State, memory only
 
-type Unlocked = { accountId: Uint8Array; vk: Uint8Array; keys: AccountKeys };
-let unlocked: Unlocked | null = null;
+export type Unlocked = { accountId: Uint8Array; vk: Uint8Array; keys: AccountKeys };
+export let unlocked: Unlocked | null = null;
 let signedIn = false;
 // Kit values typed on /recover, kept for the print view on that page only.
 let kit: { accountId: string; secretKey: string } | null = null;
@@ -42,6 +43,7 @@ function forget(): void {
   unlocked = null;
   kit = null;
   signedIn = false;
+  forgetVault();
 }
 
 async function unlock(accountId: Uint8Array, vk: Uint8Array, akPub: Uint8Array, slotId: string, slot: SlotRecord): Promise<void> {
@@ -59,7 +61,7 @@ async function unlock(accountId: Uint8Array, vk: Uint8Array, akPub: Uint8Array, 
 
 type Child = Node | string | null | false | undefined;
 
-function h<K extends keyof HTMLElementTagNameMap>(tag: K, props: Record<string, unknown> = {}, ...children: Child[]): HTMLElementTagNameMap[K] {
+export function h<K extends keyof HTMLElementTagNameMap>(tag: K, props: Record<string, unknown> = {}, ...children: Child[]): HTMLElementTagNameMap[K] {
   const el = document.createElement(tag);
   for (const [k, v] of Object.entries(props)) {
     if (v === undefined || v === false) continue;
@@ -76,12 +78,12 @@ function add(el: HTMLElement, ...children: Child[]): void {
   for (const c of children) if (c !== null && c !== false && c !== undefined) el.append(c);
 }
 
-function field(label: string, input: HTMLInputElement, hint?: string): HTMLElement {
+export function field(label: string, input: HTMLInputElement | HTMLTextAreaElement, hint?: string): HTMLElement {
   input.id ||= `f-${label.toLowerCase().replace(/\W+/g, "-")}`;
   return h("div", { class: "field" }, h("label", { htmlFor: input.id }, label), input, hint ? h("p", { class: "hint" }, hint) : null);
 }
 
-function status(): { el: HTMLElement; set: (text: string, kind?: "error" | "ok") => void } {
+export function status(): { el: HTMLElement; set: (text: string, kind?: "error" | "ok") => void } {
   const el = h("p", { class: "status", role: "status" });
   return {
     el,
@@ -95,7 +97,7 @@ function status(): { el: HTMLElement; set: (text: string, kind?: "error" | "ok")
 const time = (t: number | null) => (t === null ? "never" : new Date(t * 1000).toLocaleString());
 
 // Runs a button action with the button disabled and errors shown in place.
-function action(button: HTMLButtonElement, out: ReturnType<typeof status>, run: () => Promise<void>): void {
+export function action(button: HTMLButtonElement, out: ReturnType<typeof status>, run: () => Promise<void>): void {
   button.addEventListener("click", async () => {
     button.disabled = true;
     try {
@@ -108,7 +110,7 @@ function action(button: HTMLButtonElement, out: ReturnType<typeof status>, run: 
   });
 }
 
-function messageOf(err: unknown): string {
+export function messageOf(err: unknown): string {
   if (err instanceof DOMException && err.name === "NotAllowedError") return "The passkey prompt was cancelled or timed out.";
   if (err instanceof DOMException && err.name === "InvalidStateError") return "This passkey is already registered for this account.";
   return err instanceof Error ? err.message : String(err);
@@ -117,7 +119,7 @@ function messageOf(err: unknown): string {
 // ---------------------------------------------------------------------------
 // API
 
-async function api(method: string, path: string, o: { body?: string; ak?: AccountKeys } = {}): Promise<Response> {
+export async function api(method: string, path: string, o: { body?: string; ak?: AccountKeys } = {}): Promise<Response> {
   const body = o.body ?? "";
   const headers: Record<string, string> = o.ak ? await akHeaders(o.ak, method, path, str(body)) : {};
   if (method !== "GET") headers["Hort-CSRF"] = "1";
@@ -125,7 +127,7 @@ async function api(method: string, path: string, o: { body?: string; ak?: Accoun
   return fetch(path, { method, headers, body: method === "GET" ? undefined : body, credentials: "same-origin" });
 }
 
-async function ok<T>(res: Response): Promise<T> {
+export async function ok<T>(res: Response): Promise<T> {
   if (!res.ok) throw new Error((await res.text()).trim() || `request failed (${res.status})`);
   return res.status === 204 ? (undefined as T) : ((await res.json()) as T);
 }
@@ -350,7 +352,7 @@ function unlockedPanel(): HTMLElement {
     h("h2", { class: "panel-h" }, "Vault unlocked"),
     h("p", {}, "Account ", h("code", {}, accountIdEncode(unlocked!.accountId))),
     h("p", { class: "muted" }, "Your vault key stays in this tab only. Closing the tab or signing out locks it again."),
-    h("div", { class: "actions" }, signedIn ? h("a", { class: "btn btn-ghost", href: "/devices" }, "Devices") : null, signOutButton),
+    h("div", { class: "actions" }, signedIn ? h("a", { class: "btn btn-primary", href: "/vault" }, "Open vault") : null, signedIn ? h("a", { class: "btn btn-ghost", href: "/devices" }, "Devices") : null, signOutButton),
     out.el,
   );
 }
@@ -567,6 +569,7 @@ const routes: Record<string, { tag: string; title: string; view: (main: HTMLElem
   "/login": { tag: "// login", title: "Sign in", view: loginView },
   "/recover": { tag: "// recover", title: "Recover access", view: recoverView },
   "/devices": { tag: "// devices", title: "Devices", view: devicesView },
+  "/vault": { tag: "// vault", title: "Vault", view: vaultView },
 };
 
 // /r/<id>: an agent's secret request (contract §7.3).
