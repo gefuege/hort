@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -30,7 +31,7 @@ type cliResult struct {
 func hortEnv(t *testing.T, home string, env []string, args ...string) cliResult {
 	t.Helper()
 	cmd := exec.Command(os.Args[0], args...)
-	cmd.Env = append([]string{"HOME=" + home, "HORT_TEST_RUN_CLI=1"}, env...)
+	cmd.Env = append([]string{"HOME=" + home, "USERPROFILE=" + home, "HORT_TEST_RUN_CLI=1"}, env...)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	err := cmd.Run()
@@ -72,13 +73,14 @@ func wantError(t *testing.T, got cliResult, code int, text string) {
 }
 
 func TestCLIRoundTripInitSetLockUnlockGet(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
 	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	initRun := hortOK(t, home, "init", "--name", "laptop")
 	if initRun.stdout != "" || !strings.Contains(initRun.stderr, "HORT EMERGENCY KIT") || !strings.Contains(initRun.stderr, "Secret Key:  H4-") || strings.Contains(initRun.stderr, "synthetic-passphrase") {
 		t.Fatalf("init output: stdout %q, stderr %q", initRun.stdout, initRun.stderr)
 	}
-	if info, err := os.Stat(filepath.Join(home, ".hort", "secret-key")); err != nil || info.Mode().Perm() != 0600 {
+	if info, err := os.Stat(filepath.Join(home, ".hort", "secret-key")); err != nil || (runtime.GOOS != "windows" && info.Mode().Perm() != 0600) {
 		t.Fatalf("secret-key: %v", err)
 	}
 	wantError(t, hort(t, home, "init"), 1, "already exists")
@@ -106,8 +108,9 @@ func TestCLIRoundTripInitSetLockUnlockGet(t *testing.T) {
 }
 
 func TestCLIPassphraseChange(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
 	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	hortOK(t, home, "init")
 	hortOK(t, home, "--set-secret", "token", "--value", "value")
 	if got := hortEnv(t, home, []string{"HORT_PASSPHRASE=new-passphrase"}, "passphrase"); got.code != 0 {
@@ -122,8 +125,9 @@ func TestCLIPassphraseChange(t *testing.T) {
 }
 
 func TestCLISeparatesMistypedSecretKeyFromWrongPassphrase(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
 	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	hortOK(t, home, "init")
 	hortOK(t, home, "lock")
 	raw, err := os.ReadFile(filepath.Join(home, ".hort", "secret-key"))
@@ -141,8 +145,9 @@ func TestCLISeparatesMistypedSecretKeyFromWrongPassphrase(t *testing.T) {
 }
 
 func TestCLIRejectsV3Vault(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
 	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	dir := filepath.Join(home, ".hort")
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		t.Fatal(err)

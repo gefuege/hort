@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -66,7 +67,7 @@ func TestV4RoundTrip(t *testing.T) {
 	if sk, err := ParseSecretKey(strings.TrimSpace(skText)); err != nil || !bytes.Equal(sk, nv.SecretKey) {
 		t.Fatalf("Secret Key file: %v", err)
 	}
-	if info, err := os.Stat(ref.SecretKeyPath); err != nil || info.Mode().Perm() != 0600 {
+	if info, err := os.Stat(ref.SecretKeyPath); err != nil || (runtime.GOOS != "windows" && info.Mode().Perm() != 0600) {
 		t.Fatalf("Secret Key file mode: %v", err)
 	}
 

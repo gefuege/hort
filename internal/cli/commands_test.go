@@ -13,6 +13,7 @@ import (
 func TestInitRefusesExistingVaultWithoutChanges(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	t.Setenv("HORT_PASSPHRASE", "synthetic-test-passphrase")
 	dir := filepath.Join(home, ".hort")
 	if err := os.MkdirAll(dir, 0700); err != nil {

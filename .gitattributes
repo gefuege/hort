@@ -1,0 +1,2 @@
+# spec/vectors is the byte authority for Go, Worker and browser; never convert line endings.
+spec/vectors/** -text
