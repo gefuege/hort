@@ -25,6 +25,7 @@ import {
   type AccountKeys,
   type SlotRecord,
 } from "./vault-core";
+import { forgetDevice, rememberAccount, rememberedAccount } from "./device-memory";
 import { REQUEST_PATH, requestView } from "./request-view";
 import { forgetVault, vaultView } from "./vault-view";
 
@@ -223,13 +224,14 @@ async function registerPasskey(u: Unlocked, say: (text: string) => void): Promis
 type LoginResult = { account_id: string; ak_pub: string; credential_id: string; slot: (WireSlot & { id: string }) | null };
 
 // Discoverable passkey sign-in. The PRF eval salt depends on the account ID,
-// which a discoverable get() only reveals afterwards; when the account is not
-// known in this tab yet, a second prompt evaluates the PRF.
+// which a discoverable get() only reveals afterwards; when the account is
+// neither unlocked in this tab nor remembered by this browser, a second
+// prompt evaluates the PRF.
 async function passkeySignIn(say: (text: string) => void): Promise<{ result: LoginResult; unlockedNow: boolean }> {
   const options = await ok<{ challenge: string; rpId: string; userVerification: UserVerificationRequirement; timeout: number }>(
     await api("POST", "/api/v1/webauthn/login/options"),
   );
-  const known = unlocked?.accountId ?? null;
+  const known = unlocked?.accountId ?? rememberedAccount();
   const cred = (await navigator.credentials.get({
     publicKey: {
       challenge: b64urlDecode(options.challenge)! as BufferSource,
@@ -256,6 +258,7 @@ async function passkeySignIn(say: (text: string) => void): Promise<{ result: Log
   };
   const result = await ok<LoginResult>(await api("POST", "/api/v1/webauthn/login/verify", { body: JSON.stringify(response) }));
   signedIn = true;
+  rememberAccount(result.account_id);
   if (!result.slot) return { result, unlockedNow: false };
   const accountId = parseAccountId(result.account_id)!;
   const first = known && accountIdEncode(known) === result.account_id ? prfOf(cred)?.results?.first : undefined;
@@ -299,6 +302,7 @@ async function kitUnlock(accountId: Uint8Array, secretKey: Uint8Array, passphras
 
 async function signOut(): Promise<void> {
   await api("DELETE", "/api/v1/session").catch(() => undefined);
+  if (rememberedAccount() && confirm("Forget this device? Your next sign-in here then asks for the passkey twice again.")) forgetDevice();
   forget();
   location.assign("/login");
 }
@@ -391,10 +395,13 @@ function loginView(main: HTMLElement, onUnlocked: () => void = () => render("/lo
       ),
     );
   });
-  main.append(
+  add(main,
     h("p", { class: "sec-intro" }, "Sign in with a passkey you registered for Hort. A passkey that supports it also unlocks your vault."),
     h("div", { class: "actions" }, button),
     out.el,
+    unlocked || rememberedAccount()
+      ? null
+      : h("p", { class: "muted" }, "The first time on a device you confirm your passkey twice: once to sign in, once to unlock your vault. Hort then remembers your account ID in this browser, so next time one confirmation is enough."),
     area,
     h("p", { class: "muted" }, "No passkey yet, or lost it? ", h("a", { href: "/recover" }, "Recover with your Emergency Kit"), "."),
   );
