@@ -37,14 +37,22 @@ func testCreate(t *testing.T, ref VaultRef, passphrase string) NewVault {
 // writeV3Fixture writes a synthetic v3 vault the way Hort 0.4 did.
 func writeV3Fixture(t *testing.T, path string) []byte {
 	t.Helper()
+	return writeV3(t, path, "v3-passphrase", []byte(`{"version":3,"source_id":"00000000000000000000000000000001","secrets":{}}`))
+}
+
+// writeV3 seals plaintext the way Hort 0.4 sealed a v3 vault (280e403,
+// internal/vault/crypto.go): header with salt and Argon2id parameters, the
+// header without its nonce as AAD.
+func writeV3(t *testing.T, path, passphrase string, plaintext []byte) []byte {
+	t.Helper()
 	params := fastArgon
 	salt := bytes.Repeat([]byte{0x11}, SaltSize)
-	key := DeriveKey([]byte("v3-passphrase"), salt, params)
+	key := DeriveKey([]byte(passphrase), salt, params)
 	nonce, err := randomNonce()
 	if err != nil {
 		t.Fatal(err)
 	}
-	ct, err := sealGCMWithNonce([]byte(`{"version":3,"source_id":"00000000000000000000000000000001","secrets":{}}`), key, nonce, buildV3Header(KDFArgon2id, salt, params, nil)[:HeaderSize-NonceSize])
+	ct, err := sealGCMWithNonce(plaintext, key, nonce, buildV3Header(KDFArgon2id, salt, params, nil)[:HeaderSize-NonceSize])
 	if err != nil {
 		t.Fatal(err)
 	}

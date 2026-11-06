@@ -160,12 +160,12 @@ func TestCLIRemovedRootGrammar(t *testing.T) {
 func TestCLIHelpAndRecoveryTopic(t *testing.T) {
 	home := t.TempDir()
 	help := hort(t, home, "--help")
-	for _, want := range []string{"hort get <name> [<field>]", "hort set <name> [<field>]", "hort delete <name>", "hort list", "hort describe", "hort search", "hort history", "hort help recovery"} {
+	for _, want := range []string{"hort get <name> [<field>]", "hort set <name> [<field>]", "hort delete <name>", "hort list", "hort describe", "hort search", "hort history", "hort migrate", "hort help recovery"} {
 		if help.code != 0 || !strings.Contains(help.stdout, want) {
 			t.Fatalf("help lacks %q: %+v", want, help)
 		}
 	}
-	for _, removed := range []string{"--secret", "--set-secret", "--list", "--describe", "--delete", "hort sync", "hort migrate", "hort mcp", "hort enroll", "hort devices"} {
+	for _, removed := range []string{"--secret", "--set-secret", "--list", "--describe", "--delete", "hort sync", "hort mcp", "hort enroll", "hort devices"} {
 		if strings.Contains(help.stdout, removed) {
 			t.Errorf("help names %q", removed)
 		}

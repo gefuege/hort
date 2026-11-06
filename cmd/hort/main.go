@@ -182,6 +182,16 @@ func main() {
 		},
 	})
 
+	root.AddCommand(&cobra.Command{
+		Use:   "migrate",
+		Short: "Convert a v3 vault into a v4 vault once",
+		Long:  helptext.MigrateText,
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return cli.CmdMigrate()
+		},
+	})
+
 	statusCmd := &cobra.Command{
 		Use:   "status",
 		Short: "Show local vault status",

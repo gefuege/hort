@@ -216,39 +216,57 @@ func createVault(ref VaultRef, server, deviceName string, passphrase []byte, par
 		}
 	}
 
-	nv := NewVault{Server: server}
-	if nv.AccountID, err = randomBytes(AccountIDSize); err != nil {
-		return NewVault{}, err
-	}
-	if nv.VK, err = randomBytes(KeySize); err != nil {
-		return NewVault{}, err
-	}
-	if nv.SecretKey, err = randomBytes(SecretKeySize); err != nil {
-		return NewVault{}, err
-	}
 	body, err := newBody(deviceName)
 	if err != nil {
 		return NewVault{}, err
 	}
-	keys, err := DeriveAccountKeys(nv.VK, nv.AccountID)
+	nv, file, err := sealNewAccount(server, body, passphrase, params)
 	if err != nil {
 		return NewVault{}, err
 	}
-	h := fileHeader{AccountID: nv.AccountID, Server: server}
-	if err := h.sealPassphraseSlot(nv.VK, keys.AK, string(passphrase), nv.SecretKey, 1, params); err != nil {
+	if err := writeSecretKeyFile(ref, nv.SecretKey); err != nil {
 		return NewVault{}, err
-	}
-	file, err := sealV4(keys.FK, h, body)
-	if err != nil {
-		return NewVault{}, err
-	}
-	if err := writeFileAtomic(ref.SecretKeyPath, []byte(FormatSecretKey(nv.SecretKey)+"\n"), 0600); err != nil {
-		return NewVault{}, fmt.Errorf("writing Secret Key: %w", err)
 	}
 	if err := writeFileAtomic(ref.Path, file, 0600); err != nil {
 		return NewVault{}, fmt.Errorf("writing vault: %w", err)
 	}
 	return nv, nil
+}
+
+// sealNewAccount generates account ID, VK and Secret Key and seals body under
+// a new passphrase slot with slot_version 1 (§2.2, §2.3). It writes nothing.
+func sealNewAccount(server string, body *VaultData, passphrase []byte, params ArgonParams) (NewVault, []byte, error) {
+	nv := NewVault{Server: server}
+	var err error
+	if nv.AccountID, err = randomBytes(AccountIDSize); err != nil {
+		return NewVault{}, nil, err
+	}
+	if nv.VK, err = randomBytes(KeySize); err != nil {
+		return NewVault{}, nil, err
+	}
+	if nv.SecretKey, err = randomBytes(SecretKeySize); err != nil {
+		return NewVault{}, nil, err
+	}
+	keys, err := DeriveAccountKeys(nv.VK, nv.AccountID)
+	if err != nil {
+		return NewVault{}, nil, err
+	}
+	h := fileHeader{AccountID: nv.AccountID, Server: server}
+	if err := h.sealPassphraseSlot(nv.VK, keys.AK, string(passphrase), nv.SecretKey, 1, params); err != nil {
+		return NewVault{}, nil, err
+	}
+	file, err := sealV4(keys.FK, h, body)
+	if err != nil {
+		return NewVault{}, nil, err
+	}
+	return nv, file, nil
+}
+
+func writeSecretKeyFile(ref VaultRef, secretKey []byte) error {
+	if err := writeFileAtomic(ref.SecretKeyPath, []byte(FormatSecretKey(secretKey)+"\n"), 0600); err != nil {
+		return fmt.Errorf("writing Secret Key: %w", err)
+	}
+	return nil
 }
 
 // ReadSecretKeyFile returns the text of the Secret Key file, unparsed.

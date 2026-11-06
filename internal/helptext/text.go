@@ -35,6 +35,8 @@ MANAGE:
   hort lock                              Lock the vault (clears the session key)
   hort kit                               Print the Emergency Kit again (needs an unlocked vault)
   hort passphrase                        Set a new passphrase, keeping the Secret Key
+  hort migrate                           Convert a v3 vault (Hort 0.4.x) into a v4 vault once;
+                                         read 'hort migrate --help' first
 
 TOPICS:
   hort help recovery                     What can and cannot be recovered
@@ -140,4 +142,20 @@ const RecoveryText = `What can and cannot be recovered.
 
 Keep the Emergency Kit (Secret Key and account) somewhere safe and separate from
 the passphrase. Whoever holds both can read everything.
+`
+
+// ConvergeFirst is the rollout order of contract §9.2, shown before migrating.
+const ConvergeFirst = "Before migrating, run `hort sync` with Hort 0.4.x on every device. Then migrate on one device and enroll the others."
+
+// MigrateText is the help of 'hort migrate' (contract §9.1, §9.2).
+const MigrateText = `Convert the v3 vault of Hort 0.4.x into a v4 vault, once and locally.
+
+` + ConvergeFirst + `
+
+migrate asks for your passphrase, creates a new account with a new Secret Key
+and keeps every revision unchanged. The v3 file stays as
+~/.hort/vault.enc.pre-v4.bak. Nothing is written when an entry holds a revision
+too large for one sync envelope. Afterwards migrate prints the Emergency Kit;
+run 'hort sync' to register the vault on the server. A v2 vault must first be
+migrated with Hort 0.4.1.
 `
