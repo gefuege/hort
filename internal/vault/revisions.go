@@ -120,9 +120,16 @@ func (e Entry) Resolve(field, env, context string) (string, bool) {
 	return "", false
 }
 
-func validID(id string) bool {
+func validID(id string) bool { return lowerHex(id, 16) }
+
+// ValidKnownID accepts an ID of GET /devices as known_devices and
+// known_revoked store it: a device (16 bytes) or a passkey (32 bytes), in
+// lowercase hex.
+func ValidKnownID(id string) bool { return lowerHex(id, 16) || lowerHex(id, 32) }
+
+func lowerHex(id string, size int) bool {
 	b, err := hex.DecodeString(id)
-	return err == nil && len(b) == 16 && id == hex.EncodeToString(b)
+	return err == nil && len(b) == size && id == hex.EncodeToString(b)
 }
 
 // fieldPattern is the field rule of §3.4; "" is the default field.

@@ -54,13 +54,15 @@ type Device struct {
 }
 
 // SyncState is the local server sync state (§6.6). Pending holds every local
-// revision not yet pushed.
+// revision not yet pushed. KnownDevices holds the active devices and passkeys
+// this vault has seen, KnownRevoked those it has seen revoked.
 type SyncState struct {
 	Registered     bool     `json:"registered"`
 	Cursor         uint64   `json:"cursor"`
 	Pending        []string `json:"pending"`
 	DevicesVersion uint64   `json:"devices_version"`
 	KnownDevices   []string `json:"known_devices"`
+	KnownRevoked   []string `json:"known_revoked"`
 }
 
 // NewBody is the body of a new vault: a fresh device key, empty sync state.
@@ -76,7 +78,7 @@ func NewBody(deviceName string) (*VaultData, error) {
 	return &VaultData{
 		Version: 4,
 		Device:  Device{ID: id, Name: deviceName, PrivateKey: hex.EncodeToString(seed)},
-		Sync:    SyncState{Pending: []string{}, KnownDevices: []string{}},
+		Sync:    SyncState{Pending: []string{}, KnownDevices: []string{}, KnownRevoked: []string{}},
 		Secrets: make(map[string]Entry),
 	}, nil
 }
@@ -109,12 +111,17 @@ func validateBody(d *VaultData) error {
 	if !validID(d.Device.ID) || err != nil || len(seed) != ed25519.SeedSize || d.Device.PrivateKey != hex.EncodeToString(seed) {
 		return errors.New("invalid device in vault")
 	}
-	if d.Sync.Pending == nil || d.Sync.KnownDevices == nil {
+	if d.Sync.Pending == nil || d.Sync.KnownDevices == nil || d.Sync.KnownRevoked == nil {
 		return errors.New("invalid sync state in vault")
 	}
-	for _, ids := range [][]string{d.Sync.Pending, d.Sync.KnownDevices} {
+	for _, id := range d.Sync.Pending {
+		if !validID(id) {
+			return errors.New("invalid identity in vault sync state")
+		}
+	}
+	for _, ids := range [][]string{d.Sync.KnownDevices, d.Sync.KnownRevoked} {
 		for _, id := range ids {
-			if !validID(id) {
+			if !ValidKnownID(id) {
 				return errors.New("invalid identity in vault sync state")
 			}
 		}

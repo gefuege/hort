@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"encoding/hex"
 	"reflect"
 	"strings"
 	"testing"
@@ -18,7 +17,7 @@ func TestApplyDevicesNoticesEachChangeOnce(t *testing.T) {
 	self := data.Device.ID
 	laptop, phone, gone := strings.Repeat("b", 32), strings.Repeat("c", 32), strings.Repeat("d", 32)
 	known, fresh := strings.Repeat("1", 64), strings.Repeat("2", 64)
-	data.Sync.KnownDevices = []string{self, laptop, knownMark(known, false)}
+	data.Sync.KnownDevices = []string{self, laptop, known}
 	data.Sync.DevicesVersion = 2
 	revoked := int64(1)
 	list := api.Devices{DevicesVersion: 4,
@@ -31,6 +30,7 @@ func TestApplyDevicesNoticesEachChangeOnce(t *testing.T) {
 		Passkeys: []api.PasskeyInfo{
 			{ID: known, PRF: true, RevokedAt: &revoked},
 			{ID: fresh, CreatedAt: 60},
+			{ID: "not-an-id\x1b", CreatedAt: 60},
 		},
 	}
 	got := applyDevices(data, list)
@@ -48,10 +48,8 @@ func TestApplyDevicesNoticesEachChangeOnce(t *testing.T) {
 	if data.Sync.DevicesVersion != 4 {
 		t.Fatalf("devices_version %d", data.Sync.DevicesVersion)
 	}
-	for _, m := range data.Sync.KnownDevices {
-		if b, err := hex.DecodeString(m); err != nil || len(b) != 16 || hex.EncodeToString(b) != m {
-			t.Fatalf("known_devices entry %q breaks the body's ID rule", m)
-		}
+	if !reflect.DeepEqual(data.Sync.KnownDevices, []string{self, phone, fresh}) || !reflect.DeepEqual(data.Sync.KnownRevoked, []string{laptop, gone, known}) {
+		t.Fatalf("sync state %+v", data.Sync)
 	}
 	if again := applyDevices(data, list); again != nil {
 		t.Fatalf("second application: %q", again)

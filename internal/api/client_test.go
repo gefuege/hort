@@ -25,3 +25,14 @@ func TestHTTPClientFollowsNoRedirect(t *testing.T) {
 		t.Fatal("the client followed the redirect")
 	}
 }
+
+func TestServerMessageCarriesNoControlCharacters(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "bad\x1b[2J\rslot\u0085end", http.StatusBadRequest)
+	}))
+	defer srv.Close()
+	_, _, err := FetchSlot(srv.URL, make([]byte, 16))
+	if err == nil || err.Error() != "server: bad\uFFFD[2J\uFFFDslot\uFFFDend" {
+		t.Fatalf("message: %q", err)
+	}
+}

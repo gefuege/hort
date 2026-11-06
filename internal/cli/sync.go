@@ -2,15 +2,14 @@ package cli
 
 import (
 	"crypto/ed25519"
-	"crypto/sha256"
 	"encoding/base64"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -154,56 +153,55 @@ func pullAll(c api.Client, acct vault.Account, cursor uint64) (pulled []vault.Pu
 	}
 }
 
-// knownMark is how known_devices records one device or passkey of GET
-// /devices within the body's 16-byte ID rule: an active device by its ID, a
-// passkey or a revoked entry by 16 bytes of a hash. A revoked entry this vault
-// has seen thus stays apart from one it never saw.
-func knownMark(id string, revoked bool) string {
-	if b, err := hex.DecodeString(id); !revoked && err == nil && len(b) == 16 && hex.EncodeToString(b) == id {
-		return id
+// recordDevices stores the devices and passkeys of a list as seen: active
+// ones in known_devices, revoked ones in known_revoked. An ID outside the
+// body's ID rule is not stored.
+func recordDevices(st *vault.SyncState, list api.Devices) {
+	st.KnownDevices, st.KnownRevoked = []string{}, []string{}
+	add := func(id string, revoked bool) {
+		switch {
+		case !vault.ValidKnownID(id):
+		case revoked:
+			st.KnownRevoked = append(st.KnownRevoked, id)
+		default:
+			st.KnownDevices = append(st.KnownDevices, id)
+		}
 	}
-	state := "active"
-	if revoked {
-		state = "revoked"
-	}
-	sum := sha256.Sum256([]byte("hort/v4/known\n" + state + "\n" + id))
-	return hex.EncodeToString(sum[:16])
-}
-
-// knownMarks records every device and passkey of a list as seen.
-func knownMarks(list api.Devices) []string {
-	marks := []string{}
 	for _, d := range list.Devices {
-		marks = append(marks, knownMark(d.ID, d.RevokedAt != nil))
+		add(d.ID, d.RevokedAt != nil)
 	}
 	for _, p := range list.Passkeys {
-		marks = append(marks, knownMark(p.ID, p.RevokedAt != nil))
+		add(p.ID, p.RevokedAt != nil)
 	}
-	return marks
 }
 
 // applyDevices records the server's list of devices and passkeys once its
 // devices_version is newer and returns one notice per change since (§4). An
-// entry enrolled and revoked between two syncs gets both notices.
+// entry enrolled and revoked between two syncs gets both notices; an entry
+// whose ID breaks the ID rule is neither noticed nor stored.
 func applyDevices(data *vault.VaultData, list api.Devices) []string {
 	if list.DevicesVersion <= data.Sync.DevicesVersion {
 		return nil
 	}
-	known := make(map[string]bool)
-	for _, m := range data.Sync.KnownDevices {
-		known[m] = true
+	active, revoked := make(map[string]bool), make(map[string]bool)
+	for _, id := range data.Sync.KnownDevices {
+		active[id] = true
+	}
+	for _, id := range data.Sync.KnownRevoked {
+		revoked[id] = true
 	}
 	var notices []string
-	note := func(id, what, added string, createdAt int64, revoked bool) {
+	note := func(id, what, added string, createdAt int64, isRevoked bool) {
 		enrolled := fmt.Sprintf("notice: new %s %s %s", what, added, time.Unix(createdAt, 0).UTC().Format(time.RFC3339))
 		gone := fmt.Sprintf("notice: %s revoked", what)
 		switch {
-		case !revoked:
-			if !known[knownMark(id, false)] && id != data.Device.ID {
+		case !vault.ValidKnownID(id):
+		case !isRevoked:
+			if !active[id] && id != data.Device.ID {
 				notices = append(notices, enrolled)
 			}
-		case known[knownMark(id, true)]:
-		case known[knownMark(id, false)]:
+		case revoked[id]:
+		case active[id]:
 			notices = append(notices, gone)
 		default:
 			notices = append(notices, enrolled, gone)
@@ -215,7 +213,7 @@ func applyDevices(data *vault.VaultData, list api.Devices) []string {
 	for _, p := range list.Passkeys {
 		note(p.ID, fmt.Sprintf("passkey %q", shortID(p.ID)), "registered", p.CreatedAt, p.RevokedAt != nil)
 	}
-	data.Sync.KnownDevices = knownMarks(list)
+	recordDevices(&data.Sync, list)
 	data.Sync.DevicesVersion = list.DevicesVersion
 	return notices
 }
@@ -514,7 +512,7 @@ func CmdEnroll(accountIDText, server, name string) error {
 	}
 	added, _ := data.MergePulled(pulled)
 	data.Sync.Registered, data.Sync.Cursor, data.Sync.DevicesVersion = true, last.Cursor, devices.DevicesVersion
-	data.Sync.KnownDevices = knownMarks(devices)
+	recordDevices(&data.Sync, devices)
 	if err := vault.WriteEnrolledVault(ref, server, accountID, slot, vk, secretKey, data); err != nil {
 		return err
 	}
@@ -553,7 +551,7 @@ func CmdDevices(jsonOutput bool) error {
 	}
 	stamp := func(t int64) string { return time.Unix(t, 0).UTC().Format(time.RFC3339) }
 	for _, d := range list.Devices {
-		line := fmt.Sprintf("%s  %-24q enrolled %s", d.ID, d.Name, stamp(d.CreatedAt))
+		line := fmt.Sprintf("%q  %-24q enrolled %s", d.ID, d.Name, stamp(d.CreatedAt))
 		if d.RevokedAt != nil {
 			line += "  revoked " + stamp(*d.RevokedAt)
 		}
@@ -589,15 +587,17 @@ func CmdRevokeDevice(id string) error {
 		return err
 	}
 	// This device knows of the revocation, so its next sync prints no notice for it.
-	active, gone := knownMark(id, false), knownMark(id, true)
 	if err := vault.UpdateVault(ref, key, func(d *vault.VaultData) error {
 		keep := []string{}
 		for _, known := range d.Sync.KnownDevices {
-			if known != active && known != gone {
+			if known != id {
 				keep = append(keep, known)
 			}
 		}
-		d.Sync.KnownDevices = append(keep, gone)
+		d.Sync.KnownDevices = keep
+		if vault.ValidKnownID(id) && !slices.Contains(d.Sync.KnownRevoked, id) {
+			d.Sync.KnownRevoked = append(d.Sync.KnownRevoked, id)
+		}
 		return nil
 	}); err != nil {
 		return err

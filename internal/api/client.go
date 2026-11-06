@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/gefuege/hort/internal/vault"
 )
@@ -99,6 +100,13 @@ func send(req *http.Request, out any) error {
 		if msg == "" || len(msg) > 300 {
 			msg = res.Status
 		}
+		// The message reaches the terminal: no control character from the server.
+		msg = strings.Map(func(r rune) rune {
+			if unicode.IsControl(r) {
+				return '\uFFFD'
+			}
+			return r
+		}, msg)
 		return &Error{Status: res.StatusCode, Message: "server: " + msg}
 	}
 	if out == nil {

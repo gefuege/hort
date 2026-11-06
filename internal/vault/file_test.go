@@ -386,17 +386,23 @@ func TestV4HeaderIsAuthenticated(t *testing.T) {
 }
 
 func TestBodyIsDecodedStrictly(t *testing.T) {
-	valid := `{"version":4,"device":{"id":"00000000000000000000000000000001","name":"d","private_key":"` + strings.Repeat("00", 32) + `"},"sync":{"registered":false,"cursor":0,"pending":[],"devices_version":0,"known_devices":[]},"secrets":{}}`
+	valid := `{"version":4,"device":{"id":"00000000000000000000000000000001","name":"d","private_key":"` + strings.Repeat("00", 32) + `"},"sync":{"registered":false,"cursor":0,"pending":[],"devices_version":0,"known_devices":[],"known_revoked":[]},"secrets":{}}`
 	if _, err := decodeBody([]byte(valid)); err != nil {
 		t.Fatalf("valid body rejected: %v", err)
+	}
+	passkey := strings.Replace(valid, `"known_devices":[]`, `"known_devices":["`+strings.Repeat("ab", 32)+`"]`, 1)
+	if _, err := decodeBody([]byte(passkey)); err != nil {
+		t.Fatalf("a passkey ID in known_devices rejected: %v", err)
 	}
 	for name, body := range map[string]string{
 		"unknown field": strings.Replace(valid, `"secrets":{}`, `"secrets":{},"source_id":"x"`, 1),
 		"null pending":  strings.Replace(valid, `"pending":[]`, `"pending":null`, 1),
-		"missing sync":  strings.Replace(valid, `"sync":{"registered":false,"cursor":0,"pending":[],"devices_version":0,"known_devices":[]},`, ``, 1),
+		"missing sync":  strings.Replace(valid, `"sync":{"registered":false,"cursor":0,"pending":[],"devices_version":0,"known_devices":[],"known_revoked":[]},`, ``, 1),
 		"version 3":     strings.Replace(valid, `"version":4`, `"version":3`, 1),
 		"short seed":    strings.Replace(valid, strings.Repeat("00", 32), "00", 1),
 		"bad pending":   strings.Replace(valid, `"pending":[]`, `"pending":["x"]`, 1),
+		"no revoked":    strings.Replace(valid, `,"known_revoked":[]`, ``, 1),
+		"bad revoked":   strings.Replace(valid, `"known_revoked":[]`, `"known_revoked":["`+strings.Repeat("ab", 20)+`"]`, 1),
 		"empty name":    strings.Replace(valid, `"secrets":{}`, `"secrets":{"":{"revisions":[]}}`, 1),
 	} {
 		if _, err := decodeBody([]byte(body)); err == nil {
