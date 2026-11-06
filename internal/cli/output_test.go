@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/s16e/hort/internal/store"
+	"github.com/gefuege/hort/internal/store"
 )
 
 func TestUnifiedOutputHasNoTypeOrConfigCount(t *testing.T) {

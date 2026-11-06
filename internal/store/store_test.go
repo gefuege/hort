@@ -5,7 +5,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/s16e/hort/internal/vault"
+	"github.com/gefuege/hort/internal/vault"
 )
 
 // setHomeDir points os.UserHomeDir() at dir on every platform. On Windows it
@@ -84,4 +84,16 @@ func TestConcurrentMutationsKeepAllEntries(t *testing.T) {
 			t.Fatalf("GetSecret(%s) = %q, want %q", name, value, expected)
 		}
 	}
+}
+
+func NewFromSession() (*Store, error) {
+	ref, err := vault.PrimaryRef()
+	if err != nil {
+		return nil, err
+	}
+	key, err := vault.LoadSessionFor(ref)
+	if err != nil {
+		return nil, err
+	}
+	return New(ref, key), nil
 }

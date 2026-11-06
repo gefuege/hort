@@ -6,8 +6,8 @@ import (
 	"os"
 	"strings"
 
-	"github.com/s16e/hort/internal/cli"
-	"github.com/s16e/hort/internal/helptext"
+	"github.com/gefuege/hort/internal/cli"
+	"github.com/gefuege/hort/internal/helptext"
 	"github.com/spf13/cobra"
 )
 

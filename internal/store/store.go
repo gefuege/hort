@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"sort"
 
-	"github.com/s16e/hort/internal/vault"
+	"github.com/gefuege/hort/internal/vault"
 )
 
 type EntryInfo struct {
@@ -26,18 +26,6 @@ type Store struct {
 }
 
 func New(ref vault.VaultRef, key []byte) *Store { return &Store{ref: ref, key: key} }
-
-func NewFromSession() (*Store, error) {
-	ref, err := vault.PrimaryRef()
-	if err != nil {
-		return nil, err
-	}
-	key, err := vault.LoadSessionFor(ref)
-	if err != nil {
-		return nil, err
-	}
-	return New(ref, key), nil
-}
 
 func (s *Store) load() (*vault.VaultData, error) {
 	data, _, err := vault.LoadVault(s.ref, s.key)

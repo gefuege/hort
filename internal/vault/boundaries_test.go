@@ -17,7 +17,7 @@ func aliasRef(t *testing.T, name, path string) VaultRef {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return VaultRef{Name: name, Path: path, LockPath: lockPath}
+	return VaultRef{Path: path, LockPath: lockPath}
 }
 
 func TestVaultAliasesSerializeUpdates(t *testing.T) {
@@ -112,7 +112,7 @@ func TestVaultAliasesSerializeUpdates(t *testing.T) {
 				_, firstDesc, _ := data.Secrets["first"].Current()
 				_, secondDesc, _ := data.Secrets["second"].Current()
 				if len(data.Secrets) != 2 || firstDesc != "first" || secondDesc != "second" {
-					t.Fatalf("lost alias write via %s: %+v", ref.Name, data.Secrets)
+					t.Fatalf("lost alias write via %s: %+v", ref.Path, data.Secrets)
 				}
 			}
 			if alias == "symlink" {

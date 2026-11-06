@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/s16e/hort/internal/store"
-	"github.com/s16e/hort/internal/vault"
+	"github.com/gefuege/hort/internal/store"
+	"github.com/gefuege/hort/internal/vault"
 	"golang.org/x/term"
 )
 

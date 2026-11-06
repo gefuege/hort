@@ -7,7 +7,7 @@ import (
 	"runtime"
 	"strings"
 
-	"github.com/s16e/hort/internal/store"
+	"github.com/gefuege/hort/internal/store"
 	"golang.org/x/term"
 )
 

@@ -7,7 +7,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/s16e/hort/internal/vault"
+	"github.com/gefuege/hort/internal/vault"
 	"golang.org/x/term"
 )
 

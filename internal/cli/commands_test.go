@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/s16e/hort/internal/vault"
+	"github.com/gefuege/hort/internal/vault"
 )
 
 func TestInitRefusesExistingVaultWithoutChanges(t *testing.T) {

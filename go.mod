@@ -1,4 +1,4 @@
-module github.com/s16e/hort
+module github.com/gefuege/hort
 
 go 1.26.1
 

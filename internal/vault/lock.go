@@ -39,15 +39,6 @@ func vaultLockPath(path string) (string, error) {
 	return filepath.Join(dir, "locks", fmt.Sprintf("%x.lock", sha256.Sum256([]byte(canonical)))), nil
 }
 
-// LockPath returns the path to the primary vault's lock file.
-func LockPath() (string, error) {
-	ref, err := PrimaryRef()
-	if err != nil {
-		return "", err
-	}
-	return ref.LockPath, nil
-}
-
 // lockVault acquires an exclusive file lock on the given vault ref.
 func lockVault(ref VaultRef) (func() error, error) {
 	lockPath, err := vaultLockPath(ref.Path)

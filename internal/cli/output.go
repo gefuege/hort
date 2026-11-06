@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/s16e/hort/internal/store"
+	"github.com/gefuege/hort/internal/store"
 )
 
 // FormatList formats entry list for human or JSON output.

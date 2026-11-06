@@ -7,15 +7,6 @@ import (
 	"path/filepath"
 )
 
-// SessionPath returns the path to the primary vault's session file.
-func SessionPath() (string, error) {
-	ref, err := PrimaryRef()
-	if err != nil {
-		return "", err
-	}
-	return ref.SessionPath, nil
-}
-
 // SaveSessionFor stores VK as hex in the session file for the given ref (§2.4).
 func SaveSessionFor(ref VaultRef, key []byte) error {
 	if err := os.MkdirAll(filepath.Dir(ref.SessionPath), 0700); err != nil {
@@ -30,7 +21,7 @@ func SaveSessionFor(ref VaultRef, key []byte) error {
 func LoadSessionFor(ref VaultRef) ([]byte, error) {
 	data, err := os.ReadFile(ref.SessionPath)
 	if os.IsNotExist(err) {
-		return nil, fmt.Errorf("vault %s is locked — run `hort unlock` first", ref.Name)
+		return nil, fmt.Errorf("vault is locked — run `hort unlock` first")
 	}
 	if err != nil {
 		return nil, fmt.Errorf("reading session: %w", err)

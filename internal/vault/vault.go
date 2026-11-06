@@ -121,12 +121,8 @@ func validateBody(d *VaultData) error {
 	return validateSecrets(d.Secrets, true)
 }
 
-// PrimarySourceName is the reserved name for the primary vault.
-const PrimarySourceName = "primary"
-
 // VaultRef identifies a vault file and its local lock, session and Secret Key files.
 type VaultRef struct {
-	Name          string
 	Path          string
 	LockPath      string
 	SessionPath   string
@@ -154,7 +150,6 @@ func PrimaryRef() (VaultRef, error) {
 		return VaultRef{}, err
 	}
 	return VaultRef{
-		Name:          PrimarySourceName,
 		Path:          path,
 		LockPath:      lockPath,
 		SessionPath:   filepath.Join(dir, ".session"),
@@ -278,7 +273,7 @@ type VaultInfo struct {
 func ReadInfo(ref VaultRef) (VaultInfo, error) {
 	raw, err := os.ReadFile(ref.Path)
 	if err != nil {
-		return VaultInfo{}, fmt.Errorf("reading vault %s: %w", ref.Name, err)
+		return VaultInfo{}, fmt.Errorf("reading vault: %w", err)
 	}
 	f, err := parseV4(raw)
 	if err != nil {
@@ -290,7 +285,7 @@ func ReadInfo(ref VaultRef) (VaultInfo, error) {
 func loadV4(ref VaultRef, vk []byte) (*VaultData, v4File, AccountKeys, error) {
 	raw, err := os.ReadFile(ref.Path)
 	if err != nil {
-		return nil, v4File{}, AccountKeys{}, fmt.Errorf("reading vault %s: %w", ref.Name, err)
+		return nil, v4File{}, AccountKeys{}, fmt.Errorf("reading vault: %w", err)
 	}
 	return openRaw(ref, raw, vk)
 }
@@ -306,7 +301,7 @@ func openRaw(ref VaultRef, raw, vk []byte) (*VaultData, v4File, AccountKeys, err
 	}
 	data, err := openV4(keys.FK, f)
 	if err != nil {
-		return nil, v4File{}, AccountKeys{}, fmt.Errorf("opening vault %s: %w", ref.Name, err)
+		return nil, v4File{}, AccountKeys{}, fmt.Errorf("opening vault: %w", err)
 	}
 	return data, f, keys, nil
 }
@@ -316,7 +311,7 @@ func openRaw(ref VaultRef, raw, vk []byte) (*VaultData, v4File, AccountKeys, err
 func LoadVault(ref VaultRef, vk []byte) (*VaultData, []byte, error) {
 	raw, err := os.ReadFile(ref.Path)
 	if err != nil {
-		return nil, nil, fmt.Errorf("reading vault %s: %w", ref.Name, err)
+		return nil, nil, fmt.Errorf("reading vault: %w", err)
 	}
 	data, _, _, err := openRaw(ref, raw, vk)
 	if err != nil {
@@ -376,7 +371,7 @@ func UpdateVault(ref VaultRef, vk []byte, mutate func(data *VaultData) error) er
 func UnlockVault(ref VaultRef, passphrase, secretKey []byte) ([]byte, error) {
 	raw, err := os.ReadFile(ref.Path)
 	if err != nil {
-		return nil, fmt.Errorf("reading vault %s: %w", ref.Name, err)
+		return nil, fmt.Errorf("reading vault: %w", err)
 	}
 	f, err := parseV4(raw)
 	if err != nil {
@@ -391,7 +386,7 @@ func UnlockVault(ref VaultRef, passphrase, secretKey []byte) ([]byte, error) {
 		return nil, err
 	}
 	if _, err := openV4(keys.FK, f); err != nil {
-		return nil, fmt.Errorf("opening vault %s: %w", ref.Name, err)
+		return nil, fmt.Errorf("opening vault: %w", err)
 	}
 	return vk, nil
 }
