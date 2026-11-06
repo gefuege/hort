@@ -61,9 +61,9 @@ func decode128(s string) ([]byte, bool) {
 	return out, acc&3 == 0
 }
 
-// normalizeCrockford upper-cases ASCII, drops dashes and spaces and reads
+// NormalizeCrockford upper-cases ASCII, drops dashes and spaces and reads
 // I and L as 1 and O as 0. Every other byte passes through and fails decoding.
-func normalizeCrockford(s string) string {
+func NormalizeCrockford(s string) string {
 	out := make([]byte, 0, len(s))
 	for i := 0; i < len(s); i++ {
 		c := s[i]
@@ -97,7 +97,7 @@ func FormatSecretKey(key []byte) string {
 // ParseSecretKey reads a typed Secret Key, with or without the H4 prefix.
 // Any malformed input, including a wrong check symbol, is ErrSecretKeyMistyped.
 func ParseSecretKey(s string) ([]byte, error) {
-	n := normalizeCrockford(s)
+	n := NormalizeCrockford(s)
 	if len(n) == 29 && strings.HasPrefix(n, secretKeyPrefix) {
 		n = n[2:]
 	}
@@ -118,7 +118,7 @@ func FormatAccountID(id []byte) string {
 
 // ParseAccountID reads an account ID with the same tolerance as a Secret Key.
 func ParseAccountID(s string) ([]byte, error) {
-	id, ok := decode128(normalizeCrockford(s))
+	id, ok := decode128(NormalizeCrockford(s))
 	if !ok {
 		return nil, errAccountID
 	}

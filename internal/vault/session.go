@@ -16,7 +16,7 @@ func SessionPath() (string, error) {
 	return ref.SessionPath, nil
 }
 
-// SaveSessionFor stores the derived key in the session file for the given ref.
+// SaveSessionFor stores VK as hex in the session file for the given ref (§2.4).
 func SaveSessionFor(ref VaultRef, key []byte) error {
 	if err := os.MkdirAll(filepath.Dir(ref.SessionPath), 0700); err != nil {
 		return fmt.Errorf("creating session directory: %w", err)
@@ -55,38 +55,4 @@ func ClearSessionFor(ref VaultRef) error {
 func IsUnlockedFor(ref VaultRef) bool {
 	_, err := os.Stat(ref.SessionPath)
 	return err == nil
-}
-
-// Legacy primary-only helpers.
-
-func SaveSession(key []byte) error {
-	ref, err := PrimaryRef()
-	if err != nil {
-		return err
-	}
-	return SaveSessionFor(ref, key)
-}
-
-func LoadSession() ([]byte, error) {
-	ref, err := PrimaryRef()
-	if err != nil {
-		return nil, err
-	}
-	return LoadSessionFor(ref)
-}
-
-func ClearSession() error {
-	ref, err := PrimaryRef()
-	if err != nil {
-		return err
-	}
-	return ClearSessionFor(ref)
-}
-
-func IsUnlocked() bool {
-	ref, err := PrimaryRef()
-	if err != nil {
-		return false
-	}
-	return IsUnlockedFor(ref)
 }

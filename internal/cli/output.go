@@ -6,7 +6,6 @@ import (
 	"strings"
 
 	"github.com/s16e/hort/internal/store"
-	"github.com/s16e/hort/internal/vault"
 )
 
 // FormatList formats entry list for human or JSON output.
@@ -28,12 +27,7 @@ func FormatList(entries []store.EntryInfo, jsonOutput bool) string {
 			desc = "(no description)"
 		}
 
-		prefix := ""
-		if e.Source != "" && e.Source != vault.PrimarySourceName {
-			prefix = fmt.Sprintf("[%s] ", e.Source)
-		}
-
-		line := fmt.Sprintf("%s%-30s %s  [env: %s]", prefix, e.Name, desc, envs)
+		line := fmt.Sprintf("%-30s %s  [env: %s]", e.Name, desc, envs)
 		if len(e.Contexts) > 0 {
 			line += fmt.Sprintf("  [ctx: %s]", strings.Join(e.Contexts, ", "))
 		}
@@ -43,99 +37,62 @@ func FormatList(entries []store.EntryInfo, jsonOutput bool) string {
 }
 
 // FormatDescribe formats entry details for human or JSON output.
-// Accepts multiple matches (one per source) so ambiguity is explicit.
-func FormatDescribe(entries []store.EntryInfo, jsonOutput bool) string {
+func FormatDescribe(entry store.EntryInfo, jsonOutput bool) string {
 	if jsonOutput {
-		data, _ := json.MarshalIndent(entries, "", "  ")
+		data, _ := json.MarshalIndent(entry, "", "  ")
 		return string(data)
 	}
 
 	var b strings.Builder
-	for i, entry := range entries {
-		if i > 0 {
-			b.WriteString("---\n")
-		}
-		fmt.Fprintf(&b, "Name:         %s\n", entry.Name)
-		fmt.Fprintf(&b, "Source:       %s\n", entry.Source)
-		fmt.Fprintf(&b, "Description:  %s\n", entry.Description)
-		fmt.Fprintf(&b, "Environments: %s\n", strings.Join(entry.Environments, ", "))
-		if len(entry.Contexts) > 0 {
-			fmt.Fprintf(&b, "Contexts:     %s\n", strings.Join(entry.Contexts, ", "))
-		}
+	fmt.Fprintf(&b, "Name:         %s\n", entry.Name)
+	fmt.Fprintf(&b, "Description:  %s\n", entry.Description)
+	fmt.Fprintf(&b, "Environments: %s\n", strings.Join(entry.Environments, ", "))
+	if len(entry.Contexts) > 0 {
+		fmt.Fprintf(&b, "Contexts:     %s\n", strings.Join(entry.Contexts, ", "))
 	}
 	return b.String()
 }
 
-// SourceStatus captures one line in `hort source list` output.
-type SourceStatus struct {
-	Name     string `json:"name"`
-	Path     string `json:"path"`
-	KDF      string `json:"kdf"`
-	Unlocked bool   `json:"unlocked"`
-	Primary  bool   `json:"primary"`
+// Status is the local status of §4. Fields that need the unlocked body are
+// omitted while the vault is locked: unknown is not zero.
+type Status struct {
+	Ready       bool   `json:"ready"`
+	Unlocked    bool   `json:"unlocked"`
+	AccountID   string `json:"account_id,omitempty"`
+	Server      string `json:"server,omitempty"`
+	Registered  *bool  `json:"registered,omitempty"`
+	DeviceID    string `json:"device_id,omitempty"`
+	SecretCount *int   `json:"secret_count,omitempty"`
 }
 
-// FormatSourceList renders the source list.
-func FormatSourceList(items []SourceStatus, jsonOutput bool) string {
+// FormatStatus formats the vault status. Apps integrating Hort can parse the
+// JSON form as a single readiness check.
+func FormatStatus(st Status, jsonOutput bool) string {
 	if jsonOutput {
-		data, _ := json.MarshalIndent(items, "", "  ")
-		return string(data)
-	}
-	var b strings.Builder
-	for _, s := range items {
-		state := "locked"
-		if s.Unlocked {
-			state = "unlocked"
-		}
-		primaryMark := ""
-		if s.Primary {
-			primaryMark = " (primary)"
-		}
-		fmt.Fprintf(&b, "%-24s %-8s %-8s %s%s\n", s.Name, state, s.KDF, s.Path, primaryMark)
-	}
-	return b.String()
-}
-
-// FormatStatus formats primary vault status. Apps integrating Hort
-// can parse the JSON form as a single readiness check.
-func FormatStatus(unlocked bool, vaultPath string, secretCount int, jsonOutput bool) string {
-	if jsonOutput {
-		status := map[string]any{
-			"primary": map[string]any{
-				"unlocked":     unlocked,
-				"vault_path":   vaultPath,
-				"secret_count": secretCount,
-			},
-			"ready": unlocked,
-		}
-		data, _ := json.MarshalIndent(status, "", "  ")
+		data, _ := json.MarshalIndent(st, "", "  ")
 		return string(data)
 	}
 
 	var b strings.Builder
-	if unlocked {
-		fmt.Fprintln(&b, "Status:   unlocked")
-	} else {
-		fmt.Fprintln(&b, "Status:   locked")
+	switch {
+	case st.AccountID == "":
+		fmt.Fprintln(&b, "Status:     no vault")
+		fmt.Fprintln(&b, "Next:       run `hort init` to create one")
+		return b.String()
+	case st.Unlocked:
+		fmt.Fprintln(&b, "Status:     unlocked")
+	default:
+		fmt.Fprintln(&b, "Status:     locked")
 	}
-	fmt.Fprintf(&b, "Vault:    %s\n", vaultPath)
-	fmt.Fprintf(&b, "Secrets:  %d\n", secretCount)
-	if !unlocked {
-		fmt.Fprintln(&b, "Next:     run `hort unlock` to use secrets")
+	fmt.Fprintf(&b, "Account:    %s\n", st.AccountID)
+	fmt.Fprintf(&b, "Server:     %s\n", st.Server)
+	if st.Registered != nil {
+		fmt.Fprintf(&b, "Registered: %t\n", *st.Registered)
+		fmt.Fprintf(&b, "Device:     %s\n", st.DeviceID)
+		fmt.Fprintf(&b, "Secrets:    %d\n", *st.SecretCount)
 	}
-	return b.String()
-}
-
-// FormatContextValues formats context→value map for human or JSON output.
-func FormatContextValues(values map[string]string, jsonOutput bool) string {
-	if jsonOutput {
-		data, _ := json.MarshalIndent(values, "", "  ")
-		return string(data)
-	}
-
-	var b strings.Builder
-	for ctx, val := range values {
-		fmt.Fprintf(&b, "%-20s %s\n", ctx, val)
+	if !st.Unlocked {
+		fmt.Fprintln(&b, "Next:       run `hort unlock` to use secrets")
 	}
 	return b.String()
 }

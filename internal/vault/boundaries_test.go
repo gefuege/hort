@@ -10,36 +10,22 @@ import (
 	"time"
 )
 
-func TestMountedRefRejectsInvalidNamesBeforeArtifacts(t *testing.T) {
-	home := t.TempDir()
-	setHomeDir(t, home)
-	for _, name := range []string{"", "primary", "../escape", "../../escape", "/absolute", `a\b`, "UPPER", "has space", ".hidden", "-lead"} {
-		ref, err := MountedRefAt(name, filepath.Join(home, "vault.enc"))
-		if err == nil {
-			t.Errorf("MountedRefAt(%q) accepted invalid name: %+v", name, ref)
-		}
-		if ref != (VaultRef{}) {
-			t.Errorf("invalid name %q returned artifact paths", name)
-		}
+// aliasRef names the vault at path the way PrimaryRef does, under its own name.
+func aliasRef(t *testing.T, name, path string) VaultRef {
+	t.Helper()
+	lockPath, err := vaultLockPath(path)
+	if err != nil {
+		t.Fatal(err)
 	}
-	entries, err := os.ReadDir(home)
-	if err != nil || len(entries) != 0 {
-		t.Fatalf("invalid refs created artifacts: %v, %v", entries, err)
-	}
-	if _, err := MountedRefAt("valid.name-1_2", filepath.Join(home, "vault.enc")); err != nil {
-		t.Fatalf("existing valid naming rule rejected: %v", err)
-	}
+	return VaultRef{Name: name, Path: path, LockPath: lockPath}
 }
 
 func TestVaultAliasesSerializeUpdates(t *testing.T) {
-	for _, alias := range []string{"mount", "symlink", "symlink-directory", "primary", "case-file", "case-parent"} {
+	for _, alias := range []string{"same-path", "symlink", "symlink-directory", "primary", "case-file", "case-parent"} {
 		t.Run(alias, func(t *testing.T) {
 			setHomeDir(t, t.TempDir())
 			first := primaryRefOrFatal(t)
-			key, err := CreateVault(first, make([]byte, KeySize), KDFRawKey)
-			if err != nil {
-				t.Fatal(err)
-			}
+			key := testVault(t, first, "passphrase")
 			path := first.Path
 			if alias == "case-file" || alias == "case-parent" {
 				if alias == "case-file" {
@@ -73,15 +59,9 @@ func TestVaultAliasesSerializeUpdates(t *testing.T) {
 				}
 				path = filepath.Join(dir, filepath.Base(first.Path))
 			}
-			second, err := MountedRefAt("second", path)
-			if err != nil {
-				t.Fatal(err)
-			}
+			second := aliasRef(t, "second", path)
 			if alias != "primary" {
-				first, err = MountedRefAt("first", first.Path)
-				if err != nil {
-					t.Fatal(err)
-				}
+				first = aliasRef(t, "first", first.Path)
 			}
 			entered, release := make(chan struct{}), make(chan struct{})
 			firstDone, secondDone := make(chan error, 1), make(chan error, 1)

@@ -24,7 +24,6 @@ func main() {
 		flagDescribe   string
 		flagDelete     string
 		flagJSON       bool
-		flagSource     string
 	)
 
 	root := &cobra.Command{
@@ -37,14 +36,14 @@ func main() {
 				return cli.CmdSearch(strings.Join(args, " "), flagJSON)
 			}
 			if flagSecret != "" {
-				return cli.CmdGetSecret(flagSecret, flagEnv, flagContext, flagSource)
+				return cli.CmdGetSecret(flagSecret, flagEnv, flagContext)
 			}
 			if flagSetSecret != "" {
 				value, err := writeValue(flagValue, flagValueStdin, cmd.InOrStdin())
 				if err != nil {
 					return fmt.Errorf("set secret: %w", err)
 				}
-				return cli.CmdSetSecret(flagSetSecret, value, flagEnv, flagContext, flagDesc, flagSource)
+				return cli.CmdSetSecret(flagSetSecret, value, flagEnv, flagContext, flagDesc)
 			}
 			if flagList {
 				return cli.CmdList(flagJSON)
@@ -53,7 +52,7 @@ func main() {
 				return cli.CmdDescribe(flagDescribe, flagJSON)
 			}
 			if flagDelete != "" {
-				return cli.CmdDelete(flagDelete, flagEnv, flagContext, flagSource)
+				return cli.CmdDelete(flagDelete, flagEnv, flagContext)
 			}
 			return cmd.Help()
 		},
@@ -73,7 +72,6 @@ func main() {
 	// Common flags
 	root.Flags().StringVarP(&flagEnv, "env", "e", "", "Target environment (default: * baseline)")
 	root.Flags().StringVarP(&flagContext, "context", "c", "", "Target context, e.g. tenant/customer (default: * baseline)")
-	root.Flags().StringVarP(&flagSource, "source", "S", "", "Target a specific source (primary by default for writes; required when reads are ambiguous)")
 
 	// Discovery flags
 	root.Flags().BoolVar(&flagList, "list", false, "List all entries")
@@ -84,35 +82,31 @@ func main() {
 	root.Flags().StringVar(&flagDelete, "delete", "", "Delete an entry or specific env/context override")
 
 	historyCmd := &cobra.Command{Use: "history NAME", Short: "Show revision history including values", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
-		source, _ := cmd.Flags().GetString("source")
 		jsonOutput, _ := cmd.Flags().GetBool("json")
-		return cli.CmdHistory(args[0], source, jsonOutput)
+		return cli.CmdHistory(args[0], jsonOutput)
 	}}
-	historyCmd.Flags().String("source", "", "Select a source when the entry is ambiguous")
 	historyCmd.Flags().Bool("json", false, "JSON output including values")
 	root.AddCommand(historyCmd)
-	migrateCmd := &cobra.Command{Use: "migrate", Short: "Explicitly migrate one unlocked v2 source to v3", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, args []string) error {
-		source, _ := cmd.Flags().GetString("source")
-		return cli.CmdMigrate(source)
-	}}
-	migrateCmd.Flags().String("source", "", "Source to migrate (default: primary)")
-	root.AddCommand(migrateCmd)
 
 	// Subcommands
 	initCmd := &cobra.Command{
 		Use:   "init",
-		Short: "Create a new primary vault or restore with existing passphrase",
+		Short: "Create a new vault and print its Emergency Kit",
+		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			restore, _ := cmd.Flags().GetBool("restore")
-			return cli.CmdInit(restore)
+			server, _ := cmd.Flags().GetString("server")
+			name, _ := cmd.Flags().GetString("name")
+			return cli.CmdInit(server, name)
 		},
 	}
-	initCmd.Flags().Bool("restore", false, "Restore with existing passphrase")
+	initCmd.Flags().String("server", "", "Sync server URL (default https://hort.pm)")
+	initCmd.Flags().String("name", "", "Name of this device (default <os>-<4 random chars>)")
 	root.AddCommand(initCmd)
 
 	root.AddCommand(&cobra.Command{
 		Use:   "unlock",
-		Short: "Unlock the primary vault with your passphrase",
+		Short: "Unlock the vault with your passphrase and Secret Key",
+		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return cli.CmdUnlock()
 		},
@@ -120,15 +114,34 @@ func main() {
 
 	root.AddCommand(&cobra.Command{
 		Use:   "lock",
-		Short: "Lock the primary vault (clear its session key)",
+		Short: "Lock the vault (clear its session key)",
+		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return cli.CmdLock()
 		},
 	})
 
+	root.AddCommand(&cobra.Command{
+		Use:   "kit",
+		Short: "Print the Emergency Kit again",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return cli.CmdKit()
+		},
+	})
+
+	root.AddCommand(&cobra.Command{
+		Use:   "passphrase",
+		Short: "Set a new passphrase, keeping the Secret Key",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return cli.CmdPassphrase()
+		},
+	})
+
 	statusCmd := &cobra.Command{
 		Use:   "status",
-		Short: "Show primary vault status",
+		Short: "Show local vault status",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			j, _ := cmd.Flags().GetBool("json")
 			return cli.CmdStatus(j)
@@ -136,83 +149,6 @@ func main() {
 	}
 	statusCmd.Flags().Bool("json", false, "JSON output")
 	root.AddCommand(statusCmd)
-
-	syncCmd := &cobra.Command{
-		Use:   "sync",
-		Short: "Exchange the primary vault with the sync folder now",
-		Args:  cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			return cli.CmdSync()
-		},
-	}
-	syncSetupCmd := &cobra.Command{
-		Use:   "setup",
-		Short: "Connect the primary vault to a folder a sync service keeps in step",
-		Args:  cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			path, _ := cmd.Flags().GetString("path")
-			return cli.CmdSyncSetup(path)
-		},
-	}
-	syncSetupCmd.Flags().String("path", "", "Existing sync folder")
-	syncCmd.AddCommand(syncSetupCmd)
-	root.AddCommand(syncCmd)
-
-	// Source subcommands: mount / unmount / list
-	sourceCmd := &cobra.Command{
-		Use:   "source",
-		Short: "Manage mounted secret sources",
-	}
-
-	mountCmd := &cobra.Command{
-		Use:   "mount",
-		Short: "Register a mounted source vault and cache its key",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			name, _ := cmd.Flags().GetString("name")
-			path, _ := cmd.Flags().GetString("path")
-			keyHex, _ := cmd.Flags().GetString("key-hex")
-			kdf, _ := cmd.Flags().GetString("kdf")
-			if name == "" {
-				return fmt.Errorf("--name is required")
-			}
-			if keyHex == "" {
-				return fmt.Errorf("--key-hex is required")
-			}
-			return cli.CmdSourceMount(name, path, keyHex, kdf)
-		},
-	}
-	mountCmd.Flags().String("name", "", "Source name (unique)")
-	mountCmd.Flags().String("path", "", "Vault file path")
-	mountCmd.Flags().String("key-hex", "", "32-byte key, hex-encoded (64 hex chars)")
-	mountCmd.Flags().String("kdf", "raw", "KDF mode: 'raw' (default) or 'argon2id'")
-	sourceCmd.AddCommand(mountCmd)
-
-	unmountCmd := &cobra.Command{
-		Use:   "unmount",
-		Short: "Remove a mounted source (vault file stays on disk)",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			name, _ := cmd.Flags().GetString("name")
-			if name == "" {
-				return fmt.Errorf("--name is required")
-			}
-			return cli.CmdSourceUnmount(name)
-		},
-	}
-	unmountCmd.Flags().String("name", "", "Source name")
-	sourceCmd.AddCommand(unmountCmd)
-
-	sourceListCmd := &cobra.Command{
-		Use:   "list",
-		Short: "List known sources",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			j, _ := cmd.Flags().GetBool("json")
-			return cli.CmdSourceList(j)
-		},
-	}
-	sourceListCmd.Flags().Bool("json", false, "JSON output")
-	sourceCmd.AddCommand(sourceListCmd)
-
-	root.AddCommand(sourceCmd)
 
 	if err := root.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, err)

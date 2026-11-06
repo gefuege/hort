@@ -1,6 +1,7 @@
 package vault
 
 import (
+	"bytes"
 	"os"
 	"testing"
 	"time"
@@ -84,107 +85,24 @@ func TestWriteLockBlocksConcurrentWriter(t *testing.T) {
 func TestSaveVaultCreatesBackup(t *testing.T) {
 	setHomeDir(t, t.TempDir())
 	ref := primaryRefOrFatal(t)
+	vk := testVault(t, ref, "passphrase")
 
-	key, err := CreatePrimaryVault([]byte("passphrase"))
-	if err != nil {
-		t.Fatalf("CreatePrimaryVault(): %v", err)
-	}
-
-	data, raw, err := LoadVault(ref, key)
+	data, raw, err := LoadVault(ref, vk)
 	if err != nil {
 		t.Fatalf("LoadVault(): %v", err)
 	}
 
 	data.Secrets["demo"] = Entry{Revisions: []Revision{testRevision(t, "set", MakeLookupKey("dev", "spuerhund"), "value"), testRevision(t, "describe", "", "demo")}}
 
-	if err := SaveVault(ref, data, key, raw); err != nil {
+	if err := SaveVault(ref, data, vk, raw); err != nil {
 		t.Fatalf("SaveVault(): %v", err)
 	}
 
-	backupPath, err := BackupPath()
+	backup, err := os.ReadFile(BackupPathFor(ref))
 	if err != nil {
-		t.Fatalf("BackupPath(): %v", err)
+		t.Fatalf("read backup: %v", err)
 	}
-
-	info, err := os.Stat(backupPath)
-	if err != nil {
-		t.Fatalf("stat backup: %v", err)
+	if !bytes.Equal(backup, raw) {
+		t.Fatal("backup does not hold the previous file")
 	}
-	if info.Size() == 0 {
-		t.Fatal("backup file is empty")
-	}
-}
-
-func TestCreateV3RawKeyRoundTrip(t *testing.T) {
-	setHomeDir(t, t.TempDir())
-
-	ref, err := MountedRefAt("test", t.TempDir()+"/test.enc")
-	if err != nil {
-		t.Fatalf("MountedRefAt(): %v", err)
-	}
-
-	rawKey := make([]byte, KeySize)
-	for i := range rawKey {
-		rawKey[i] = byte(i)
-	}
-
-	sessionKey, err := CreateVault(ref, rawKey, KDFRawKey)
-	if err != nil {
-		t.Fatalf("CreateVault(raw): %v", err)
-	}
-
-	// Raw-key session == material
-	for i := range rawKey {
-		if sessionKey[i] != rawKey[i] {
-			t.Fatalf("raw session key mismatch at %d: %x vs %x", i, sessionKey[i], rawKey[i])
-		}
-	}
-
-	data, raw, err := LoadVault(ref, sessionKey)
-	if err != nil {
-		t.Fatalf("LoadVault(): %v", err)
-	}
-	data.Secrets["k"] = Entry{Revisions: []Revision{testRevision(t, "set", MakeLookupKey("*", "*"), "v")}}
-	if err := SaveVault(ref, data, sessionKey, raw); err != nil {
-		t.Fatalf("SaveVault(): %v", err)
-	}
-
-	// Unlock via material path
-	key2, err := UnlockVault(ref, rawKey)
-	if err != nil {
-		t.Fatalf("UnlockVault(): %v", err)
-	}
-	data2, _, err := LoadVault(ref, key2)
-	if err != nil {
-		t.Fatalf("reload: %v", err)
-	}
-	values, _, _ := data2.Secrets["k"].Current()
-	if values[ValueKey{Key: MakeLookupKey("*", "*")}] != "v" {
-		t.Fatalf("expected round-trip value, got %+v", data2.Secrets)
-	}
-}
-
-func TestCreatePrimaryVaultArgonRoundTrip(t *testing.T) {
-	setHomeDir(t, t.TempDir())
-	ref := primaryRefOrFatal(t)
-
-	pass := []byte("correct horse battery staple")
-	key, err := CreatePrimaryVault(pass)
-	if err != nil {
-		t.Fatalf("CreatePrimaryVault(): %v", err)
-	}
-
-	// Fresh unlock recovers the key
-	key2, err := UnlockVault(ref, pass)
-	if err != nil {
-		t.Fatalf("UnlockVault(): %v", err)
-	}
-
-	data, _, err := LoadVault(ref, key2)
-	if err != nil {
-		t.Fatalf("LoadVault(): %v", err)
-	}
-	_ = data // empty but decryptable
-
-	_ = key
 }

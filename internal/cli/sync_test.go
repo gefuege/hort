@@ -4,17 +4,15 @@ import (
 	"errors"
 	"testing"
 	"time"
-
-	"github.com/s16e/hort/internal/vault"
 )
 
-func TestLimitSyncStopsWaitingForHangingFolder(t *testing.T) {
+func TestLimitSyncStopsWaitingForHangingRun(t *testing.T) {
 	release := make(chan struct{})
 	defer close(release)
 	started := time.Now()
-	_, err := limitSync(10*time.Millisecond, func() (vault.SyncResult, error) {
+	_, err := limitSync(10*time.Millisecond, func() (int, error) {
 		<-release
-		return vault.SyncResult{}, nil
+		return 0, nil
 	})
 	if err == nil {
 		t.Fatal("expected a limit error")
@@ -26,10 +24,10 @@ func TestLimitSyncStopsWaitingForHangingFolder(t *testing.T) {
 
 func TestLimitSyncPassesResultThrough(t *testing.T) {
 	want := errors.New("synthetic")
-	got, err := limitSync(time.Minute, func() (vault.SyncResult, error) {
-		return vault.SyncResult{NewRevisions: 3}, want
+	got, err := limitSync(time.Minute, func() (int, error) {
+		return 3, want
 	})
-	if got.NewRevisions != 3 || !errors.Is(err, want) {
+	if got != 3 || !errors.Is(err, want) {
 		t.Fatalf("got %+v, %v", got, err)
 	}
 }

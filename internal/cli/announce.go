@@ -13,7 +13,7 @@ import (
 
 // AgentLine builds the sentence a user can paste to an agent after storing an
 // entry. It never contains the value — the agent retrieves it via hort.
-func AgentLine(kind, name, env, context, source string) string {
+func AgentLine(kind, name, env, context string) string {
 	scope := []string{}
 	retrieve := fmt.Sprintf("hort --%s %s", kind, name)
 	if context != "" {
@@ -24,10 +24,6 @@ func AgentLine(kind, name, env, context, source string) string {
 		scope = append(scope, "Env: "+env)
 		retrieve += " --env " + env
 	}
-	if source != "" {
-		scope = append(scope, "Source: "+source)
-		retrieve += " --source " + source
-	}
 	where := ""
 	if len(scope) > 0 {
 		where = " (" + strings.Join(scope, ", ") + ")"
@@ -37,8 +33,8 @@ func AgentLine(kind, name, env, context, source string) string {
 
 // announceStored prints the paste-ready agent line and, on an interactive
 // terminal, offers Enter to finish or c to copy the line to the clipboard.
-func announceStored(kind, name, env, context, source string) {
-	line := AgentLine(kind, name, env, context, source)
+func announceStored(kind, name, env, context string) {
+	line := AgentLine(kind, name, env, context)
 	fmt.Fprintln(os.Stderr, line)
 
 	in := int(os.Stdin.Fd())
@@ -83,14 +79,14 @@ func copyToClipboard(text string) error {
 	return cmd.Run()
 }
 
-// FilterEntries keeps entries whose name, description, environments,
-// contexts or source contain every whitespace-separated term (case-insensitive).
+// FilterEntries keeps entries whose name, description, environments or
+// contexts contain every whitespace-separated term (case-insensitive).
 func FilterEntries(entries []store.EntryInfo, query string) []store.EntryInfo {
 	terms := strings.Fields(strings.ToLower(query))
 	var out []store.EntryInfo
 	for _, e := range entries {
 		hay := strings.ToLower(strings.Join([]string{
-			e.Name, e.Description, e.Source,
+			e.Name, e.Description,
 			strings.Join(e.Environments, " "), strings.Join(e.Contexts, " "),
 		}, " "))
 		match := true

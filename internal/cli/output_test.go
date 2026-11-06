@@ -8,9 +8,10 @@ import (
 )
 
 func TestUnifiedOutputHasNoTypeOrConfigCount(t *testing.T) {
-	entries := []store.EntryInfo{{Name: "endpoint", Source: "primary", Description: "URL", Environments: []string{"*"}}}
+	entries := []store.EntryInfo{{Name: "endpoint", Description: "URL", Environments: []string{"*"}}}
+	count := 1
 	for _, jsonOutput := range []bool{false, true} {
-		for _, output := range []string{FormatList(entries, jsonOutput), FormatDescribe(entries, jsonOutput), FormatStatus(true, "synthetic-path", 1, jsonOutput)} {
+		for _, output := range []string{FormatList(entries, jsonOutput), FormatDescribe(entries[0], jsonOutput), FormatStatus(Status{Ready: true, Unlocked: true, SecretCount: &count}, jsonOutput)} {
 			for _, removed := range []string{"\"type\"", "Type:", "config_count", "Configs:"} {
 				if strings.Contains(output, removed) {
 					t.Fatal("removed contract present:", removed)

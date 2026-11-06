@@ -5,30 +5,25 @@ import (
 	"errors"
 )
 
-// KDFMode selects how a vault's file-level key is derived from mount material.
+// v3 is no runtime format any more (contract §1). This file, the v3 helpers
+// in crypto.go and v3.go stay only so that `hort migrate` can read a v3 vault.
+
+// KDFMode is the KDF byte of a v3 header.
 type KDFMode uint8
 
-const (
-	// KDFArgon2id derives the AES key from a passphrase via Argon2id using the
-	// salt and parameters stored in the vault header. This is the original Hort
-	// format and the default for the primary vault.
-	KDFArgon2id KDFMode = 0
-
-	// KDFRawKey uses the supplied 32-byte material directly as the AES key,
-	// skipping any KDF. Used for machine-mounted sources that carry their own
-	// key (e.g. a Fachwerk instance's FACHWERK_SECRETS_MASTER_KEY).
-	KDFRawKey KDFMode = 1
-)
+// KDFArgon2id derives the v3 file key from the passphrase via Argon2id using
+// the salt and parameters stored in the header.
+const KDFArgon2id KDFMode = 0
 
 const (
 	// Layout: [magic:4][version:1][kdf:1][salt:32][time:4][memory:4][threads:1][nonce:12][ciphertext+tag:...]
 	HeaderSize = len(V3Magic) + 1 + 1 + SaltSize + 4 + 4 + 1 + NonceSize
 )
 
-// V2Magic is accepted only for unlocking and explicit migration.
-const V2Magic = "HRT\x02"
+// v2Magic is only recognized to point a v2 vault at Hort 0.4.1.
+const v2Magic = "HRT\x02"
 
-// V3Magic marks the current vault format.
+// V3Magic marks the previous vault format.
 const V3Magic = "HRT\x03"
 
 // FormatInfo describes the header of a vault file after parsing.
@@ -41,13 +36,9 @@ type FormatInfo struct {
 	CipherAt int
 }
 
-// ParseFormat inspects the vault file header and returns layout information.
+// ParseFormat inspects a v3 vault file header and returns layout information.
 func ParseFormat(data []byte) (FormatInfo, error) {
-	return parseFormat(data, false)
-}
-
-func parseFormat(data []byte, allowLegacy bool) (FormatInfo, error) {
-	if len(data) >= len(V3Magic) && (string(data[:4]) == V3Magic || (allowLegacy && string(data[:4]) == V2Magic)) {
+	if len(data) >= len(V3Magic) && string(data[:4]) == V3Magic {
 		if len(data) < HeaderSize {
 			return FormatInfo{}, errors.New("vault file too short for header")
 		}
@@ -67,15 +58,14 @@ func parseFormat(data []byte, allowLegacy bool) (FormatInfo, error) {
 		nonce := data[off : off+NonceSize]
 		off += NonceSize
 
-		if (version != 3 || string(data[:4]) != V3Magic) && !(allowLegacy && version == 2 && string(data[:4]) == V2Magic) {
+		if version != 3 {
 			return FormatInfo{}, errors.New("unsupported vault format version")
 		}
-		// Headers are untrusted until decryption succeeds. Support positive
-		// Argon costs up to Hort's defaults, with no silent Argon memory clamp.
-		if kdf == KDFArgon2id && (params.Time < 1 || params.Time > DefaultArgonTime ||
-			params.Threads < 1 || params.Threads > DefaultArgonThreads ||
-			params.Memory < 8*uint32(params.Threads) || params.Memory > DefaultArgonMemory) {
-			return FormatInfo{}, errors.New("unsupported Argon2id parameters")
+		if kdf != KDFArgon2id {
+			return FormatInfo{}, errors.New("unsupported vault KDF")
+		}
+		if err := checkArgon(params); err != nil {
+			return FormatInfo{}, err
 		}
 		return FormatInfo{
 			Version:  int(version),
@@ -87,7 +77,19 @@ func parseFormat(data []byte, allowLegacy bool) (FormatInfo, error) {
 		}, nil
 	}
 
-	return FormatInfo{}, errors.New("not a v3 hort vault — legacy v2 requires explicit `hort migrate`")
+	return FormatInfo{}, errors.New("not a v3 hort vault")
+}
+
+// checkArgon bounds untrusted header parameters before any derivation runs:
+// positive costs up to Hort's defaults, with no silent Argon memory clamp.
+// Threads == 0 would make argon2.IDKey panic.
+func checkArgon(p ArgonParams) error {
+	if p.Time < 1 || p.Time > DefaultArgonTime ||
+		p.Threads < 1 || p.Threads > DefaultArgonThreads ||
+		p.Memory < 8*uint32(p.Threads) || p.Memory > DefaultArgonMemory {
+		return errors.New("unsupported Argon2id parameters")
+	}
+	return nil
 }
 
 // buildV3Header serializes a v3 header.

@@ -1,8 +1,13 @@
 package vault
 
 import (
-	"encoding/json"
+	"crypto/ed25519"
+	"crypto/rand"
+	"encoding/hex"
+	"errors"
 	"fmt"
+	"io"
+	"math"
 	"os"
 	"path/filepath"
 )
@@ -32,35 +37,100 @@ func ParseLookupKey(key LookupKey) (env, context string) {
 	return key, "*"
 }
 
-// VaultData is the decrypted vault content.
+// VaultData is body_json of a v4 vault (contract §2.3), decoded strictly.
 type VaultData struct {
-	Version  int              `json:"version"`
-	SourceID string           `json:"source_id"`
-	Secrets  map[string]Entry `json:"secrets"`
+	Version int              `json:"version"`
+	Device  Device           `json:"device"`
+	Sync    SyncState        `json:"sync"`
+	Secrets map[string]Entry `json:"secrets"`
 }
 
-// NewVaultData creates an empty vault.
-func NewVaultData() (*VaultData, error) {
+// Device is this device's identity. The Ed25519 seed is sealed in the body
+// (§5.2); the name waits here until the account is registered.
+type Device struct {
+	ID         string `json:"id"`
+	Name       string `json:"name"`
+	PrivateKey string `json:"private_key"`
+}
+
+// SyncState is the local server sync state (§6.6). Pending holds every local
+// revision not yet pushed.
+type SyncState struct {
+	Registered     bool     `json:"registered"`
+	Cursor         uint64   `json:"cursor"`
+	Pending        []string `json:"pending"`
+	DevicesVersion uint64   `json:"devices_version"`
+	KnownDevices   []string `json:"known_devices"`
+}
+
+func newBody(deviceName string) (*VaultData, error) {
 	id, err := newID()
 	if err != nil {
 		return nil, err
 	}
+	seed, err := randomBytes(ed25519.SeedSize)
+	if err != nil {
+		return nil, err
+	}
 	return &VaultData{
-		Version:  3,
-		SourceID: id,
-		Secrets:  make(map[string]Entry),
+		Version: 4,
+		Device:  Device{ID: id, Name: deviceName, PrivateKey: hex.EncodeToString(seed)},
+		Sync:    SyncState{Pending: []string{}, KnownDevices: []string{}},
+		Secrets: make(map[string]Entry),
 	}, nil
+}
+
+// Append stamps r by the Append rule into entry name and queues it for push.
+func (d *VaultData) Append(name string, r Revision) {
+	entry := d.Secrets[name]
+	entry.Append(r)
+	d.Secrets[name] = entry
+	d.Sync.Pending = append(d.Sync.Pending, r.ID)
+}
+
+func decodeBody(raw []byte) (*VaultData, error) {
+	var d VaultData
+	if err := strictJSON(raw, &d); err != nil {
+		return nil, err
+	}
+	if err := validateBody(&d); err != nil {
+		return nil, err
+	}
+	return &d, nil
+}
+
+// validateBody also guards writes: strictJSON rejects the null a nil slice encodes to.
+func validateBody(d *VaultData) error {
+	if d == nil || d.Version != 4 {
+		return errors.New("invalid v4 vault content")
+	}
+	seed, err := hex.DecodeString(d.Device.PrivateKey)
+	if !validID(d.Device.ID) || err != nil || len(seed) != ed25519.SeedSize || d.Device.PrivateKey != hex.EncodeToString(seed) {
+		return errors.New("invalid device in vault")
+	}
+	if d.Sync.Pending == nil || d.Sync.KnownDevices == nil {
+		return errors.New("invalid sync state in vault")
+	}
+	for _, ids := range [][]string{d.Sync.Pending, d.Sync.KnownDevices} {
+		for _, id := range ids {
+			if !validID(id) {
+				return errors.New("invalid identity in vault sync state")
+			}
+		}
+	}
+	return validateSecrets(d.Secrets, true)
 }
 
 // PrimarySourceName is the reserved name for the primary vault.
 const PrimarySourceName = "primary"
 
-// VaultRef identifies a vault file and its local lock/session artifacts.
+// VaultRef identifies a vault file and its local lock, session and Secret Key files.
 type VaultRef struct {
-	Name        string
-	Path        string
-	LockPath    string
-	SessionPath string
+	Name          string
+	Path          string
+	LockPath      string
+	SessionPath   string
+	SecretKeyPath string
 }
 
 // HortDir returns the hort config directory path.
@@ -70,15 +140,6 @@ func HortDir() (string, error) {
 		return "", fmt.Errorf("finding home directory: %w", err)
 	}
 	return filepath.Join(home, ".hort"), nil
-}
-
-// SourcesDir returns the directory that holds mounted source vaults.
-func SourcesDir() (string, error) {
-	dir, err := HortDir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(dir, "sources"), nil
 }
 
 // PrimaryRef returns the VaultRef for the primary vault (~/.hort/vault.enc).
@@ -93,53 +154,12 @@ func PrimaryRef() (VaultRef, error) {
 		return VaultRef{}, err
 	}
 	return VaultRef{
-		Name:        PrimarySourceName,
-		Path:        path,
-		LockPath:    lockPath,
-		SessionPath: filepath.Join(dir, ".session"),
+		Name:          PrimarySourceName,
+		Path:          path,
+		LockPath:      lockPath,
+		SessionPath:   filepath.Join(dir, ".session"),
+		SecretKeyPath: filepath.Join(dir, "secret-key"),
 	}, nil
-}
-
-// MountedRefAt returns the VaultRef for a mount with the given name, using the
-// supplied vault file path. Sessions use a per-name slot; locks identify the
-// canonical vault file so aliases serialize the same writes.
-func MountedRefAt(name, vaultPath string) (VaultRef, error) {
-	if err := validateSourceName(name); err != nil {
-		return VaultRef{}, err
-	}
-	sourcesDir, err := SourcesDir()
-	if err != nil {
-		return VaultRef{}, err
-	}
-	lockPath, err := vaultLockPath(vaultPath)
-	if err != nil {
-		return VaultRef{}, err
-	}
-	return VaultRef{
-		Name:        name,
-		Path:        vaultPath,
-		LockPath:    lockPath,
-		SessionPath: filepath.Join(sourcesDir, name+".session"),
-	}, nil
-}
-
-// VaultPath returns the path to the primary vault file. Kept as a package-level
-// convenience for CLI/status code that only cares about the primary vault.
-func VaultPath() (string, error) {
-	ref, err := PrimaryRef()
-	if err != nil {
-		return "", err
-	}
-	return ref.Path, nil
-}
-
-// VaultExists reports whether the primary vault file exists.
-func VaultExists() (bool, error) {
-	ref, err := PrimaryRef()
-	if err != nil {
-		return false, err
-	}
-	return RefExists(ref)
 }
 
 // RefExists reports whether the vault file for the given ref exists.
@@ -151,82 +171,173 @@ func RefExists(ref VaultRef) (bool, error) {
 	return err == nil, err
 }
 
-// CreateVault creates a new v3 vault file at ref using the given KDF mode and
-// material. Returns the derived session key for immediate caching.
-func CreateVault(ref VaultRef, material []byte, kdf KDFMode) ([]byte, error) {
+func randomBytes(n int) ([]byte, error) {
+	b := make([]byte, n)
+	if _, err := io.ReadFull(rand.Reader, b); err != nil {
+		return nil, fmt.Errorf("generating random bytes: %w", err)
+	}
+	return b, nil
+}
+
+// NewVault is what `hort init` created and the Emergency Kit shows.
+type NewVault struct {
+	AccountID []byte
+	Server    string
+	SecretKey []byte
+	VK        []byte
+}
+
+// CreateVault creates a v4 vault with a new account, VK, Secret Key, passphrase
+// slot and device key. It writes the Secret Key file before vault.enc (§9.1);
+// the caller saves the session.
+func CreateVault(ref VaultRef, server, deviceName string, passphrase []byte) (NewVault, error) {
+	return createVault(ref, server, deviceName, passphrase, DefaultArgonParams())
+}
+
+func createVault(ref VaultRef, server, deviceName string, passphrase []byte, params ArgonParams) (NewVault, error) {
+	if err := checkServerURL(server); err != nil {
+		return NewVault{}, err
+	}
 	if err := os.MkdirAll(filepath.Dir(ref.Path), 0700); err != nil {
-		return nil, fmt.Errorf("creating vault directory: %w", err)
+		return NewVault{}, fmt.Errorf("creating vault directory: %w", err)
+	}
+	unlock, err := lockVault(ref)
+	if err != nil {
+		return NewVault{}, err
+	}
+	defer func() { _ = unlock() }()
+	if exists, err := RefExists(ref); err != nil {
+		return NewVault{}, err
+	} else if exists {
+		return NewVault{}, fmt.Errorf("a vault already exists at %s", ref.Path)
 	}
 
-	data, err := NewVaultData()
+	nv := NewVault{Server: server}
+	if nv.AccountID, err = randomBytes(AccountIDSize); err != nil {
+		return NewVault{}, err
+	}
+	if nv.VK, err = randomBytes(KeySize); err != nil {
+		return NewVault{}, err
+	}
+	if nv.SecretKey, err = randomBytes(SecretKeySize); err != nil {
+		return NewVault{}, err
+	}
+	body, err := newBody(deviceName)
 	if err != nil {
-		return nil, err
+		return NewVault{}, err
 	}
-	plaintext, err := json.Marshal(data)
+	keys, err := DeriveAccountKeys(nv.VK, nv.AccountID)
 	if err != nil {
-		return nil, fmt.Errorf("marshaling vault: %w", err)
+		return NewVault{}, err
 	}
-
-	fileBytes, sessionKey, err := CreateEncrypted(plaintext, material, kdf)
+	h := fileHeader{AccountID: nv.AccountID, Server: server}
+	if err := h.sealPassphraseSlot(nv.VK, keys.AK, string(passphrase), nv.SecretKey, 1, params); err != nil {
+		return NewVault{}, err
+	}
+	file, err := sealV4(keys.FK, h, body)
 	if err != nil {
-		return nil, err
+		return NewVault{}, err
 	}
-
-	if err := writeFileAtomic(ref.Path, fileBytes, 0600); err != nil {
-		return nil, fmt.Errorf("writing vault: %w", err)
+	if err := writeFileAtomic(ref.SecretKeyPath, []byte(FormatSecretKey(nv.SecretKey)+"\n"), 0600); err != nil {
+		return NewVault{}, fmt.Errorf("writing Secret Key: %w", err)
 	}
-	return sessionKey, nil
+	if err := writeFileAtomic(ref.Path, file, 0600); err != nil {
+		return NewVault{}, fmt.Errorf("writing vault: %w", err)
+	}
+	return nv, nil
 }
 
-// CreatePrimaryVault creates the primary vault with a passphrase (Argon2id
-// KDF, v3 format).
-func CreatePrimaryVault(passphrase []byte) ([]byte, error) {
-	ref, err := PrimaryRef()
-	if err != nil {
-		return nil, err
+// ReadSecretKeyFile returns the text of the Secret Key file, unparsed.
+func ReadSecretKeyFile(ref VaultRef) (string, error) {
+	raw, err := os.ReadFile(ref.SecretKeyPath)
+	if os.IsNotExist(err) {
+		return "", fmt.Errorf("no Secret Key at %s — restore it from your Emergency Kit or set HORT_SECRET_KEY", ref.SecretKeyPath)
 	}
-	return CreateVault(ref, passphrase, KDFArgon2id)
+	if err != nil {
+		return "", fmt.Errorf("reading Secret Key: %w", err)
+	}
+	return string(raw), nil
 }
 
-// LoadVault reads and decrypts the given vault using a session key.
-// Returns the vault data and the raw encrypted bytes (needed for re-encryption).
-func LoadVault(ref VaultRef, sessionKey []byte) (*VaultData, []byte, error) {
+// VaultInfo is the plaintext header information of a vault.
+type VaultInfo struct {
+	AccountID []byte
+	Server    string
+}
+
+// ReadInfo parses the header without any key.
+func ReadInfo(ref VaultRef) (VaultInfo, error) {
+	raw, err := os.ReadFile(ref.Path)
+	if err != nil {
+		return VaultInfo{}, fmt.Errorf("reading vault %s: %w", ref.Name, err)
+	}
+	f, err := parseV4(raw)
+	if err != nil {
+		return VaultInfo{}, err
+	}
+	return VaultInfo{AccountID: f.AccountID, Server: f.Server}, nil
+}
+
+func loadV4(ref VaultRef, vk []byte) (*VaultData, v4File, AccountKeys, error) {
+	raw, err := os.ReadFile(ref.Path)
+	if err != nil {
+		return nil, v4File{}, AccountKeys{}, fmt.Errorf("reading vault %s: %w", ref.Name, err)
+	}
+	return openRaw(ref, raw, vk)
+}
+
+func openRaw(ref VaultRef, raw, vk []byte) (*VaultData, v4File, AccountKeys, error) {
+	f, err := parseV4(raw)
+	if err != nil {
+		return nil, v4File{}, AccountKeys{}, err
+	}
+	keys, err := DeriveAccountKeys(vk, f.AccountID)
+	if err != nil {
+		return nil, v4File{}, AccountKeys{}, err
+	}
+	data, err := openV4(keys.FK, f)
+	if err != nil {
+		return nil, v4File{}, AccountKeys{}, fmt.Errorf("opening vault %s: %w", ref.Name, err)
+	}
+	return data, f, keys, nil
+}
+
+// LoadVault reads and decrypts the vault with VK from the session. It returns
+// the raw file bytes, which SaveVault needs to keep the header.
+func LoadVault(ref VaultRef, vk []byte) (*VaultData, []byte, error) {
 	raw, err := os.ReadFile(ref.Path)
 	if err != nil {
 		return nil, nil, fmt.Errorf("reading vault %s: %w", ref.Name, err)
 	}
-	plaintext, err := DecryptWithKey(raw, sessionKey)
+	data, _, _, err := openRaw(ref, raw, vk)
 	if err != nil {
 		return nil, nil, err
-	}
-	data, err := decodeVault(plaintext)
-	if err != nil {
-		return nil, nil, fmt.Errorf("parsing vault %s: %w", ref.Name, err)
 	}
 	return data, raw, nil
 }
 
-// SaveVault encrypts and writes the vault data back, preserving the file format.
-func SaveVault(ref VaultRef, data *VaultData, sessionKey []byte, existingRaw []byte) error {
-	if err := validateVault(data); err != nil {
+// SaveVault seals data under the header of existingRaw with a fresh body nonce.
+func SaveVault(ref VaultRef, data *VaultData, vk []byte, existingRaw []byte) error {
+	f, err := parseV4(existingRaw)
+	if err != nil {
 		return err
 	}
-	plaintext, err := json.Marshal(data)
+	keys, err := DeriveAccountKeys(vk, f.AccountID)
 	if err != nil {
-		return fmt.Errorf("marshaling vault: %w", err)
+		return err
 	}
-	encrypted, err := EncryptPreservingFormat(plaintext, sessionKey, existingRaw)
+	file, err := sealV4(keys.FK, f.fileHeader, data)
 	if err != nil {
 		return err
 	}
 	if err := backupFile(ref.Path, 0600); err != nil {
 		return err
 	}
-	return writeFileAtomic(ref.Path, encrypted, 0600)
+	return writeFileAtomic(ref.Path, file, 0600)
 }
 
 // UpdateVault serializes the full read-modify-write cycle for vault mutations.
-func UpdateVault(ref VaultRef, sessionKey []byte, mutate func(data *VaultData) error) error {
+func UpdateVault(ref VaultRef, vk []byte, mutate func(data *VaultData) error) error {
 	path, err := canonicalVaultPath(ref.Path)
 	if err != nil {
 		return fmt.Errorf("resolving vault path: %w", err)
@@ -240,22 +351,81 @@ func UpdateVault(ref VaultRef, sessionKey []byte, mutate func(data *VaultData) e
 		_ = unlock()
 	}()
 
-	data, raw, err := LoadVault(ref, sessionKey)
+	data, raw, err := LoadVault(ref, vk)
 	if err != nil {
 		return err
 	}
 	if err := mutate(data); err != nil {
 		return err
 	}
-	return SaveVault(ref, data, sessionKey, raw)
+	return SaveVault(ref, data, vk, raw)
 }
 
-// UnlockVault decrypts the vault at ref with the given material (passphrase or
-// raw 32-byte key depending on its KDF mode) and returns the derived session key.
-func UnlockVault(ref VaultRef, material []byte) ([]byte, error) {
+// UnlockVault unwraps VK from the passphrase slot and checks that it opens the
+// body. The caller parses the Secret Key first, so a mistyped one never
+// reaches Argon2id.
+func UnlockVault(ref VaultRef, passphrase, secretKey []byte) ([]byte, error) {
 	raw, err := os.ReadFile(ref.Path)
 	if err != nil {
 		return nil, fmt.Errorf("reading vault %s: %w", ref.Name, err)
 	}
-	return UnlockWithMaterial(raw, material)
+	f, err := parseV4(raw)
+	if err != nil {
+		return nil, err
+	}
+	vk, err := f.openPassphraseSlot(string(passphrase), secretKey)
+	if err != nil {
+		return nil, err
+	}
+	keys, err := DeriveAccountKeys(vk, f.AccountID)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := openV4(keys.FK, f); err != nil {
+		return nil, fmt.Errorf("opening vault %s: %w", ref.Name, err)
+	}
+	return vk, nil
+}
+
+// ChangePassphrase rewraps VK under a new passphrase and the same Secret Key
+// with slot_version+1. The backup is replaced too, so no local copy of the
+// old slot remains.
+func ChangePassphrase(ref VaultRef, vk, passphrase, secretKey []byte) error {
+	return changePassphrase(ref, vk, passphrase, secretKey, DefaultArgonParams())
+}
+
+func changePassphrase(ref VaultRef, vk, passphrase, secretKey []byte, params ArgonParams) error {
+	path, err := canonicalVaultPath(ref.Path)
+	if err != nil {
+		return fmt.Errorf("resolving vault path: %w", err)
+	}
+	ref.Path = path
+	unlock, err := lockVault(ref)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = unlock() }()
+
+	data, f, keys, err := loadV4(ref, vk)
+	if err != nil {
+		return err
+	}
+	if f.SlotVersion == math.MaxUint64 {
+		return errors.New("slot version exhausted")
+	}
+	h := f.fileHeader
+	if err := h.sealPassphraseSlot(vk, keys.AK, string(passphrase), secretKey, f.SlotVersion+1, params); err != nil {
+		return err
+	}
+	file, err := sealV4(keys.FK, h, data)
+	if err != nil {
+		return err
+	}
+	if err := writeFileAtomic(ref.Path, file, 0600); err != nil {
+		return err
+	}
+	if err := writeFileAtomic(BackupPathFor(ref), file, 0600); err != nil {
+		return fmt.Errorf("writing backup: %w", err)
+	}
+	return nil
 }

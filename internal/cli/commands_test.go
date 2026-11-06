@@ -6,47 +6,60 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/s16e/hort/internal/vault"
 )
 
-func TestInitRestoreMissingVaultPreservesBackup(t *testing.T) {
-	for _, test := range []struct {
-		name, passphrase string
-	}{
-		{name: "without passphrase"},
-		{name: "with passphrase", passphrase: "synthetic-test-passphrase"},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			testInitRestoreMissingVaultPreservesBackup(t, test.passphrase)
-		})
-	}
-}
-
-func testInitRestoreMissingVaultPreservesBackup(t *testing.T, passphrase string) {
+func TestInitRefusesExistingVaultWithoutChanges(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	t.Setenv("HORT_PASSPHRASE", passphrase)
+	t.Setenv("HORT_PASSPHRASE", "synthetic-test-passphrase")
 	dir := filepath.Join(home, ".hort")
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		t.Fatal(err)
 	}
-	backup := filepath.Join(dir, "vault.enc.bak")
-	want := []byte("synthetic-existing-backup")
-	if err := os.WriteFile(backup, want, 0600); err != nil {
+	path := filepath.Join(dir, "vault.enc")
+	want := []byte("synthetic-existing-vault")
+	if err := os.WriteFile(path, want, 0600); err != nil {
 		t.Fatal(err)
 	}
-	err := CmdInit(true)
-	if err == nil || !strings.Contains(err.Error(), "no vault found") {
-		t.Errorf("restore without input: got %v, want no vault found", err)
+	if err := CmdInit("", ""); err == nil || !strings.Contains(err.Error(), "already exists") {
+		t.Errorf("init over an existing vault: got %v", err)
 	}
-	got, readErr := os.ReadFile(backup)
+	got, readErr := os.ReadFile(path)
 	if readErr != nil || !bytes.Equal(got, want) {
-		t.Errorf("backup changed: read error %v", readErr)
+		t.Errorf("vault changed: read error %v", readErr)
 	}
 	files, err := os.ReadDir(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(files) != 1 || files[0].Name() != "vault.enc.bak" {
-		t.Errorf("restore created files: %v", files)
+	if len(files) != 1 {
+		t.Errorf("refused init created files: %v", files)
+	}
+}
+
+func TestKitShowsEverythingButThePassphrase(t *testing.T) {
+	account := bytes.Repeat([]byte{0x01}, vault.AccountIDSize)
+	sk := bytes.Repeat([]byte{0x02}, vault.SecretKeySize)
+	kit := FormatKit("https://self.example", account, sk)
+	for _, want := range []string{"https://self.example", vault.FormatAccountID(account), vault.FormatSecretKey(sk), "Passphrase:  ____"} {
+		if !strings.Contains(kit, want) {
+			t.Fatalf("kit lacks %q:\n%s", want, kit)
+		}
+	}
+}
+
+func TestConfirmLastGroup(t *testing.T) {
+	sk := bytes.Repeat([]byte{0x02}, vault.SecretKeySize)
+	group := lastGroup(sk)
+	if len(group) != 5 || !strings.Contains(vault.FormatSecretKey(sk), "-"+group+"-") {
+		t.Fatalf("last group %q", group)
+	}
+	if err := confirmLastGroup(strings.NewReader("WRONG\n"+strings.ToLower(group)+"\n"), sk); err != nil {
+		t.Fatalf("retyped group refused: %v", err)
+	}
+	if err := confirmLastGroup(strings.NewReader("WRONG\n"), sk); err == nil {
+		t.Fatal("end of input confirmed the kit")
 	}
 }

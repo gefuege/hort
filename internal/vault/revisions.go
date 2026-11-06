@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"regexp"
 	"sort"
 	"time"
 )
@@ -123,12 +124,21 @@ func validID(id string) bool {
 	b, err := hex.DecodeString(id)
 	return err == nil && len(b) == 16 && id == hex.EncodeToString(b)
 }
-func validateVault(d *VaultData) error {
-	if d == nil || d.Version != 3 || !validID(d.SourceID) || d.Secrets == nil {
-		return fmt.Errorf("invalid v3 vault content")
+
+// fieldPattern is the field rule of §3.4; "" is the default field.
+var fieldPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)
+
+// validateSecrets applies the decoding rules of §3.4 to every entry. v3
+// revisions carry no field.
+func validateSecrets(secrets map[string]Entry, fields bool) error {
+	if secrets == nil {
+		return fmt.Errorf("missing secrets")
 	}
 	ids := make(map[string]bool)
-	for name, e := range d.Secrets {
+	for name, e := range secrets {
+		if name == "" {
+			return fmt.Errorf("empty entry name")
+		}
 		if e.Revisions == nil {
 			return fmt.Errorf("missing revisions for %q", name)
 		}
@@ -137,8 +147,8 @@ func validateVault(d *VaultData) error {
 				return fmt.Errorf("invalid or duplicate revision identity for %q", name)
 			}
 			ids[r.ID] = true
-			if r.Field != "" {
-				return fmt.Errorf("v3 revisions carry no field for %q", name)
+			if r.Field != "" && (!fields || !fieldPattern.MatchString(r.Field)) {
+				return fmt.Errorf("invalid field for %q", name)
 			}
 			if r.RecordedAt != nil {
 				_, offset := r.RecordedAt.Zone()
@@ -166,4 +176,32 @@ func validateVault(d *VaultData) error {
 		}
 	}
 	return nil
+}
+
+// mergeRevisions forms the union by revision identity. Identities are checked
+// vault-wide because validateSecrets rejects duplicates across entries. The
+// server sync merges pulled revisions with it (contract §6.6).
+func mergeRevisions(dst *VaultData, sources []*VaultData) int {
+	known := make(map[string]bool)
+	for _, entry := range dst.Secrets {
+		for _, r := range entry.Revisions {
+			known[r.ID] = true
+		}
+	}
+	added := 0
+	for _, source := range sources {
+		for name, incoming := range source.Secrets {
+			for _, r := range incoming.Revisions {
+				if known[r.ID] {
+					continue
+				}
+				known[r.ID] = true
+				entry := dst.Secrets[name]
+				entry.Revisions = append(entry.Revisions, r)
+				dst.Secrets[name] = entry
+				added++
+			}
+		}
+	}
+	return added
 }
