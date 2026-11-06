@@ -78,6 +78,18 @@ export function b64Decode(s: string): Uint8Array | null {
   return b64Encode(out) === s ? out : null;
 }
 
+export function b64urlEncode(b: Uint8Array): string {
+  return b64Encode(b).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+// Unpadded base64url (RFC 4648 §5), canonical form only, as WebAuthn uses it.
+export function b64urlDecode(s: string): Uint8Array | null {
+  if (!/^[A-Za-z0-9_-]*$/.test(s) || s.length % 4 === 1) return null;
+  const std = s.replace(/-/g, "+").replace(/_/g, "/");
+  const out = b64Decode(std + "=".repeat((4 - (std.length % 4)) % 4));
+  return out && b64urlEncode(out) === s ? out : null;
+}
+
 const CROCKFORD = "0123456789abcdefghjkmnpqrstvwxyz";
 
 // 16 bytes, most significant bit first, 26 lowercase symbols (vectors README pt. 4).
@@ -189,4 +201,13 @@ export function isPassphraseSlotBytes(bytes: Uint8Array): boolean {
   if (!outer || outer[1].length !== 12 || outer[2].length !== 48) return false;
   const argon = uncanon("hort/v4/argon\n", outer[0], 4);
   return !!argon && argon[0].length === 32 && argon[1].length === 4 && argon[2].length === 4 && argon[3].length === 1;
+}
+
+// Structural check of a passkey slot whose slot_params name credHash
+// (spec/vectors/passkey-slot.json): slot_params = canon("hort/v4/passkey\n", cred_hash).
+export function isPasskeySlotBytes(bytes: Uint8Array, credHash: Uint8Array): boolean {
+  const outer = uncanon("hort/v4/slot-bytes\n", bytes, 3);
+  if (!outer || outer[1].length !== 12 || outer[2].length !== 48) return false;
+  const params = uncanon("hort/v4/passkey\n", outer[0], 1);
+  return !!params && params[0].length === credHash.length && params[0].every((x, i) => x === credHash[i]);
 }

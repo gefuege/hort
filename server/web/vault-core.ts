@@ -363,7 +363,7 @@ export async function sealRevision(
 export async function openRevision(keys: AccountKeys, id: string, envelope: Uint8Array): Promise<{ name: string; revision: Revision }> {
   if (!ID.test(id)) throw new Error("invalid revision ID");
   const pt = await open(keys.rk, envelope, revAAD(keys.accountId, id));
-  const o: unknown = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(pt));
+  const o: unknown = JSON.parse(new TextDecoder("utf-8", { fatal: true, ignoreBOM: false }).decode(pt));
   if (!exactKeys(o, ["name", "revision"]) || typeof o.name !== "string" || o.name === "") throw new Error(`revision ${id}: invalid envelope`);
   const r = decodeRevision(o.revision);
   if (typeof r === "string") throw new Error(`revision ${id}: ${r}`);
@@ -377,7 +377,7 @@ const META_KEYS = ["name", "description", "field", "env", "context"];
 export async function openRequestMeta(keys: AccountKeys, requestId: string, metaCt: Uint8Array): Promise<RequestMeta> {
   if (!ID.test(requestId)) throw new Error("invalid request ID");
   const pt = await open(keys.rk, metaCt, canon("hort/v4/req-meta\n", keys.accountId, hexDecode(requestId, 16)!));
-  const o: unknown = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(pt));
+  const o: unknown = JSON.parse(new TextDecoder("utf-8", { fatal: true, ignoreBOM: false }).decode(pt));
   if (!exactKeys(o, META_KEYS) || META_KEYS.some((k) => typeof o[k] !== "string")) throw new Error(`request ${requestId}: invalid metadata`);
   return o as RequestMeta;
 }

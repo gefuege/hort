@@ -5,7 +5,8 @@ import { fail } from "./http";
 export const LIMITS = {
   create: [5, 3600], // account creations per IP
   slot: [10, 60], // slot fetches per IP and account
-  write: [60, 60], // writes per device (or "ak") and account
+  write: [60, 60], // writes per device (or "ak" or "session") and account
+  login: [30, 60], // passkey login options and verify calls per IP
 } as const;
 
 // Fixed-window counter, one instance per bucket and key. The key (which may

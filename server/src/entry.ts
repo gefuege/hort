@@ -1,6 +1,7 @@
 import api from "./index";
 
 export { Account } from "./account";
+export { Challenge } from "./challenge";
 export { RateLimiter } from "./rate-limiter";
 
 // Contract §8.3. Static assets get the same headers from public/_headers

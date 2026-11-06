@@ -1,13 +1,20 @@
-import { fail } from "./http";
+import type { AuthenticationResponseJSON } from "@simplewebauthn/server";
+import { SESSION_COOKIE, type RelyingParty, type SessionAuth } from "./account";
+import { issueChallenge } from "./challenge";
+import { fail, json } from "./http";
 import { rateLimit } from "./rate-limiter";
-import { accountIdDecode, b64Decode, hexDecode, type Signed } from "./wire";
+import { accountIdDecode, accountIdEncode, b64Decode, b64urlDecode, hexDecode, hexEncode, sha256, type Signed } from "./wire";
 
 export { Account } from "./account";
+export { Challenge } from "./challenge";
 export { RateLimiter } from "./rate-limiter";
 
 // Contract §6.2 and §6.6.
 const MAX_CLOCK_SKEW_SECONDS = 300;
 const MAX_BODY_BYTES = 64 * 1024;
+// A fulfil carries a set and a describe revision, each up to a 64 KiB
+// envelope, base64-encoded in JSON.
+const MAX_FULFILL_BODY_BYTES = 256 * 1024;
 
 type Bindings = Env & { REGISTRATION_TOKEN?: string };
 
@@ -34,8 +41,8 @@ function clientIp(request: Request): string {
   return `${all.slice(0, 4).map((g) => parseInt(g, 16).toString(16)).join(":")}::/64`;
 }
 
-// Reads at most MAX_BODY_BYTES from the stream and cancels it beyond that.
-async function readBody(request: Request): Promise<Uint8Array | null> {
+// Reads at most max bytes from the stream and cancels it beyond that.
+async function readBody(request: Request, max = MAX_BODY_BYTES): Promise<Uint8Array | null> {
   if (!request.body) return new Uint8Array();
   const reader = request.body.getReader();
   const chunks: Uint8Array[] = [];
@@ -44,7 +51,7 @@ async function readBody(request: Request): Promise<Uint8Array | null> {
     const { done, value } = await reader.read();
     if (done) break;
     length += value.length;
-    if (length > MAX_BODY_BYTES) {
+    if (length > max) {
       await reader.cancel();
       return null;
     }
@@ -91,6 +98,31 @@ async function readSigned(request: Request, url: URL, kind: "ak" | "device"): Pr
   return { accountId, device, method: request.method, pathWithQuery: url.pathname + url.search, timestamp, signature, body };
 }
 
+// Browser session (contract §5.5): the __Host-hort cookie names the account
+// and carries a random token; the account DO stores only its SHA-256.
+// State-changing calls also need Hort-CSRF: 1, which a cross-origin page
+// cannot send without a preflight, and an Origin equal to the site origin.
+async function readSession(request: Request, url: URL, write: boolean): Promise<SessionAuth | Response> {
+  const cookie = (request.headers.get("Cookie") ?? "").split(/;\s*/).find((c) => c.startsWith(`${SESSION_COOKIE}=`));
+  const [accountId, token] = (cookie?.slice(SESSION_COOKIE.length + 1) ?? "").split(".");
+  const tokenBytes = token ? b64urlDecode(token) : null;
+  if (!accountId || !accountIdDecode(accountId) || !tokenBytes || tokenBytes.length !== 32) {
+    return fail(401, "this endpoint requires a device signature or a passkey session");
+  }
+  if (write) {
+    if (request.headers.get("Hort-CSRF") !== "1") return fail(403, "missing Hort-CSRF header");
+    if (request.headers.get("Origin") !== url.origin) return fail(403, "cross-origin request refused");
+  }
+  return { accountId, session: hexEncode(await sha256(tokenBytes)) };
+}
+
+// Device signature when the request carries one, otherwise a session.
+function deviceOrSession(request: Request, url: URL, write: boolean): Promise<Signed | SessionAuth | Response> {
+  return request.headers.has("Hort-Signature") ? readSigned(request, url, "device") : readSession(request, url, write);
+}
+
+const relyingParty = (url: URL): RelyingParty => ({ origin: url.origin, id: url.hostname });
+
 async function route(request: Request, env: Bindings): Promise<Response> {
   const url = new URL(request.url);
   const path = url.pathname;
@@ -127,18 +159,19 @@ async function route(request: Request, env: Bindings): Promise<Response> {
       return accountStub(env, req.accountId).enrollDevice(req);
     }
     if (method === "GET") {
-      const req = await readSigned(request, url, "device");
+      const req = await deviceOrSession(request, url, false);
       if (req instanceof Response) return req;
       return accountStub(env, req.accountId).listDevices(req);
     }
     return fail(405, "method not allowed");
   }
 
+  // A device ID is 16 bytes of hex, a passkey ID the 32-byte credential hash.
   if ((m = path.match(/^\/api\/v1\/devices\/([^/]+)$/))) {
     if (method !== "DELETE") return fail(405, "method not allowed");
     const id = m[1];
-    if (!hexDecode(id, 16)) return fail(404, "device not found");
-    const req = await readSigned(request, url, "device");
+    if (!hexDecode(id, 16) && !hexDecode(id, 32)) return fail(404, "device not found");
+    const req = await deviceOrSession(request, url, true);
     if (req instanceof Response) return req;
     return accountStub(env, req.accountId).revokeDevice(req, id);
   }
@@ -158,7 +191,7 @@ async function route(request: Request, env: Bindings): Promise<Response> {
     }
     if (method === "GET") {
       if (url.search !== "?status=pending") return fail(400, "only ?status=pending is supported");
-      const req = await readSigned(request, url, "device");
+      const req = await deviceOrSession(request, url, false);
       if (req instanceof Response) return req;
       return accountStub(env, req.accountId).listPendingRequests(req);
     }
@@ -168,7 +201,7 @@ async function route(request: Request, env: Bindings): Promise<Response> {
   if ((m = path.match(/^\/api\/v1\/requests\/([^/]+)$/))) {
     if (method !== "GET") return fail(405, "method not allowed");
     if (!hexDecode(m[1], 16)) return fail(404, "request not found");
-    const req = await readSigned(request, url, "device");
+    const req = await deviceOrSession(request, url, false);
     if (req instanceof Response) return req;
     return accountStub(env, req.accountId).getRequest(req, m[1]);
   }
@@ -176,11 +209,61 @@ async function route(request: Request, env: Bindings): Promise<Response> {
   if ((m = path.match(/^\/api\/v1\/requests\/([^/]+)\/(decline|fulfill)$/))) {
     if (method !== "POST") return fail(405, "method not allowed");
     if (!hexDecode(m[1], 16)) return fail(404, "request not found");
-    // Fulfill needs a passkey session plus Hort-CSRF (contract §6.3), which S6.2 adds.
-    if (m[2] === "fulfill") return fail(401, "fulfilling a request requires a passkey session");
-    const req = await readSigned(request, url, "device");
+    if (m[2] === "fulfill") {
+      if (request.headers.has("Hort-Signature")) return fail(401, "fulfilling a request requires a passkey session");
+      const session = await readSession(request, url, true);
+      if (session instanceof Response) return session;
+      if (Number(request.headers.get("Content-Length") ?? 0) > MAX_FULFILL_BODY_BYTES) return fail(413, "request body exceeds 256 KiB");
+      const body = await readBody(request, MAX_FULFILL_BODY_BYTES);
+      if (!body) return fail(413, "request body exceeds 256 KiB");
+      return accountStub(env, session.accountId).fulfillRequest(session, m[1], body);
+    }
+    const req = await deviceOrSession(request, url, true);
     if (req instanceof Response) return req;
     return accountStub(env, req.accountId).declineRequest(req, m[1]);
+  }
+
+  if (path === "/api/v1/webauthn/register/options" || path === "/api/v1/webauthn/register/verify") {
+    if (method !== "POST") return fail(405, "method not allowed");
+    const req = await readSigned(request, url, "ak");
+    if (req instanceof Response) return req;
+    const stub = accountStub(env, req.accountId);
+    return path.endsWith("/options") ? stub.registerOptions(req, relyingParty(url)) : stub.registerVerify(req, relyingParty(url));
+  }
+
+  if (path === "/api/v1/webauthn/login/options") {
+    if (method !== "POST") return fail(405, "method not allowed");
+    const limited = await rateLimit(env, "login", clientIp(request));
+    if (limited) return limited;
+    const challenge = await issueChallenge(env, "login");
+    return json(200, { challenge, rpId: url.hostname, userVerification: "required", timeout: 300_000 });
+  }
+
+  if (path === "/api/v1/webauthn/login/verify") {
+    if (method !== "POST") return fail(405, "method not allowed");
+    const limited = await rateLimit(env, "login", clientIp(request));
+    if (limited) return limited;
+    const body = await readBody(request);
+    if (!body) return fail(413, "request body exceeds 64 KiB");
+    let response: AuthenticationResponseJSON;
+    try {
+      response = JSON.parse(new TextDecoder("utf-8", { fatal: true, ignoreBOM: false }).decode(body));
+    } catch {
+      return fail(400, "body must be a WebAuthn authentication response");
+    }
+    const handle = typeof response?.response?.userHandle === "string" ? b64urlDecode(response.response.userHandle) : null;
+    if (!handle || handle.length !== 16) return fail(401, "passkey not recognized or revoked");
+    return accountStub(env, accountIdEncode(handle)).loginVerify(response, relyingParty(url));
+  }
+
+  if (path === "/api/v1/session") {
+    if (method !== "DELETE") return fail(405, "method not allowed");
+    const session = await readSession(request, url, true);
+    if (session instanceof Response) return session;
+    const res = await accountStub(env, session.accountId).logout(session);
+    const cleared = new Response(res.body, res);
+    cleared.headers.set("Set-Cookie", `${SESSION_COOKIE}=; Max-Age=0; Path=/; Secure; HttpOnly; SameSite=Strict`);
+    return cleared;
   }
 
   return fail(404, "not found");

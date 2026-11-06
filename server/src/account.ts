@@ -1,29 +1,42 @@
+import {
+  verifyAuthenticationResponse,
+  verifyRegistrationResponse,
+  type AuthenticationResponseJSON,
+  type RegistrationResponseJSON,
+} from "@simplewebauthn/server";
 import { DurableObject } from "cloudflare:workers";
+import { consumeChallenge, issueChallenge } from "./challenge";
 import { asObject, fail, json, parseObject } from "./http";
 import { rateLimit } from "./rate-limiter";
 import {
   accountIdDecode,
   b64Decode,
   b64Encode,
+  b64urlDecode,
+  b64urlEncode,
   ed25519Verify,
   hexDecode,
+  hexEncode,
   isEd25519PublicKey,
+  isPasskeySlotBytes,
   isPassphraseSlotBytes,
+  sha256,
   slotSigMessage,
   verifyRequest,
   type Signed,
 } from "./wire";
 
-// Contract §6.5. Created together with the account, so a slot fetch for an
-// unknown account ID leaves no storage behind.
+// Contract §6.5, plus passkeys.id, account.devices_seen_at and sessions (S6.2,
+// see README "Schema"). Created together with the account, so a slot fetch
+// for an unknown account ID leaves no storage behind.
 const SCHEMA = `
 CREATE TABLE account   (id TEXT PRIMARY KEY, ak_pub BLOB NOT NULL, created_at INTEGER NOT NULL,
-                        devices_version INTEGER NOT NULL DEFAULT 0);
+                        devices_version INTEGER NOT NULL DEFAULT 0, devices_seen_at INTEGER);
 CREATE TABLE devices   (id TEXT PRIMARY KEY, pub BLOB NOT NULL, name TEXT NOT NULL,
                         created_at INTEGER NOT NULL, last_seen_at INTEGER, revoked_at INTEGER);
 CREATE TABLE slots     (id TEXT PRIMARY KEY, kind TEXT NOT NULL CHECK (kind IN ('passphrase','passkey')),
                         version INTEGER NOT NULL, blob BLOB NOT NULL, ak_sig BLOB NOT NULL, updated_at INTEGER NOT NULL);
-CREATE TABLE passkeys  (credential_id BLOB PRIMARY KEY, public_key BLOB NOT NULL, sign_count INTEGER NOT NULL,
+CREATE TABLE passkeys  (credential_id BLOB PRIMARY KEY, id TEXT NOT NULL UNIQUE, public_key BLOB NOT NULL, sign_count INTEGER NOT NULL,
                         slot_id TEXT REFERENCES slots(id), created_at INTEGER NOT NULL,
                         last_used_at INTEGER, revoked_at INTEGER);
 CREATE TABLE revisions (seq INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT NOT NULL UNIQUE, ct BLOB NOT NULL,
@@ -31,10 +44,17 @@ CREATE TABLE revisions (seq INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT NOT NULL 
 CREATE TABLE requests  (id TEXT PRIMARY KEY, status TEXT NOT NULL CHECK (status IN ('pending','fulfilled','declined','expired')),
                         meta_ct BLOB NOT NULL, from_device TEXT NOT NULL, created_at INTEGER NOT NULL,
                         expires_at INTEGER NOT NULL, revision_ids TEXT);
+CREATE TABLE sessions  (token_hash TEXT PRIMARY KEY, credential_id BLOB NOT NULL, created_at INTEGER NOT NULL,
+                        expires_at INTEGER NOT NULL);
 `;
 
 // Contract §6.6.
 const MAX_ACTIVE_DEVICES = 20;
+const MAX_ACTIVE_PASSKEYS = 10;
+const PASSKEY_LIMIT = `passkey limit reached (${MAX_ACTIVE_PASSKEYS} active passkeys); revoke one first`;
+const SESSION_SECONDS = 12 * 60 * 60;
+export const SESSION_COOKIE = "__Host-hort";
+const SESSION_EXPIRED = "session expired or signed out; sign in with your passkey again";
 const PASSPHRASE_SLOT = "passphrase";
 const MAX_PENDING_REQUESTS = 50;
 const MAX_ENVELOPE_BYTES = 64 * 1024;
@@ -50,6 +70,15 @@ type DeviceRow = { id: string; pub: ArrayBuffer; name: string; created_at: numbe
 type SlotRow = { version: number; blob: ArrayBuffer; ak_sig: ArrayBuffer };
 type Slot = { version: number; bytes: Uint8Array; akSig: Uint8Array };
 type Device = { id: string; pub: Uint8Array; name: string };
+type PasskeyRow = { credential_id: ArrayBuffer; id: string; public_key: ArrayBuffer; sign_count: number; slot_id: string | null;
+  created_at: number; last_used_at: number | null; revoked_at: number | null };
+
+// A browser session: the account from the cookie and SHA-256 of its token,
+// after the Worker checked Hort-CSRF and Origin for state-changing calls.
+export type SessionAuth = { accountId: string; session: string };
+type Auth = Signed | SessionAuth;
+// WebAuthn relying party, taken from the request URL the Worker serves.
+export type RelyingParty = { origin: string; id: string };
 type RequestRow = { id: string; status: string; meta_ct: ArrayBuffer; from_device: string; created_at: number; revision_ids: string | null };
 
 const now = () => Math.floor(Date.now() / 1000);
@@ -73,15 +102,22 @@ async function parseDevice(id: unknown, pub: unknown, name: unknown): Promise<De
   return { id, pub: key, name: n };
 }
 
-// Parses {version, bytes, ak_sig} of a passphrase slot and verifies ak_sig.
-async function parseSlot(obj: Record<string, unknown>, accountId: string, akPub: Uint8Array): Promise<Slot | string> {
+// Parses {version, bytes, ak_sig} of a slot, checks the encoding of its kind
+// and verifies ak_sig over slot_id and slot_version.
+async function parseSlot(
+  obj: Record<string, unknown>,
+  accountId: string,
+  akPub: Uint8Array,
+  slotId: string,
+  validBytes: (bytes: Uint8Array) => boolean,
+): Promise<Slot | string> {
   const version = obj.version;
   if (typeof version !== "number" || !Number.isSafeInteger(version) || version < 1) return "slot version must be a positive integer";
   const bytes = typeof obj.bytes === "string" ? b64Decode(obj.bytes) : null;
-  if (!bytes || !isPassphraseSlotBytes(bytes)) return "slot bytes are not a passphrase slot encoding";
+  if (!bytes || !validBytes(bytes)) return `slot bytes are not a ${slotId === PASSPHRASE_SLOT ? "passphrase" : "passkey"} slot encoding for this slot`;
   const akSig = typeof obj.ak_sig === "string" ? b64Decode(obj.ak_sig) : null;
   if (!akSig || akSig.length !== 64) return "slot ak_sig must be a base64 Ed25519 signature";
-  const msg = slotSigMessage(accountIdDecode(accountId)!, PASSPHRASE_SLOT, version, bytes);
+  const msg = slotSigMessage(accountIdDecode(accountId)!, slotId, version, bytes);
   if (!(await ed25519Verify(akPub, akSig, msg))) return "slot ak_sig does not verify against the account key";
   return { version, bytes, akSig };
 }
@@ -111,12 +147,25 @@ export class Account extends DurableObject<Env> {
     return this.sql.exec<{ v: number }>("UPDATE account SET devices_version = devices_version + 1 RETURNING devices_version AS v").one().v;
   }
 
-  // Verifies the signature against the account key ("ak") or the device key,
-  // applies the write rate limit and rejects revoked devices. The revocation
-  // check runs after the last await, so a caller that continues without
-  // awaiting acts on current device state.
-  private async authenticate(req: Signed, write: boolean): Promise<{ account: AccountRow } | Response> {
+  private sessionValid(tokenHash: string): boolean {
+    return this.sql.exec("SELECT 1 FROM sessions WHERE token_hash = ? AND expires_at > ?", tokenHash, now()).toArray().length > 0;
+  }
+
+  // Verifies a session, or the signature against the account key ("ak") or
+  // the device key; applies the write rate limit and rejects revoked devices
+  // and ended sessions. These checks run after the last await, so a caller
+  // that continues without awaiting acts on current state.
+  private async authenticate(req: Auth, write: boolean): Promise<{ account: AccountRow } | Response> {
     const account = this.account();
+    if ("session" in req) {
+      if (!account || account.id !== req.accountId) return fail(401, SESSION_EXPIRED);
+      if (write) {
+        const limited = await rateLimit(this.env, "write", `${req.accountId}:session`);
+        if (limited) return limited;
+      }
+      if (!this.sessionValid(req.session)) return fail(401, SESSION_EXPIRED);
+      return { account };
+    }
     if (!account || account.id !== req.accountId) return fail(404, "account not found");
     const pub = req.device === "ak" ? account.ak_pub : this.device(req.device)?.pub;
     if (!pub) return fail(401, "unknown device");
@@ -145,7 +194,7 @@ export class Account extends DurableObject<Env> {
 
     const slotObj = asObject(body.slot, ["id", "version", "bytes", "ak_sig"]);
     if (!slotObj || slotObj.id !== PASSPHRASE_SLOT) return fail(400, 'slot must be {id: "passphrase", version, bytes, ak_sig}');
-    const slot = await parseSlot(slotObj, req.accountId, akPub);
+    const slot = await parseSlot(slotObj, req.accountId, akPub, PASSPHRASE_SLOT, isPassphraseSlotBytes);
     if (typeof slot === "string") return fail(400, slot);
     const devObj = asObject(body.device, ["id", "pub", "name"]);
     if (!devObj) return fail(400, "device must be {id, pub, name}");
@@ -213,22 +262,36 @@ export class Account extends DurableObject<Env> {
     return json(201, { devices_version: version });
   }
 
-  // GET /api/v1/devices, device-signed.
-  async listDevices(req: Signed): Promise<Response> {
+  // GET /api/v1/devices, device-signed or session: devices and passkeys. A
+  // session also gets last_visit_at, the time of the previous session call,
+  // for the security notices on /devices, and moves it to now.
+  async listDevices(req: Auth): Promise<Response> {
     const auth = await this.authenticate(req, false);
     if (auth instanceof Response) return auth;
     const devices = this.sql
       .exec<DeviceRow>("SELECT id, name, created_at, last_seen_at, revoked_at FROM devices ORDER BY created_at, id")
       .toArray()
       .map(({ id, name, created_at, last_seen_at, revoked_at }) => ({ id, name, created_at, last_seen_at, revoked_at }));
-    return json(200, { devices, devices_version: this.account()!.devices_version });
+    const passkeys = this.sql
+      .exec<PasskeyRow>("SELECT id, slot_id, created_at, last_used_at, revoked_at FROM passkeys ORDER BY created_at, id")
+      .toArray()
+      .map(({ id, slot_id, created_at, last_used_at, revoked_at }) => ({ id, prf: slot_id !== null, created_at, last_used_at, revoked_at }));
+    const body: Record<string, unknown> = { devices, passkeys, devices_version: auth.account.devices_version };
+    if ("session" in req) {
+      body.last_visit_at = this.sql.exec<{ t: number | null }>("SELECT devices_seen_at AS t FROM account").one().t;
+      this.sql.exec("UPDATE account SET devices_seen_at = ?", now());
+    }
+    return json(200, body);
   }
 
-  // DELETE /api/v1/devices/{id}, device-signed. Revoking twice is idempotent.
-  async revokeDevice(req: Signed, id: string): Promise<Response> {
+  // DELETE /api/v1/devices/{id}, device-signed or session. A 64-hex ID names a
+  // passkey: revoking it deletes its slot and ends its sessions. Revoking
+  // twice is idempotent.
+  async revokeDevice(req: Auth, id: string): Promise<Response> {
     const auth = await this.authenticate(req, true);
     if (auth instanceof Response) return auth;
-    if (id === req.device) return fail(409, "a device cannot revoke itself");
+    if (id.length === 64) return this.revokePasskey(id);
+    if (!("session" in req) && id === req.device) return fail(409, "a device cannot revoke itself");
     const device = this.device(id);
     if (!device) return fail(404, "device not found");
     if (device.revoked_at !== null) return json(200, { devices_version: this.account()!.devices_version });
@@ -239,6 +302,166 @@ export class Account extends DurableObject<Env> {
     return json(200, { devices_version: version });
   }
 
+  private revokePasskey(id: string): Response {
+    const passkey = this.sql.exec<PasskeyRow>("SELECT credential_id, slot_id, revoked_at FROM passkeys WHERE id = ?", id).toArray()[0];
+    if (!passkey) return fail(404, "passkey not found");
+    if (passkey.revoked_at !== null) return json(200, { devices_version: this.account()!.devices_version });
+    const version = this.ctx.storage.transactionSync(() => {
+      this.sql.exec("UPDATE passkeys SET revoked_at = ?, slot_id = NULL WHERE id = ?", now(), id);
+      if (passkey.slot_id) this.sql.exec("DELETE FROM slots WHERE id = ?", passkey.slot_id);
+      this.sql.exec("DELETE FROM sessions WHERE credential_id = ?", passkey.credential_id);
+      return this.bumpDevicesVersion();
+    });
+    return json(200, { devices_version: version });
+  }
+
+  private activePasskeys(): number {
+    return this.sql.exec<{ n: number }>("SELECT count(*) AS n FROM passkeys WHERE revoked_at IS NULL").one().n;
+  }
+
+  // POST /api/v1/webauthn/register/options, AK-signed with an empty body
+  // (contract §5.4). The browser adds the PRF extension itself, because it
+  // derives the eval salt from the account ID.
+  async registerOptions(req: Signed, rp: RelyingParty): Promise<Response> {
+    const auth = await this.authenticate(req, true);
+    if (auth instanceof Response) return auth;
+    if (req.body.length !== 0) return fail(400, "body must be empty");
+    if (this.activePasskeys() >= MAX_ACTIVE_PASSKEYS) return fail(429, PASSKEY_LIMIT);
+    const challenge = await issueChallenge(this.env, `register:${req.accountId}`);
+    const exclude = this.sql
+      .exec<{ credential_id: ArrayBuffer }>("SELECT credential_id FROM passkeys WHERE revoked_at IS NULL")
+      .toArray()
+      .map((r) => ({ type: "public-key", id: b64urlEncode(new Uint8Array(r.credential_id)) }));
+    return json(200, {
+      challenge,
+      rp: { id: rp.id, name: "Hort" },
+      user: { id: b64urlEncode(accountIdDecode(req.accountId)!), name: req.accountId, displayName: `Hort ${req.accountId}` },
+      pubKeyCredParams: [-8, -7, -257].map((alg) => ({ type: "public-key", alg })),
+      authenticatorSelection: { residentKey: "required", requireResidentKey: true, userVerification: "required" },
+      attestation: "none",
+      excludeCredentials: exclude,
+      timeout: 300_000,
+    });
+  }
+
+  // POST /api/v1/webauthn/register/verify {response, slot}, AK-signed. The
+  // challenge must come from register/options of the same account. slot is
+  // null for a passkey without PRF; otherwise it must be the passkey slot of
+  // the verified credential, signed by AK.
+  async registerVerify(req: Signed, rp: RelyingParty): Promise<Response> {
+    const auth = await this.authenticate(req, true);
+    if (auth instanceof Response) return auth;
+    const body = parseObject(req.body, ["response", "slot"]);
+    if (!body) return fail(400, "body must be {response, slot}");
+    let info;
+    try {
+      const result = await verifyRegistrationResponse({
+        response: body.response as RegistrationResponseJSON,
+        expectedChallenge: (c) => consumeChallenge(this.env, c, `register:${req.accountId}`),
+        expectedOrigin: rp.origin,
+        expectedRPID: rp.id,
+        requireUserVerification: true,
+      });
+      if (!result.verified) return fail(400, "passkey registration did not verify");
+      info = result.registrationInfo;
+    } catch (err) {
+      return fail(400, `passkey registration did not verify: ${(err as Error).message}`);
+    }
+    const credentialId = b64urlDecode(info.credential.id);
+    if (!credentialId) return fail(400, "invalid credential ID");
+    const credHash = await sha256(credentialId);
+    const id = hexEncode(credHash);
+    const slotId = `passkey:${id}`;
+    let slot: Slot | null = null;
+    if (body.slot !== null) {
+      const obj = asObject(body.slot, ["version", "bytes", "ak_sig"]);
+      if (!obj) return fail(400, "slot must be null or {version, bytes, ak_sig}");
+      const parsed = await parseSlot(obj, req.accountId, new Uint8Array(auth.account.ak_pub), slotId, (b) => isPasskeySlotBytes(b, credHash));
+      if (typeof parsed === "string") return fail(400, parsed);
+      slot = parsed;
+    }
+
+    // No await below: limit, uniqueness and inserts are one atomic step.
+    if (this.sql.exec("SELECT 1 FROM passkeys WHERE credential_id = ?", credentialId).toArray().length) return fail(409, "passkey is already registered");
+    if (this.activePasskeys() >= MAX_ACTIVE_PASSKEYS) return fail(429, PASSKEY_LIMIT);
+    const t = now();
+    const version = this.ctx.storage.transactionSync(() => {
+      if (slot) {
+        this.sql.exec(
+          "INSERT INTO slots (id, kind, version, blob, ak_sig, updated_at) VALUES (?, 'passkey', ?, ?, ?, ?)",
+          slotId, slot.version, slot.bytes, slot.akSig, t,
+        );
+      }
+      this.sql.exec(
+        "INSERT INTO passkeys (credential_id, id, public_key, sign_count, slot_id, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+        credentialId, id, info.credential.publicKey, info.credential.counter, slot ? slotId : null, t,
+      );
+      return this.bumpDevicesVersion();
+    });
+    return json(201, { id, prf: slot !== null, devices_version: version });
+  }
+
+  // POST /api/v1/webauthn/login/verify (contract §5.4). The Worker routed by
+  // the user handle and rate-limited the call. Verifies origin, rpId, UV,
+  // signature and sign_count, consumes the login challenge, then opens a
+  // 12 h session and returns the passkey slot, if any.
+  async loginVerify(response: AuthenticationResponseJSON, rp: RelyingParty): Promise<Response> {
+    const account = this.account();
+    const credentialId = typeof response.id === "string" ? b64urlDecode(response.id) : null;
+    const row = account && credentialId
+      ? this.sql.exec<PasskeyRow>("SELECT * FROM passkeys WHERE credential_id = ?", credentialId).toArray()[0]
+      : undefined;
+    if (!account || !credentialId || !row || row.revoked_at !== null) return fail(401, "passkey not recognized or revoked");
+    let newCounter: number;
+    try {
+      const result = await verifyAuthenticationResponse({
+        response,
+        expectedChallenge: (c) => consumeChallenge(this.env, c, "login"),
+        expectedOrigin: rp.origin,
+        expectedRPID: rp.id,
+        credential: { id: response.id, publicKey: new Uint8Array(row.public_key), counter: row.sign_count },
+        requireUserVerification: true,
+      });
+      if (!result.verified) return fail(401, "passkey sign-in did not verify");
+      newCounter = result.authenticationInfo.newCounter;
+    } catch (err) {
+      return fail(401, `passkey sign-in did not verify: ${(err as Error).message}`);
+    }
+    const token = crypto.getRandomValues(new Uint8Array(32));
+    const tokenHash = hexEncode(await sha256(token));
+
+    // No await below. The passkey may have been revoked or used meanwhile.
+    const current = this.sql.exec<PasskeyRow>("SELECT revoked_at, slot_id, sign_count FROM passkeys WHERE credential_id = ?", credentialId).one();
+    if (current.revoked_at !== null) return fail(401, "passkey not recognized or revoked");
+    if ((newCounter > 0 || current.sign_count > 0) && newCounter <= current.sign_count) return fail(401, "passkey signature counter did not increase");
+    const t = now();
+    this.ctx.storage.transactionSync(() => {
+      this.sql.exec("UPDATE passkeys SET sign_count = ?, last_used_at = ? WHERE credential_id = ?", newCounter, t, credentialId);
+      this.sql.exec("DELETE FROM sessions WHERE expires_at <= ?", t);
+      this.sql.exec("INSERT INTO sessions (token_hash, credential_id, created_at, expires_at) VALUES (?, ?, ?, ?)", tokenHash, credentialId, t, t + SESSION_SECONDS);
+    });
+    const slot = current.slot_id ? this.sql.exec<SlotRow>("SELECT version, blob, ak_sig FROM slots WHERE id = ?", current.slot_id).one() : null;
+    const res = json(200, {
+      account_id: account.id,
+      ak_pub: b64Encode(new Uint8Array(account.ak_pub)),
+      credential_id: response.id,
+      slot: slot && {
+        id: current.slot_id,
+        version: slot.version,
+        bytes: b64Encode(new Uint8Array(slot.blob)),
+        ak_sig: b64Encode(new Uint8Array(slot.ak_sig)),
+      },
+    });
+    res.headers.set("Set-Cookie", `${SESSION_COOKIE}=${account.id}.${b64urlEncode(token)}; Max-Age=${SESSION_SECONDS}; Path=/; Secure; HttpOnly; SameSite=Strict`);
+    return res;
+  }
+
+  // DELETE /api/v1/session: sign out. The Worker clears the cookie.
+  async logout(req: SessionAuth): Promise<Response> {
+    if (this.account()?.id === req.accountId) this.sql.exec("DELETE FROM sessions WHERE token_hash = ?", req.session);
+    return new Response(null, { status: 204 });
+  }
+
   // PUT /api/v1/slots/{slot_id}, AK-signed (contract §2.2, §6.3).
   async putSlot(req: Signed, slotId: string): Promise<Response> {
     const auth = await this.authenticate(req, true);
@@ -246,7 +469,7 @@ export class Account extends DurableObject<Env> {
     if (slotId !== PASSPHRASE_SLOT) return fail(404, "slot not found");
     const body = parseObject(req.body, ["version", "bytes", "ak_sig"]);
     if (!body) return fail(400, "body must be {version, bytes, ak_sig}");
-    const slot = await parseSlot(body, req.accountId, new Uint8Array(auth.account.ak_pub));
+    const slot = await parseSlot(body, req.accountId, new Uint8Array(auth.account.ak_pub), PASSPHRASE_SLOT, isPassphraseSlotBytes);
     if (typeof slot === "string") return fail(400, slot);
 
     // No await below: version check and update are one atomic step.
@@ -297,7 +520,7 @@ export class Account extends DurableObject<Env> {
   }
 
   // GET /api/v1/requests/{id}, device-signed.
-  async getRequest(req: Signed, id: string): Promise<Response> {
+  async getRequest(req: Auth, id: string): Promise<Response> {
     const auth = await this.authenticate(req, false);
     if (auth instanceof Response) return auth;
     this.expireDue();
@@ -311,7 +534,7 @@ export class Account extends DurableObject<Env> {
   }
 
   // GET /api/v1/requests?status=pending, device-signed; oldest first.
-  async listPendingRequests(req: Signed): Promise<Response> {
+  async listPendingRequests(req: Auth): Promise<Response> {
     const auth = await this.authenticate(req, false);
     if (auth instanceof Response) return auth;
     this.expireDue();
@@ -323,7 +546,7 @@ export class Account extends DurableObject<Env> {
   }
 
   // POST /api/v1/requests/{id}/decline, device-signed. Declining twice is idempotent.
-  async declineRequest(req: Signed, id: string): Promise<Response> {
+  async declineRequest(req: Auth, id: string): Promise<Response> {
     const auth = await this.authenticate(req, true);
     if (auth instanceof Response) return auth;
     this.expireDue();
@@ -335,11 +558,13 @@ export class Account extends DurableObject<Env> {
     return json(200, { status: "declined" });
   }
 
-  // POST /api/v1/requests/{id}/fulfill {revisions:[{id, ct}]} (contract §7.3).
-  // Called by the Worker only after a passkey session and Hort-CSRF check
-  // (S6.2), so it takes no signature. Revisions and status change in one
-  // transaction. Revisions already stored (by ID) count as duplicates.
-  async fulfillRequest(id: string, body: Uint8Array): Promise<Response> {
+  // POST /api/v1/requests/{id}/fulfill {revisions:[{id, ct}]} (contract §7.3),
+  // session only; the Worker checked Hort-CSRF and Origin. Revisions and
+  // status change in one transaction. Revisions already stored (by ID) count
+  // as duplicates.
+  async fulfillRequest(req: SessionAuth, id: string, body: Uint8Array): Promise<Response> {
+    const auth = await this.authenticate(req, true);
+    if (auth instanceof Response) return auth;
     const parsed = parseObject(body, ["revisions"]);
     const list = parsed && Array.isArray(parsed.revisions) ? parsed.revisions : null;
     if (!list || list.length < 1 || list.length > MAX_PUSH_REVISIONS) {
@@ -356,7 +581,7 @@ export class Account extends DurableObject<Env> {
     }
 
     // No await below: state check and writes are one atomic step.
-    if (!this.account()) return fail(404, "account not found");
+    if (!this.sessionValid(req.session)) return fail(401, SESSION_EXPIRED);
     this.expireDue();
     const r = this.request(id);
     if (!r) return fail(404, "request not found");

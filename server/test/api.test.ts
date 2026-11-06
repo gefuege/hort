@@ -6,6 +6,34 @@ import slotVectors from "../../spec/vectors/slot.json";
 import worker from "../src/index";
 import { jurisdictionCalls } from "./setup";
 import {
+  TOKEN,
+  hex,
+  random,
+  nowSeconds,
+  randomIp,
+  keyFromSeed,
+  newKey,
+  sign,
+  signedRequest,
+  call,
+  makeSlot,
+  slotJson,
+  createBody,
+  createCall,
+  vectorFixture,
+  randomFixture,
+  created,
+  enroll,
+  listDevices,
+  fetchSlot,
+  putSlot,
+  type Call,
+  type Fixture,
+  type Key,
+  type Slot,
+} from "./helpers";
+import { session, sessionFetch } from "./passkey";
+import {
   accountIdDecode,
   accountIdEncode,
   b64Encode,
@@ -18,140 +46,6 @@ import {
   str,
   u32,
 } from "../src/wire";
-
-const TOKEN = "test-registration-token";
-const hex = (s: string) => hexDecode(s, s.length / 2)!;
-const random = (n: number) => crypto.getRandomValues(new Uint8Array(n));
-const nowSeconds = () => Math.floor(Date.now() / 1000);
-const randomIp = () => `10.${random(3).join(".")}`;
-
-type Key = { priv: CryptoKey; pub: Uint8Array };
-
-async function keyFromSeed(seed: Uint8Array): Promise<Key> {
-  const pkcs8 = concat([hex("302e020100300506032b657004220420"), seed]);
-  const priv = await crypto.subtle.importKey("pkcs8", pkcs8, { name: "Ed25519" }, true, ["sign"]);
-  const jwk = (await crypto.subtle.exportKey("jwk", priv)) as JsonWebKey;
-  const pub = Uint8Array.from(atob(jwk.x!.replace(/-/g, "+").replace(/_/g, "/")), (c) => c.charCodeAt(0));
-  return { priv, pub };
-}
-
-const newKey = () => keyFromSeed(random(32));
-
-async function sign(key: Key, msg: Uint8Array): Promise<Uint8Array> {
-  return new Uint8Array(await crypto.subtle.sign({ name: "Ed25519" }, key.priv, msg));
-}
-
-type Call = {
-  account: string;
-  device: string; // "ak" or hex device ID
-  key: Key;
-  method: string;
-  path: string;
-  body?: string;
-  ts?: number;
-  headers?: Record<string, string>;
-  tamperBody?: string; // sent instead of the signed body
-};
-
-async function signedRequest(c: Call): Promise<Request> {
-  const body = c.body ?? "";
-  const ts = c.ts ?? nowSeconds();
-  const device = c.device === "ak" ? str("ak") : hex(c.device);
-  const msg = await requestMessage(accountIdDecode(c.account)!, device, c.method, c.path, ts, str(body));
-  return new Request(`https://hort.test${c.path}`, {
-    method: c.method,
-    body: c.method === "GET" ? undefined : (c.tamperBody ?? body),
-    headers: {
-      "Hort-Account": c.account,
-      "Hort-Device": c.device,
-      "Hort-Timestamp": String(ts),
-      "Hort-Signature": b64Encode(await sign(c.key, msg)),
-      "CF-Connecting-IP": randomIp(),
-      ...c.headers,
-    },
-  });
-}
-
-async function call(c: Call): Promise<Response> {
-  return exports.default.fetch(await signedRequest(c));
-}
-
-type Slot = { version: number; bytes: Uint8Array; akSig: Uint8Array };
-
-async function makeSlot(accountId: Uint8Array, ak: Key, version: number): Promise<Slot> {
-  const params = canon("hort/v4/argon\n", random(32), u32(3), u32(65536), new Uint8Array([4]));
-  const bytes = canon("hort/v4/slot-bytes\n", params, random(12), random(48));
-  return { version, bytes, akSig: await sign(ak, slotSigMessage(accountId, "passphrase", version, bytes)) };
-}
-
-const slotJson = (s: Slot) => ({ version: s.version, bytes: b64Encode(s.bytes), ak_sig: b64Encode(s.akSig) });
-
-type Fixture = { account: string; ak: Key; deviceId: string; device: Key; slot: Slot };
-
-function createBody(f: Fixture): string {
-  return JSON.stringify({
-    account_id: f.account,
-    ak_pub: b64Encode(f.ak.pub),
-    slot: { id: "passphrase", ...slotJson(f.slot) },
-    device: { id: f.deviceId, pub: b64Encode(f.device.pub), name: "macos-ab12" },
-  });
-}
-
-function createCall(f: Fixture, extra: Partial<Call> = {}): Call {
-  return {
-    account: f.account,
-    device: "ak",
-    key: f.ak,
-    method: "POST",
-    path: "/api/v1/accounts",
-    body: createBody(f),
-    headers: { "Hort-Registration-Token": TOKEN },
-    ...extra,
-  };
-}
-
-// The account from the shared vectors: real AK, real slot and ak_sig.
-async function vectorFixture(): Promise<Fixture> {
-  const v = slotVectors.vectors[0];
-  const ak = await keyFromSeed(hex(keyVectors.vectors[0].aks_hex));
-  expect(hexEncode(ak.pub)).toBe(v.ak_public_hex);
-  return {
-    account: accountIdEncode(hex(v.account_id_hex)),
-    ak,
-    deviceId: hexEncode(random(16)),
-    device: await newKey(),
-    slot: { version: v.slot_version, bytes: hex(v.slot_bytes_hex), akSig: hex(v.ak_sig_hex) },
-  };
-}
-
-async function randomFixture(): Promise<Fixture> {
-  const id = random(16);
-  const ak = await newKey();
-  return { account: accountIdEncode(id), ak, deviceId: hexEncode(random(16)), device: await newKey(), slot: await makeSlot(id, ak, 1) };
-}
-
-async function created(f: Fixture): Promise<Fixture> {
-  const res = await call(createCall(f));
-  expect(res.status, await res.clone().text()).toBe(201);
-  return f;
-}
-
-async function enroll(f: Fixture): Promise<{ id: string; key: Key; res: Response }> {
-  const id = hexEncode(random(16));
-  const key = await newKey();
-  const body = JSON.stringify({ device_id: id, pub: b64Encode(key.pub), name: "linux-zz99" });
-  const res = await call({ account: f.account, device: "ak", key: f.ak, method: "POST", path: "/api/v1/devices", body });
-  return { id, key, res };
-}
-
-const listDevices = (f: Fixture, deviceId = f.deviceId, key = f.device) =>
-  call({ account: f.account, device: deviceId, key, method: "GET", path: "/api/v1/devices" });
-
-const fetchSlot = (account: string, ip = randomIp()) =>
-  exports.default.fetch(new Request(`https://hort.test/api/v1/accounts/${account}/slot`, { headers: { "CF-Connecting-IP": ip } }));
-
-const putSlot = (f: Fixture, slot: Slot, key = f.ak, account = f.account) =>
-  call({ account, device: "ak", key, method: "PUT", path: "/api/v1/slots/passphrase", body: JSON.stringify(slotJson(slot)) });
 
 describe("POST /api/v1/accounts", () => {
   it("creates an account from the vector slot and AK, and a replay is idempotent", async () => {
@@ -467,8 +361,12 @@ const listPending = (f: Fixture) =>
   call({ account: f.account, device: f.deviceId, key: f.device, method: "GET", path: "/api/v1/requests?status=pending" });
 const declineRequest = (f: Fixture, id: string, deviceId = f.deviceId, key = f.device) =>
   call({ account: f.account, device: deviceId, key, method: "POST", path: `/api/v1/requests/${id}/decline` });
-const fulfill = (f: Fixture, id: string, body: unknown) =>
-  env.ACCOUNT.getByName(f.account).fulfillRequest(id, str(JSON.stringify(body)));
+// Fulfil runs over HTTP with a passkey session, one per fixture.
+const sessions = new WeakMap<Fixture, Promise<string>>();
+const fulfill = async (f: Fixture, id: string, body: unknown) => {
+  if (!sessions.has(f)) sessions.set(f, session(f));
+  return sessionFetch(await sessions.get(f)!, "POST", `/api/v1/requests/${id}/fulfill`, body);
+};
 
 type Info = { status: string; meta_ct: string; revision_ids: string[] };
 const info = async (f: Fixture, id: string) => (await (await getRequest(f, id)).json()) as Info;
@@ -629,13 +527,23 @@ describe("requests", () => {
     expect((await fulfill(f, a.id, { revisions: [{ id: rid(), ct: b64Encode(new Uint8Array(64 * 1024)) }] })).status).toBe(200);
   });
 
-  it("does not wire fulfill over HTTP before the session exists", async () => {
+  it("fulfills only with a session, Hort-CSRF and the site origin, never with a device signature", async () => {
     const f = await created(await randomFixture());
     const a = { id: rid(), meta_ct: metaCt() };
     await createRequest(f, a);
-    const res = await call({ account: f.account, device: f.deviceId, key: f.device, method: "POST", path: `/api/v1/requests/${a.id}/fulfill`, body: JSON.stringify({ revisions: [revision()] }) });
+    const body = { revisions: [revision()] };
+    const res = await call({ account: f.account, device: f.deviceId, key: f.device, method: "POST", path: `/api/v1/requests/${a.id}/fulfill`, body: JSON.stringify(body) });
     expect(res.status).toBe(401);
+    const cookie = await session(f);
+    const path = `/api/v1/requests/${a.id}/fulfill`;
+    expect((await sessionFetch(cookie, "POST", path, body, { "Hort-CSRF": "" })).status).toBe(403);
+    expect((await sessionFetch(cookie, "POST", path, body, { Origin: "https://evil.test" })).status).toBe(403);
+    expect((await sessionFetch("", "POST", path, body)).status).toBe(401);
     expect((await info(f, a.id)).status).toBe("pending");
+    const big = await sessionFetch(cookie, "POST", path, { revisions: [{ id: rid(), ct: b64Encode(new Uint8Array(200 * 1024)) }] });
+    expect(big.status).toBe(413);
+    expect((await sessionFetch(cookie, "POST", path, body)).status).toBe(200);
+    expect((await info(f, a.id)).status).toBe("fulfilled");
   });
 
   it("isolates accounts: another account's request ID is 404 and untouched", async () => {

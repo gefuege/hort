@@ -7,8 +7,12 @@
   "durable_objects": {
     "bindings": [
       { "name": "ACCOUNT", "class_name": "Account" },
-      { "name": "RATE_LIMITER", "class_name": "RateLimiter" }
+      { "name": "RATE_LIMITER", "class_name": "RateLimiter" },
+      { "name": "CHALLENGE", "class_name": "Challenge" }
     ]
   },
-  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Account", "RateLimiter"] }]
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["Account", "RateLimiter"] },
+    { "tag": "v2", "new_sqlite_classes": ["Challenge"] }
+  ]
 }
