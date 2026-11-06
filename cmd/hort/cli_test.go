@@ -85,13 +85,13 @@ func TestCLIRoundTripInitSetLockUnlockGet(t *testing.T) {
 	}
 	wantError(t, hort(t, home, "init"), 1, "already exists")
 
-	hortOK(t, home, "--set-secret", "token", "--value", "value", "--env", "prod")
-	wantStdout(t, hort(t, home, "--secret", "token", "--env", "prod"), "value")
+	hortOK(t, home, "set", "token", "--value", "value", "--env", "prod")
+	wantStdout(t, hort(t, home, "get", "token", "--env", "prod"), "value")
 
 	hortOK(t, home, "lock")
-	wantError(t, hort(t, home, "--secret", "token", "--env", "prod"), 2, "locked")
+	wantError(t, hort(t, home, "get", "token", "--env", "prod"), 2, "locked")
 	hortOK(t, home, "unlock")
-	wantStdout(t, hort(t, home, "--secret", "token", "--env", "prod"), "value")
+	wantStdout(t, hort(t, home, "get", "token", "--env", "prod"), "value")
 
 	var status map[string]any
 	if err := json.Unmarshal([]byte(hortOK(t, home, "status", "--json").stdout), &status); err != nil {
@@ -112,7 +112,7 @@ func TestCLIPassphraseChange(t *testing.T) {
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
 	hortOK(t, home, "init")
-	hortOK(t, home, "--set-secret", "token", "--value", "value")
+	hortOK(t, home, "set", "token", "--value", "value")
 	if got := hortEnv(t, home, []string{"HORT_PASSPHRASE=new-passphrase"}, "passphrase"); got.code != 0 {
 		t.Fatalf("passphrase: %+v", got)
 	}
@@ -121,7 +121,7 @@ func TestCLIPassphraseChange(t *testing.T) {
 	if got := hortEnv(t, home, []string{"HORT_PASSPHRASE=new-passphrase"}, "unlock"); got.code != 0 {
 		t.Fatalf("unlock with new passphrase: %+v", got)
 	}
-	wantStdout(t, hort(t, home, "--secret", "token"), "value")
+	wantStdout(t, hort(t, home, "get", "token"), "value")
 }
 
 func TestCLISeparatesMistypedSecretKeyFromWrongPassphrase(t *testing.T) {
@@ -161,7 +161,7 @@ func TestCLIRejectsV3Vault(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, ".session"), []byte(strings.Repeat("ab", 32)), 0600); err != nil {
 		t.Fatal(err)
 	}
-	wantError(t, hort(t, home, "--secret", "token"), 1, "hort migrate")
+	wantError(t, hort(t, home, "get", "token"), 1, "hort migrate")
 	wantError(t, hort(t, home, "status"), 1, "hort migrate")
 	if got, _ := os.ReadFile(filepath.Join(dir, "vault.enc")); !bytes.Equal(got, v3) {
 		t.Fatal("v3 vault changed")

@@ -259,9 +259,9 @@ func CmdPassphrase() error {
 	return nil
 }
 
-// CmdGetSecret retrieves a secret.
-func CmdGetSecret(name, env, context string) error {
-	val, err := requireStore().GetSecret(name, env, context)
+// CmdGet retrieves one value.
+func CmdGet(name, field, env, context string) error {
+	val, err := requireStore().GetSecret(name, field, env, context)
 	if err != nil {
 		return err
 	}
@@ -269,12 +269,12 @@ func CmdGetSecret(name, env, context string) error {
 	return nil
 }
 
-// CmdSetSecret stores a secret.
-func CmdSetSecret(name, value, env, context, description string) error {
-	if err := requireStore().SetSecret(name, value, env, context, description); err != nil {
+// CmdSet stores one value.
+func CmdSet(name, field, value, env, context, description string) error {
+	if err := requireStore().SetSecret(name, field, value, env, context, description); err != nil {
 		return err
 	}
-	announceStored("secret", name, env, context)
+	announceStored(name, field, env, context)
 	return nil
 }
 
@@ -298,9 +298,9 @@ func CmdDescribe(name string, jsonOutput bool) error {
 	return nil
 }
 
-// CmdDelete removes an entry or specific env/context combination.
-func CmdDelete(name, env, context string) error {
-	if err := requireStore().Delete(name, env, context); err != nil {
+// CmdDelete removes one value, or the whole entry when no field, env or context is given.
+func CmdDelete(name, field, env, context string) error {
+	if err := requireStore().Delete(name, field, env, context); err != nil {
 		return err
 	}
 	fmt.Fprintln(os.Stderr, "Deleted.")
@@ -326,7 +326,7 @@ func CmdHistory(name string, jsonOutput bool) error {
 		if r.RecordedAt != nil {
 			at = r.RecordedAt.UTC().Format(time.RFC3339Nano)
 		}
-		fmt.Printf("%s %s %s %q %q\n", at, r.ID, r.Op, r.Key, r.Value)
+		fmt.Printf("%s %s %s field=%q env=%q context=%q value=%q\n", at, r.ID, r.Op, r.Field, r.Env, r.Context, r.Value)
 	}
 	return nil
 }

@@ -11,30 +11,42 @@ import (
 	"golang.org/x/term"
 )
 
-// AgentLine builds the sentence a user can paste to an agent after storing an
-// entry. It never contains the value — the agent retrieves it via hort.
-func AgentLine(kind, name, env, context string) string {
+// AgentLine builds the sentence a user can paste to an agent after storing a
+// secret. It never contains the value — the agent retrieves it via hort.
+func AgentLine(name, field, env, context string) string {
 	scope := []string{}
-	retrieve := fmt.Sprintf("hort --%s %s", kind, name)
-	if context != "" {
-		scope = append(scope, "Context: "+context)
-		retrieve += " --context " + context
+	retrieve := "hort get " + shellWord(name)
+	if field != "" {
+		scope = append(scope, "Field: "+field)
+		retrieve += " " + shellWord(field)
 	}
 	if env != "" {
 		scope = append(scope, "Env: "+env)
-		retrieve += " --env " + env
+		retrieve += " --env " + shellWord(env)
+	}
+	if context != "" {
+		scope = append(scope, "Context: "+context)
+		retrieve += " --context " + shellWord(context)
 	}
 	where := ""
 	if len(scope) > 0 {
 		where = " (" + strings.Join(scope, ", ") + ")"
 	}
-	return fmt.Sprintf("Ich habe das %s `%s`%s im Hort gespeichert. Abruf: `%s`", strings.ToUpper(kind[:1])+kind[1:], name, where, retrieve)
+	return fmt.Sprintf("Ich habe das Secret `%s`%s im Hort gespeichert. Abruf: `%s`", name, where, retrieve)
+}
+
+// shellWord quotes s for a POSIX shell unless it is plainly safe.
+func shellWord(s string) string {
+	if strings.Trim(s, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-/@%+=,") == "" && s != "" {
+		return s
+	}
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
 // announceStored prints the paste-ready agent line and, on an interactive
 // terminal, offers Enter to finish or c to copy the line to the clipboard.
-func announceStored(kind, name, env, context string) {
-	line := AgentLine(kind, name, env, context)
+func announceStored(name, field, env, context string) {
+	line := AgentLine(name, field, env, context)
 	fmt.Fprintln(os.Stderr, line)
 
 	in := int(os.Stdin.Fd())
@@ -79,16 +91,17 @@ func copyToClipboard(text string) error {
 	return cmd.Run()
 }
 
-// FilterEntries keeps entries whose name, description, environments or
-// contexts contain every whitespace-separated term (case-insensitive).
+// FilterEntries keeps entries whose name, description, fields, environments
+// or contexts contain every whitespace-separated term (case-insensitive).
 func FilterEntries(entries []store.EntryInfo, query string) []store.EntryInfo {
 	terms := strings.Fields(strings.ToLower(query))
 	var out []store.EntryInfo
 	for _, e := range entries {
-		hay := strings.ToLower(strings.Join([]string{
-			e.Name, e.Description,
-			strings.Join(e.Environments, " "), strings.Join(e.Contexts, " "),
-		}, " "))
+		words := append([]string{e.Name, e.Description}, e.Fields...)
+		for _, v := range e.Variants {
+			words = append(words, v.Env, v.Context)
+		}
+		hay := strings.ToLower(strings.Join(words, " "))
 		match := true
 		for _, t := range terms {
 			if !strings.Contains(hay, t) {
@@ -103,12 +116,12 @@ func FilterEntries(entries []store.EntryInfo, query string) []store.EntryInfo {
 	return out
 }
 
-// CmdSearch lists entries matching the query.
-func CmdSearch(query string, jsonOutput bool) error {
+// CmdSearch lists entries matching the terms.
+func CmdSearch(terms []string, jsonOutput bool) error {
 	entries, err := requireStore().List()
 	if err != nil {
 		return err
 	}
-	fmt.Print(FormatList(FilterEntries(entries, query), jsonOutput))
+	fmt.Print(FormatList(FilterEntries(entries, strings.Join(terms, " ")), jsonOutput))
 	return nil
 }

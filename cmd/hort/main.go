@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"strings"
 
 	"github.com/gefuege/hort/internal/cli"
 	"github.com/gefuege/hort/internal/helptext"
@@ -12,83 +11,127 @@ import (
 )
 
 func main() {
-	var (
-		flagSecret     string
-		flagSetSecret  string
-		flagEnv        string
-		flagContext    string
-		flagValue      string
-		flagValueStdin bool
-		flagDesc       string
-		flagList       bool
-		flagDescribe   string
-		flagDelete     string
-		flagJSON       bool
-	)
-
 	root := &cobra.Command{
-		Use:   "hort",
-		Short: "Hort — Local secret store for humans and AI agents",
-		Long:  helptext.HelpText,
-		Args:  cobra.ArbitraryArgs,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			if len(args) > 0 {
-				return cli.CmdSearch(strings.Join(args, " "), flagJSON)
-			}
-			if flagSecret != "" {
-				return cli.CmdGetSecret(flagSecret, flagEnv, flagContext)
-			}
-			if flagSetSecret != "" {
-				value, err := writeValue(flagValue, flagValueStdin, cmd.InOrStdin())
-				if err != nil {
-					return fmt.Errorf("set secret: %w", err)
-				}
-				return cli.CmdSetSecret(flagSetSecret, value, flagEnv, flagContext, flagDesc)
-			}
-			if flagList {
-				return cli.CmdList(flagJSON)
-			}
-			if flagDescribe != "" {
-				return cli.CmdDescribe(flagDescribe, flagJSON)
-			}
-			if flagDelete != "" {
-				return cli.CmdDelete(flagDelete, flagEnv, flagContext)
-			}
-			return cmd.Help()
-		},
+		Use:           "hort",
+		Short:         "Hort — Local secret store for humans and AI agents",
+		Long:          helptext.HelpText,
 		SilenceUsage:  true,
 		SilenceErrors: true,
 	}
 
-	// Read flags
-	root.Flags().StringVarP(&flagSecret, "secret", "g", "", "Get a secret value")
+	// scopeFlags adds the --env/--context pair shared by get, set and delete.
+	scopeFlags := func(c *cobra.Command) {
+		c.Flags().StringP("env", "e", "", "Environment (default: * baseline)")
+		c.Flags().StringP("context", "c", "", "Context, e.g. tenant/customer (default: * baseline)")
+	}
+	jsonFlag := func(c *cobra.Command, usage string) {
+		c.Flags().Bool("json", false, usage)
+	}
 
-	// Write flags
-	root.Flags().StringVarP(&flagSetSecret, "set-secret", "s", "", "Store a secret")
-	root.Flags().StringVarP(&flagValue, "value", "v", "", "Value to store")
-	root.Flags().BoolVar(&flagValueStdin, "value-stdin", false, "Read the value to store from stdin")
-	root.Flags().StringVarP(&flagDesc, "description", "d", "", "Description for discovery")
+	getCmd := &cobra.Command{
+		Use:   "get NAME [FIELD]",
+		Short: "Print a value (stdout only)",
+		Args:  cobra.RangeArgs(1, 2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			env, _ := cmd.Flags().GetString("env")
+			context, _ := cmd.Flags().GetString("context")
+			return cli.CmdGet(args[0], optionalField(args), env, context)
+		},
+	}
+	scopeFlags(getCmd)
+	root.AddCommand(getCmd)
 
-	// Common flags
-	root.Flags().StringVarP(&flagEnv, "env", "e", "", "Target environment (default: * baseline)")
-	root.Flags().StringVarP(&flagContext, "context", "c", "", "Target context, e.g. tenant/customer (default: * baseline)")
+	setCmd := &cobra.Command{
+		Use:   "set NAME [FIELD]",
+		Short: "Store a value",
+		Args:  cobra.RangeArgs(1, 2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			env, _ := cmd.Flags().GetString("env")
+			context, _ := cmd.Flags().GetString("context")
+			desc, _ := cmd.Flags().GetString("description")
+			flagValue, _ := cmd.Flags().GetString("value")
+			valueStdin, _ := cmd.Flags().GetBool("value-stdin")
+			value, err := writeValue(flagValue, valueStdin, cmd.InOrStdin())
+			if err != nil {
+				return fmt.Errorf("set: %w", err)
+			}
+			return cli.CmdSet(args[0], optionalField(args), value, env, context, desc)
+		},
+	}
+	scopeFlags(setCmd)
+	setCmd.Flags().StringP("value", "v", "", "Value to store")
+	setCmd.Flags().Bool("value-stdin", false, "Read the value to store from stdin")
+	setCmd.Flags().StringP("description", "d", "", "Description of the whole entry, for discovery")
+	root.AddCommand(setCmd)
 
-	// Discovery flags
-	root.Flags().BoolVar(&flagList, "list", false, "List all entries")
-	root.Flags().StringVar(&flagDescribe, "describe", "", "Show entry details")
-	root.Flags().BoolVar(&flagJSON, "json", false, "JSON output for list/describe/status")
+	deleteCmd := &cobra.Command{
+		Use:   "delete NAME [FIELD]",
+		Short: "Delete an entry, or one value of it",
+		Args:  cobra.RangeArgs(1, 2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			env, _ := cmd.Flags().GetString("env")
+			context, _ := cmd.Flags().GetString("context")
+			return cli.CmdDelete(args[0], optionalField(args), env, context)
+		},
+	}
+	scopeFlags(deleteCmd)
+	root.AddCommand(deleteCmd)
 
-	// Delete flag
-	root.Flags().StringVar(&flagDelete, "delete", "", "Delete an entry or specific env/context override")
+	listCmd := &cobra.Command{
+		Use:   "list",
+		Short: "List all entries (metadata only)",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			j, _ := cmd.Flags().GetBool("json")
+			return cli.CmdList(j)
+		},
+	}
+	jsonFlag(listCmd, "JSON output")
+	root.AddCommand(listCmd)
 
-	historyCmd := &cobra.Command{Use: "history NAME", Short: "Show revision history including values", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
-		jsonOutput, _ := cmd.Flags().GetBool("json")
-		return cli.CmdHistory(args[0], jsonOutput)
-	}}
-	historyCmd.Flags().Bool("json", false, "JSON output including values")
+	describeCmd := &cobra.Command{
+		Use:   "describe NAME",
+		Short: "Show one entry (metadata only)",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			j, _ := cmd.Flags().GetBool("json")
+			return cli.CmdDescribe(args[0], j)
+		},
+	}
+	jsonFlag(describeCmd, "JSON output")
+	root.AddCommand(describeCmd)
+
+	searchCmd := &cobra.Command{
+		Use:   "search TERMS...",
+		Short: "Search names, descriptions, fields and scopes (metadata only)",
+		Args:  cobra.MinimumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			j, _ := cmd.Flags().GetBool("json")
+			return cli.CmdSearch(args, j)
+		},
+	}
+	jsonFlag(searchCmd, "JSON output")
+	root.AddCommand(searchCmd)
+
+	historyCmd := &cobra.Command{
+		Use:   "history NAME",
+		Short: "Show revision history including values",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			j, _ := cmd.Flags().GetBool("json")
+			return cli.CmdHistory(args[0], j)
+		},
+	}
+	jsonFlag(historyCmd, "JSON output including values")
 	root.AddCommand(historyCmd)
 
-	// Subcommands
+	// recovery is a help topic: it has no Run, so `hort help recovery` shows it.
+	root.AddCommand(&cobra.Command{
+		Use:   "recovery",
+		Short: "What can and cannot be recovered",
+		Long:  helptext.RecoveryText,
+	})
+
 	initCmd := &cobra.Command{
 		Use:   "init",
 		Short: "Create a new vault and print its Emergency Kit",
@@ -142,6 +185,7 @@ func main() {
 	statusCmd := &cobra.Command{
 		Use:   "status",
 		Short: "Show local vault status",
+		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			j, _ := cmd.Flags().GetBool("json")
 			return cli.CmdStatus(j)
@@ -174,4 +218,12 @@ func writeValue(flagValue string, valueStdin bool, stdin io.Reader) (string, err
 		return "", fmt.Errorf("--value or --value-stdin is required")
 	}
 	return flagValue, nil
+}
+
+// optionalField is the second positional argument: the field, "" for the default.
+func optionalField(args []string) string {
+	if len(args) > 1 {
+		return args[1]
+	}
+	return ""
 }

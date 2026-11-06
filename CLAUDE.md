@@ -21,8 +21,10 @@ go test ./...
 HORT_PASSPHRASE="test" ./hort init
 
 # Store and retrieve
-./hort --set-secret foo --value "bar" --description "test secret"
-./hort --secret foo
+./hort set foo --value "bar" --description "test secret"
+./hort get foo
+./hort set db password --value "pw"   # named field
+./hort get db password
 
 # Full help
 ./hort --help

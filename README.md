@@ -20,7 +20,7 @@ None of this is discoverable. An agent can't ask "what secrets are available?" �
 
 **You, on your own machine.** Run `hort init`, set a passphrase, add secrets with `hort -s <name> -v <value>`.
 
-**Your AI coding agents.** Claude Code, Codex, Gemini, Cursor, whatever you run. `hort --list` shows them what is available, `hort --secret <name>` gives them the value, `--json` gives it structured. No more "what's the DB password again?" on every new session. One vault, every agent.
+**Your AI coding agents.** Claude Code, Codex, Gemini, Cursor, whatever you run. `hort list` shows them what is available, `hort get <name>` gives them the value, `--json` gives it structured. No more "what's the DB password again?" on every new session. One vault, every agent.
 
 **Your own apps, as a drop-in secret backend.** Instead of reinventing a secrets table, mount an encrypted file into hort at startup:
 
@@ -31,7 +31,7 @@ hort source mount --name myapp-prod \
   --key-hex "$MYAPP_MASTER_KEY_HEX"
 ```
 
-Your app reads and writes via the same hort CLI that it already uses for shell automation. The moment you do this, **the agents working on that app pick up the same secrets aus einem guss** — no separate credential system per integration, no copy-paste between the app's UI and the agent's context. Your app's `.env`-equivalent and your agent's `hort --secret` resolve to the same byte.
+Your app reads and writes via the same hort CLI that it already uses for shell automation. The moment you do this, **the agents working on that app pick up the same secrets aus einem guss** — no separate credential system per integration, no copy-paste between the app's UI and the agent's context. Your app's `.env`-equivalent and your agent's `hort get` resolve to the same byte.
 
 **Integration code.** Anywhere a script or service needs "this token for dev, that one for prod, a third for the Heine tenant on prod" — the `env + context` fallback chain covers it in one call.
 
@@ -105,10 +105,10 @@ unlocked, ready to store secrets.
 hort init
 
 # Store your first secret
-hort --set-secret grafana-token --value "glsa_..." --description "Grafana API token"
+hort set grafana-token --value "glsa_..." --description "Grafana API token"
 
 # Use it
-TOKEN=$(hort --secret grafana-token)
+TOKEN=$(hort get grafana-token)
 curl -H "Authorization: Bearer $TOKEN" https://monitoring.example.com
 ```
 
@@ -117,12 +117,12 @@ curl -H "Authorization: Bearer $TOKEN" https://monitoring.example.com
 Every entry supports environment-specific values. Without `--env`, the baseline (`*`) is used.
 
 ```bash
-hort --set-secret db-password --value "dev-pass" --description "PostgreSQL password"
-hort --set-secret db-password --value "prod-pass" --env prod
+hort set db-password --value "dev-pass" --description "PostgreSQL password"
+hort set db-password --value "prod-pass" --env prod
 
-hort --secret db-password              # → dev-pass (baseline)
-hort --secret db-password --env prod   # → prod-pass
-hort --secret db-password --env staging # → dev-pass (fallback to baseline)
+hort get db-password              # → dev-pass (baseline)
+hort get db-password --env prod   # → prod-pass
+hort get db-password --env staging # → dev-pass (fallback to baseline)
 ```
 
 ### Contexts
@@ -130,15 +130,15 @@ hort --secret db-password --env staging # → dev-pass (fallback to baseline)
 Secrets aren't just per-environment. They can be per-environment *and* per-context. A context is any second dimension: tenant, customer, project.
 
 ```bash
-hort --set-secret tenant-id --value "default-123" --description "SimpleChain tenant ID"
-hort --set-secret tenant-id --value "prod-123" --env prod
-hort --set-secret tenant-id --value "heine-456" --env prod --context heine
-hort --set-secret tenant-id --value "otto-789" --env prod --context otto
+hort set tenant-id --value "default-123" --description "SimpleChain tenant ID"
+hort set tenant-id --value "prod-123" --env prod
+hort set tenant-id --value "heine-456" --env prod --context heine
+hort set tenant-id --value "otto-789" --env prod --context otto
 
-hort --secret tenant-id --env prod --context heine  # → heine-456
-hort --secret tenant-id --env prod --context otto   # → otto-789
-hort --secret tenant-id --env prod                  # → prod-123
-hort --secret tenant-id --env staging               # → default-123 (fallback to *+*)
+hort get tenant-id --env prod --context heine  # → heine-456
+hort get tenant-id --env prod --context otto   # → otto-789
+hort get tenant-id --env prod                  # → prod-123
+hort get tenant-id --env staging               # → default-123 (fallback to *+*)
 ```
 
 Fallback chain: `env+context → env+* → *+*`. Specific wins, baseline catches the rest.
@@ -148,9 +148,19 @@ Fallback chain: `env+context → env+* → *+*`. Specific wins, baseline catches
 Store service URLs, tenant IDs and tokens through the same secret interface:
 
 ```bash
-hort --set-secret api-url --value "https://api.dev.example.com" --description "Base API URL"
-hort --set-secret api-url --value "https://api.example.com" --env prod
-API_URL=$(hort --secret api-url --env prod)
+hort set api-url --value "https://api.dev.example.com" --description "Base API URL"
+hort set api-url --value "https://api.example.com" --env prod
+API_URL=$(hort get api-url --env prod)
+```
+
+### Fields
+
+An entry can hold several named values. Without a field you use the default field; reads never fall back from a named field to the default field.
+
+```bash
+hort set db-login username --value "app"
+hort set db-login password --value-stdin
+hort get db-login password
 ```
 
 ### Discovery
@@ -158,18 +168,18 @@ API_URL=$(hort --secret api-url --env prod)
 Agents need to know what's available. Hort makes everything discoverable:
 
 ```bash
-hort --list
+hort list
 # api-url      Base API URL           [env: *, prod]
 # tenant-id    SimpleChain tenant ID  [env: *, prod]  [ctx: heine, otto]
 
-hort --describe tenant-id
+hort describe tenant-id
 # Name:         tenant-id
 # Description:  SimpleChain tenant ID
 # Environments: *, prod
 # Contexts:     heine, otto
 
-hort --list --json   # Machine-readable output
-hort --describe tenant-id --json
+hort list --json   # Machine-readable output
+hort describe tenant-id --json
 ```
 
 ### History and migration
@@ -214,9 +224,10 @@ hort status            # Show vault status, entry counts
 ### Delete
 
 ```bash
-hort --delete tenant-id                          # Delete entire entry
-hort --delete tenant-id --env prod               # Delete prod override only
-hort --delete tenant-id --env prod --context heine  # Delete specific env+context
+hort delete tenant-id                          # Delete entire entry
+hort delete tenant-id --env prod               # Delete prod override only
+hort delete tenant-id --env prod --context heine  # Delete specific env+context
+hort delete db-login password                  # Delete one field
 ```
 
 ### Mounted Sources

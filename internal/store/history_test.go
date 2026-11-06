@@ -16,22 +16,22 @@ func TestHistoryFallbacksEmptyValuesAndMetadata(t *testing.T) {
 	for _, test := range []struct{ env, ctx, value, desc string }{
 		{"", "", "baseline", "Überblick"}, {"prod", "", "production", ""}, {"prod", "kunde", "", ""},
 	} {
-		if err := s.SetSecret("ä", test.value, test.env, test.ctx, test.desc); err != nil {
+		if err := s.SetSecret("ä", "", test.value, test.env, test.ctx, test.desc); err != nil {
 			t.Fatal(err)
 		}
 	}
 	for _, test := range []struct{ env, ctx, value string }{
 		{"staging", "kunde", "baseline"}, {"prod", "other", "production"}, {"prod", "kunde", ""},
 	} {
-		v, err := s.GetSecret("ä", test.env, test.ctx)
+		v, err := s.GetSecret("ä", "", test.env, test.ctx)
 		if err != nil || v != test.value {
 			t.Fatalf("fallback env=%q ctx=%q: %q %v", test.env, test.ctx, v, err)
 		}
 	}
-	if err := s.Delete("ä", "prod", "kunde"); err != nil {
+	if err := s.Delete("ä", "", "prod", "kunde"); err != nil {
 		t.Fatal(err)
 	}
-	if v, err := s.GetSecret("ä", "prod", "kunde"); err != nil || v != "production" {
+	if v, err := s.GetSecret("ä", "", "prod", "kunde"); err != nil || v != "production" {
 		t.Fatal("scope delete did not restore fallback")
 	}
 	entries, err := s.List()
@@ -53,7 +53,7 @@ func TestHistoryFallbacksEmptyValuesAndMetadata(t *testing.T) {
 			t.Fatal("new revision has unknown time")
 		}
 	}
-	if err := s.Delete("ä", "", ""); err != nil {
+	if err := s.Delete("ä", "", "", ""); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.Describe("ä"); err == nil {
@@ -63,13 +63,13 @@ func TestHistoryFallbacksEmptyValuesAndMetadata(t *testing.T) {
 	if err != nil || len(history.Revisions) != 6 {
 		t.Fatal("whole delete discarded history")
 	}
-	if err := s.SetSecret("ä", "revived", "dev", "only", ""); err != nil {
+	if err := s.SetSecret("ä", "", "revived", "dev", "only", ""); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.GetSecret("ä", "prod", "kunde"); err == nil {
+	if _, err := s.GetSecret("ä", "", "prod", "kunde"); err == nil {
 		t.Fatal("revival restored unrelated old scope")
 	}
-	if v, err := s.GetSecret("ä", "dev", "only"); err != nil || v != "revived" {
+	if v, err := s.GetSecret("ä", "", "dev", "only"); err != nil || v != "revived" {
 		t.Fatal("revival failed")
 	}
 }
@@ -85,7 +85,7 @@ func TestConcurrentChangesKeepOneEntriesHistory(t *testing.T) {
 	errs := make(chan error, writers)
 	for i := 0; i < writers; i++ {
 		wg.Add(1)
-		go func() { defer wg.Done(); errs <- s.SetSecret("same", "value", "", "", "") }()
+		go func() { defer wg.Done(); errs <- s.SetSecret("same", "", "value", "", "", "") }()
 	}
 	wg.Wait()
 	close(errs)

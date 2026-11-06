@@ -53,7 +53,7 @@ func TestConcurrentMutationsKeepAllEntries(t *testing.T) {
 
 			name := fmt.Sprintf("entry-%02d", i)
 			value := fmt.Sprintf("value-%02d", i)
-			if err := s.SetSecret(name, value, "dev", "spuerhund", "test entry"); err != nil {
+			if err := s.SetSecret(name, "", value, "dev", "spuerhund", "test entry"); err != nil {
 				errCh <- err
 			}
 		}()
@@ -76,7 +76,7 @@ func TestConcurrentMutationsKeepAllEntries(t *testing.T) {
 	for i := 0; i < writers; i++ {
 		name := fmt.Sprintf("entry-%02d", i)
 		expected := fmt.Sprintf("value-%02d", i)
-		value, err := s.GetSecret(name, "dev", "spuerhund")
+		value, err := s.GetSecret(name, "", "dev", "spuerhund")
 		if err != nil {
 			t.Fatalf("GetSecret(%s): %v", name, err)
 		}

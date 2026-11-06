@@ -7,20 +7,25 @@ USAGE:
   hort <command> [flags]
 
 READ:
-  hort --secret <name> [--env <env>] [--context <ctx>]   Get a secret (stdout only)
+  hort get <name> [<field>] [--env <env>] [--context <ctx>]
+                                         Print one value (stdout only)
 
 WRITE:
-  hort --set-secret <name> (--value <v> | --value-stdin) [--env <env>] [--context <ctx>] [--description <d>]
+  hort set <name> [<field>] (--value <v> | --value-stdin) [--env <env>] [--context <ctx>]
+           [--description <d>]           Store one value
 
-DISCOVER:
-  hort <search terms> [--json]           Search names, descriptions and scope metadata
-  hort --list                           List all entries
-  hort --describe <name>                 Show entry details
+DISCOVER (metadata only, never values):
+  hort list [--json]                     List all entries
+  hort describe <name> [--json]          Show one entry
+  hort search <terms>... [--json]        Search names, descriptions, fields and scopes
   hort status [--json]                   Show local vault status: locked or unlocked, account,
                                          server, registration, device and entry count
 
 MANAGE:
   hort history <name> [--json]           Show revision history, including values
+  hort delete <name> [<field>] [--env <env>] [--context <ctx>]
+                                         Without field, env and context: delete the whole entry.
+                                         Otherwise delete that one value.
   hort init [--server <url>] [--name <n>]
                                          Create a new vault: account, Secret Key and passphrase.
                                          Prints the Emergency Kit and, on a terminal, waits until
@@ -31,16 +36,16 @@ MANAGE:
   hort kit                               Print the Emergency Kit again (needs an unlocked vault)
   hort passphrase                        Set a new passphrase, keeping the Secret Key
 
-DELETE:
-  hort --delete <name> [--env <env>] [--context <ctx>]   Delete entry or override
+TOPICS:
+  hort help recovery                     What can and cannot be recovered
 
 FLAGS:
-  --env <name>          Target environment (default: * baseline)
-  --context <name>      Target context, e.g. tenant or customer (default: * baseline)
+  --env <name>          Environment (default: * baseline)
+  --context <name>      Context, e.g. tenant or customer (default: * baseline)
   --value <value>       Value to store
   --value-stdin         Read the value to store from stdin (keeps secrets out of argv)
-  --description <text>  Human-readable description for discovery
-  --json                Machine-readable JSON output for --list, --describe, status
+  --description <text>  Description of the whole entry, for discovery
+  --json                Machine-readable JSON output
   --help                Show this help text
 
   HORT_PASSPHRASE and HORT_SECRET_KEY replace the passphrase prompt and the
@@ -50,54 +55,89 @@ FLAGS:
 KEYS:
   Your vault opens only with your passphrase plus your Secret Key. The Secret
   Key is stored in ~/.hort/secret-key and printed in the Emergency Kit; Hort
-  cannot recover either for you.
+  cannot recover either for you (hort help recovery).
 
   Unlock errors: "Secret Key mistyped" means the Secret Key fails its check
   symbol; "wrong passphrase" means the slot did not open.
 
-ENVIRONMENTS AND CONTEXTS:
-  Each entry is keyed by env:context. The baseline is *:*. Reads fall back:
+NAMES, FIELDS, ENVIRONMENTS AND CONTEXTS:
+  An entry (name) holds values. A value belongs to a field, an environment and
+  a context. Without <field> a command uses the default field.
+
+  Rules for new writes:
+    name     1-128 bytes, no whitespace or control characters, not starting with -
+    field    lowercase letters, digits, '.', '_' and '-', up to 64 characters,
+             starting with a letter or digit
+    env, context
+             no ':', no whitespace or control characters; '*' only as the whole part
+    value    at most 48 KiB of UTF-8
+  Older entries that break these rules stay readable and can be deleted, but a
+  write to them fails: delete the secret and create it again under a valid name.
+
+  Each value is keyed by field and env:context. The baseline is *:*. Within the
+  field you ask for, reads fall back:
     env+context → env+* → *+*
+  A missing field never falls back to the default field.
 
   Example:
-    hort --set-secret tenant-id --value "default-123"
-    hort --set-secret tenant-id --value "heine-prod" --env prod --context heine
-    hort --secret tenant-id --env prod --context heine   → heine-prod
-    hort --secret tenant-id --env staging                → default-123 (fallback)
+    hort set tenant-id --value "default-123"
+    hort set tenant-id --value "heine-prod" --env prod --context heine
+    hort get tenant-id --env prod --context heine   → heine-prod
+    hort get tenant-id --env staging                → default-123 (fallback)
+
+    hort set db-login username --value "app"
+    hort set db-login password --value-stdin
+    hort get db-login password
 
 AGENT INSTRUCTIONS:
   Hort is designed to be used by AI agents (Claude, Codex, Gemini) as a local
   secret store.
 
-  1. Discovery: Run 'hort --list' to see all available entries.
-     Use 'hort --describe <name>' to see environments and contexts.
+  1. Discovery: Run 'hort list --json' to see all entries with their fields,
+     environments and contexts. Use 'hort describe <name> --json' for one entry
+     and 'hort search <terms>...' to narrow down.
 
-  2. Reading: 'hort --secret <name>' returns just the value on stdout — safe for
-     piping and $(...) subshells.
+  2. Reading: 'hort get <name> [<field>]' returns just the value on stdout —
+     safe for piping and $(...) subshells.
 
   3. Writing: Pipe sensitive values to '--value-stdin' so they never appear in
      process arguments.
 
   4. Error handling:
      - Exit code 0: success, value on stdout
-     - Exit code 1: general error, message on stderr
+     - Exit code 1: general error, one line on stderr
      - Exit code 2: vault is locked — ask user to run 'hort unlock'
 
   5. History: 'hort history <name> [--json]' includes values. Use it only
      when the user requests past values or changes.
      Imported legacy revisions have an unknown recorded time.
 
-  6. Migration: Hort reads and writes only v4 vaults. A v3 vault is rejected
-     with a pointer to 'hort migrate'; normal reads and writes never migrate.
-
-  7. Do NOT parse vault files directly. Always use the CLI.
-  8. Do NOT store hort output in files or logs.
-  9. Use --json with --list and --describe for structured output.
+  6. Do NOT parse vault files directly. Always use the CLI.
+  7. Do NOT store hort output in files or logs.
 
 EXAMPLES:
-  # Read a secret via fallback chain
-  TOKEN=$(hort --secret grafana-token --env prod)
+  # Read a value via the fallback chain
+  TOKEN=$(hort get grafana-token --env prod)
 
   # Store a value without putting it into process arguments
-  printf '%s' "$TOKEN" | hort --set-secret grafana-token --value-stdin --env prod
+  printf '%s' "$TOKEN" | hort set grafana-token --value-stdin --env prod
+`
+
+// RecoveryText answers "what if I lose something" and is shown by
+// 'hort help recovery'. Rows for server and browser recovery come with those features.
+const RecoveryText = `What can and cannot be recovered.
+
+  Lost or compromised     Still available         Outcome
+  ----------------------  ----------------------  ------------------------------------------
+  Passphrase              an unlocked device      'hort passphrase' sets a new one
+  Secret Key              an unlocked device      'hort kit' prints it again
+  Passphrase or           nothing unlocked        The data cannot be recovered. Hort cannot
+  Secret Key                                      help, by design.
+  The vault key is        anything                Nothing helps except a new account: run
+  compromised (a stolen                           'hort init' on a clean device, set the
+  unlocked device, a                              values again and rotate the exposed secrets
+  leaked session file)                            at their source.
+
+Keep the Emergency Kit (Secret Key and account) somewhere safe and separate from
+the passphrase. Whoever holds both can read everything.
 `
