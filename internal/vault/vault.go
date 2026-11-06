@@ -63,7 +63,8 @@ type SyncState struct {
 	KnownDevices   []string `json:"known_devices"`
 }
 
-func newBody(deviceName string) (*VaultData, error) {
+// NewBody is the body of a new vault: a fresh device key, empty sync state.
+func NewBody(deviceName string) (*VaultData, error) {
 	id, err := newID()
 	if err != nil {
 		return nil, err
@@ -201,22 +202,11 @@ func createVault(ref VaultRef, server, deviceName string, passphrase []byte, par
 		return NewVault{}, err
 	}
 	defer func() { _ = unlock() }()
-	if exists, err := RefExists(ref); err != nil {
+	if err := CheckNewVault(ref); err != nil {
 		return NewVault{}, err
-	} else if exists {
-		return NewVault{}, fmt.Errorf("a vault already exists at %s", ref.Path)
-	}
-	// A vault moved away still needs its Secret Key, and its backup would be
-	// replaced by the first save of the new vault.
-	for _, path := range []string{ref.SecretKeyPath, BackupPathFor(ref)} {
-		if _, err := os.Lstat(path); err == nil {
-			return NewVault{}, fmt.Errorf("%s exists and may belong to a vault moved away; remove it only if no vault uses it, then run init again", path)
-		} else if !os.IsNotExist(err) {
-			return NewVault{}, err
-		}
 	}
 
-	body, err := newBody(deviceName)
+	body, err := NewBody(deviceName)
 	if err != nil {
 		return NewVault{}, err
 	}

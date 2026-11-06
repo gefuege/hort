@@ -44,6 +44,10 @@ func hortEnv(t *testing.T, home string, env []string, args ...string) cliResult 
 
 const passphrase = "HORT_PASSPHRASE=synthetic-passphrase"
 
+// offlineServer refuses connections at once, so init's registration attempt
+// fails fast and no test reaches a real server.
+const offlineServer = "https://127.0.0.1:9"
+
 func hort(t *testing.T, home string, args ...string) cliResult {
 	t.Helper()
 	return hortEnv(t, home, []string{passphrase}, args...)
@@ -76,7 +80,7 @@ func TestCLIRoundTripInitSetLockUnlockGet(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
-	initRun := hortOK(t, home, "init", "--name", "laptop")
+	initRun := hortOK(t, home, "init", "--name", "laptop", "--server", offlineServer)
 	if initRun.stdout != "" || !strings.Contains(initRun.stderr, "HORT EMERGENCY KIT") || !strings.Contains(initRun.stderr, "Secret Key:  H4-") || strings.Contains(initRun.stderr, "synthetic-passphrase") {
 		t.Fatalf("init output: stdout %q, stderr %q", initRun.stdout, initRun.stderr)
 	}
@@ -97,7 +101,7 @@ func TestCLIRoundTripInitSetLockUnlockGet(t *testing.T) {
 	if err := json.Unmarshal([]byte(hortOK(t, home, "status", "--json").stdout), &status); err != nil {
 		t.Fatal(err)
 	}
-	if status["ready"] != true || status["registered"] != false || status["secret_count"] != float64(1) || status["server"] != "https://hort.pm" || len(status["account_id"].(string)) != 26 || status["device_id"] == "" {
+	if status["ready"] != true || status["registered"] != false || status["secret_count"] != float64(1) || status["server"] != offlineServer || len(status["account_id"].(string)) != 26 || status["device_id"] == "" {
 		t.Fatalf("status: %v", status)
 	}
 
@@ -111,7 +115,7 @@ func TestCLIPassphraseChange(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
-	hortOK(t, home, "init")
+	hortOK(t, home, "init", "--server", offlineServer)
 	hortOK(t, home, "set", "token", "--value", "value")
 	if got := hortEnv(t, home, []string{"HORT_PASSPHRASE=new-passphrase"}, "passphrase"); got.code != 0 {
 		t.Fatalf("passphrase: %+v", got)
@@ -128,7 +132,7 @@ func TestCLISeparatesMistypedSecretKeyFromWrongPassphrase(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
-	hortOK(t, home, "init")
+	hortOK(t, home, "init", "--server", offlineServer)
 	hortOK(t, home, "lock")
 	raw, err := os.ReadFile(filepath.Join(home, ".hort", "secret-key"))
 	if err != nil {

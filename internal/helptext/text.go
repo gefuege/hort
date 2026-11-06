@@ -19,7 +19,8 @@ DISCOVER (metadata only, never values):
   hort describe <name> [--json]          Show one entry
   hort search <terms>... [--json]        Search names, descriptions, fields and scopes
   hort status [--json]                   Show local vault status: locked or unlocked, account,
-                                         server, registration, device and entry count
+                                         server, registration, device, entry count and the
+                                         time of the last sync (no network)
 
 MANAGE:
   hort history <name> [--json]           Show revision history, including values
@@ -37,6 +38,25 @@ MANAGE:
   hort passphrase                        Set a new passphrase, keeping the Secret Key
   hort migrate                           Convert a v3 vault (Hort 0.4.x) into a v4 vault once;
                                          read 'hort migrate --help' first
+
+SYNC AND DEVICES:
+  hort sync [--json]                     Sync with the server now, without a time limit. The
+                                         first run registers the account (init does it when
+                                         the server answers).
+  hort enroll <account-id> [--server <url>] [--name <n>]
+                                         Add this device to an existing account. Asks for the
+                                         Secret Key and the passphrase, then pulls the vault.
+                                         Refuses if ~/.hort/vault.enc exists.
+  hort devices [--json]                  List the devices of this account
+  hort devices revoke <device-id>        End a device's server access; not this device.
+                                         Revoking does not protect against anyone who already
+                                         holds your vault key (hort help recovery).
+
+  Reads sync first and writes sync afterwards, for at most 2 seconds and only
+  once the account is registered. A failed sync prints one warning and never
+  changes the exit code. When devices change, a sync prints a notice once:
+  notice: new device "<name>" enrolled <time>, or notice: device "<name>" revoked.
+  The server stores only ciphertext.
 
 TOPICS:
   hort help recovery                     What can and cannot be recovered
@@ -126,19 +146,23 @@ EXAMPLES:
 `
 
 // RecoveryText answers "what if I lose something" and is shown by
-// 'hort help recovery'. Rows for server and browser recovery come with those features.
+// 'hort help recovery'. Rows for browser recovery come with that feature.
 const RecoveryText = `What can and cannot be recovered.
 
   Lost or compromised     Still available         Outcome
   ----------------------  ----------------------  ------------------------------------------
   Passphrase              an unlocked device      'hort passphrase' sets a new one
   Secret Key              an unlocked device      'hort kit' prints it again
+  A locked device was     anything                'hort devices revoke <id>' ends its server
+  lost                                            access. A thief still needs the passphrase
+                                                  to read the copied vault file.
   Passphrase or           nothing unlocked        The data cannot be recovered. Hort cannot
   Secret Key                                      help, by design.
-  The vault key is        anything                Nothing helps except a new account: run
-  compromised (a stolen                           'hort init' on a clean device, set the
-  unlocked device, a                              values again and rotate the exposed secrets
-  leaked session file)                            at their source.
+  The vault key is        anything                Revoking does not help: whoever holds the
+  compromised (a stolen                           vault key can enroll again. Nothing helps
+  unlocked device, a                              except a new account: run 'hort init' on a
+  leaked session file)                            clean device, set the values again and
+                                                  rotate the exposed secrets at their source.
 
 Keep the Emergency Kit (Secret Key and account) somewhere safe and separate from
 the passphrase. Whoever holds both can read everything.

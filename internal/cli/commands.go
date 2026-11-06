@@ -45,6 +45,22 @@ func readSecretKey(ref vault.VaultRef) ([]byte, error) {
 	return vault.ParseSecretKey(strings.TrimSpace(text))
 }
 
+// promptSecretKey reads the Secret Key for enroll from HORT_SECRET_KEY or the
+// terminal (no echo). A bad check symbol fails before any Argon2id work.
+func promptSecretKey() ([]byte, error) {
+	text := os.Getenv("HORT_SECRET_KEY")
+	if text == "" {
+		fmt.Fprint(os.Stderr, "Enter Secret Key: ")
+		raw, err := term.ReadPassword(int(os.Stdin.Fd()))
+		fmt.Fprintln(os.Stderr)
+		if err != nil {
+			return nil, fmt.Errorf("reading Secret Key: %w", err)
+		}
+		text = string(raw)
+	}
+	return vault.ParseSecretKey(strings.TrimSpace(text))
+}
+
 // readNewPassphrase asks twice unless HORT_PASSPHRASE answers both prompts.
 func readNewPassphrase() ([]byte, error) {
 	pass, err := ReadPassphrase("Enter new passphrase: ")
@@ -72,8 +88,8 @@ func defaultDeviceName() string {
 	return runtime.GOOS + "-" + string(b)
 }
 
-// CmdInit creates a new v4 vault. Registering the account on the server
-// comes with `hort sync`; this command makes no network call.
+// CmdInit creates a new v4 vault and registers the account when the server
+// answers within syncLimit; otherwise the first `hort sync` registers it.
 func CmdInit(server, name string) error {
 	ref, err := vault.PrimaryRef()
 	if err != nil {
@@ -103,8 +119,18 @@ func CmdInit(server, name string) error {
 	if err := vault.SaveSessionFor(ref, created.VK); err != nil {
 		return err
 	}
+	// A sync time left by a vault moved away would describe the wrong account.
+	if err := os.Remove(lastSyncPath(ref)); err != nil && !os.IsNotExist(err) {
+		return err
+	}
 	fmt.Fprintln(os.Stderr, "Vault created and unlocked.")
-	return confirmKit(created.Server, created.AccountID, created.SecretKey)
+	if err := confirmKit(created.Server, created.AccountID, created.SecretKey); err != nil {
+		return err
+	}
+	if _, err := limitSync(syncLimit, func() (SyncReport, error) { return syncVault(ref, created.VK) }); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: not registered on %s yet (%v); `hort sync` registers it later\n", created.Server, err)
+	}
+	return nil
 }
 
 // CmdUnlock unwraps VK with the passphrase and the Secret Key.
@@ -180,6 +206,7 @@ func CmdStatus(jsonOutput bool) error {
 		}
 		st.AccountID, st.Server = vault.FormatAccountID(info.AccountID), info.Server
 		st.Unlocked = vault.IsUnlockedFor(ref)
+		st.LastSyncAt = readLastSync(ref)
 	}
 	if st.Unlocked {
 		key, err := vault.LoadSessionFor(ref)
@@ -218,9 +245,12 @@ func requireKey() (vault.VaultRef, []byte) {
 	return vault.VaultRef{}, nil
 }
 
-// requireStore loads the store. If the vault is locked we exit with 2.
-func requireStore() *store.Store {
-	return store.New(requireKey())
+// readStore syncs within syncLimit, then loads the store for a read. If the
+// vault is locked we exit with 2.
+func readStore() *store.Store {
+	ref, key := requireKey()
+	autoSync(ref, key)
+	return store.New(ref, key)
 }
 
 // CmdKit prints the Emergency Kit again; it needs an unlocked vault.
@@ -261,7 +291,7 @@ func CmdPassphrase() error {
 
 // CmdGet retrieves one value.
 func CmdGet(name, field, env, context string) error {
-	val, err := requireStore().GetSecret(name, field, env, context)
+	val, err := readStore().GetSecret(name, field, env, context)
 	if err != nil {
 		return err
 	}
@@ -271,16 +301,18 @@ func CmdGet(name, field, env, context string) error {
 
 // CmdSet stores one value.
 func CmdSet(name, field, value, env, context, description string) error {
-	if err := requireStore().SetSecret(name, field, value, env, context, description); err != nil {
+	ref, key := requireKey()
+	if err := store.New(ref, key).SetSecret(name, field, value, env, context, description); err != nil {
 		return err
 	}
 	announceStored(name, field, env, context)
+	autoSync(ref, key)
 	return nil
 }
 
 // CmdList lists all entries.
 func CmdList(jsonOutput bool) error {
-	entries, err := requireStore().List()
+	entries, err := readStore().List()
 	if err != nil {
 		return err
 	}
@@ -290,7 +322,7 @@ func CmdList(jsonOutput bool) error {
 
 // CmdDescribe shows entry details.
 func CmdDescribe(name string, jsonOutput bool) error {
-	entry, err := requireStore().Describe(name)
+	entry, err := readStore().Describe(name)
 	if err != nil {
 		return err
 	}
@@ -300,16 +332,18 @@ func CmdDescribe(name string, jsonOutput bool) error {
 
 // CmdDelete removes one value, or the whole entry when no field, env or context is given.
 func CmdDelete(name, field, env, context string) error {
-	if err := requireStore().Delete(name, field, env, context); err != nil {
+	ref, key := requireKey()
+	if err := store.New(ref, key).Delete(name, field, env, context); err != nil {
 		return err
 	}
 	fmt.Fprintln(os.Stderr, "Deleted.")
+	autoSync(ref, key)
 	return nil
 }
 
 // CmdHistory exposes values only through an explicitly requested history read.
 func CmdHistory(name string, jsonOutput bool) error {
-	history, err := requireStore().History(name)
+	history, err := readStore().History(name)
 	if err != nil {
 		return err
 	}

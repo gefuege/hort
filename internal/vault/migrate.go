@@ -94,7 +94,7 @@ func migrateV3(ref VaultRef, checked, passphrase []byte, deviceName string, para
 		return NewVault{}, err
 	}
 
-	body, err := newBody(deviceName)
+	body, err := NewBody(deviceName)
 	if err != nil {
 		return NewVault{}, err
 	}

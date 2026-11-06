@@ -119,7 +119,7 @@ func FilterEntries(entries []store.EntryInfo, query string) []store.EntryInfo {
 
 // CmdSearch lists entries matching the terms.
 func CmdSearch(terms []string, jsonOutput bool) error {
-	entries, err := requireStore().List()
+	entries, err := readStore().List()
 	if err != nil {
 		return err
 	}

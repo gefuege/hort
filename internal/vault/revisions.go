@@ -177,31 +177,3 @@ func validateSecrets(secrets map[string]Entry, fields bool) error {
 	}
 	return nil
 }
-
-// mergeRevisions forms the union by revision identity. Identities are checked
-// vault-wide because validateSecrets rejects duplicates across entries. The
-// server sync merges pulled revisions with it (contract §6.6).
-func mergeRevisions(dst *VaultData, sources []*VaultData) int {
-	known := make(map[string]bool)
-	for _, entry := range dst.Secrets {
-		for _, r := range entry.Revisions {
-			known[r.ID] = true
-		}
-	}
-	added := 0
-	for _, source := range sources {
-		for name, incoming := range source.Secrets {
-			for _, r := range incoming.Revisions {
-				if known[r.ID] {
-					continue
-				}
-				known[r.ID] = true
-				entry := dst.Secrets[name]
-				entry.Revisions = append(entry.Revisions, r)
-				dst.Secrets[name] = entry
-				added++
-			}
-		}
-	}
-	return added
-}

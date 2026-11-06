@@ -72,7 +72,7 @@ func TestIdentityGenerationErrorsAreReturned(t *testing.T) {
 	if _, err := NewRevision("set", "*:*", "value"); err == nil {
 		t.Fatal("revision ignored RNG failure")
 	}
-	if _, err := newBody("device"); err == nil {
+	if _, err := NewBody("device"); err == nil {
 		t.Fatal("device identity ignored RNG failure")
 	}
 }

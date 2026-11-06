@@ -17,6 +17,15 @@ All paths start with `/api/v1`. Signed requests carry `Hort-Account` (lowercase 
 | `DELETE /devices/{id}` | device, or session + CSRF | `id` is a device ID (16 bytes hex) or a passkey ID (64 hex) → `{devices_version}`; revoking a passkey deletes its slot and ends its sessions |
 | `PUT /slots/passphrase` | AK | `{version, bytes, ak_sig}` → `{version}`; the version must be higher than the stored one |
 
+Revisions (contract §6.3, §6.6). The server stores each revision as an opaque envelope `ct` (nonce, AES-256-GCM ciphertext and tag under a key only devices hold) and orders them by `seq`, which is transport only.
+
+| Method and path | Auth | Body → response |
+|---|---|---|
+| `POST /revisions` | device | `{revisions: [{id, ct}]}` (1 to 500, `ct` 28 bytes to 64 KiB, body at most 4 MiB) → `{accepted: [id], duplicate: [id]}`; an ID already stored is `duplicate` whatever its `ct`, an ID repeated in the body counts once |
+| `GET /revisions?after=SEQ[&limit=N]` | device | → `{revisions: [{seq, id, ct}], cursor, more, devices_version}`, oldest first; `limit` 1 to 500 (default 500); a page also ends after 4 MiB of `ct` but holds at least one revision; `cursor` is the last `seq` returned, or `after` for an empty page; any other query → 400 |
+
+Per account at most 50,000 revisions and 64 MiB of `ct`; a push beyond that → 413 and stores nothing. A push counts against the write rate limit, a pull does not. The CLI splits larger pushes by count and size, so one max-size envelope (about 87 KiB as base64) fits a push although other endpoints cap bodies at 64 KiB.
+
 Agent requests (contract §6.3, §7). The server holds only `meta_ct` and revision envelopes, never a name, description or value. `meta_ct` and `ct` are standard base64 of at least 28 bytes (nonce plus GCM tag); `meta_ct` is at most 16 KiB, an envelope at most 64 KiB.
 
 | Method and path | Auth | Body → response |
@@ -65,6 +74,18 @@ npm run build       # web/ → public/js/app.js; wrangler dev and deploy run it 
 The Worker tests drive registration and login with a software authenticator (`test/passkey.ts`, ES256, attestation `none`). The browser tests run every vector and reduction fixture of `../spec/vectors/` against `web/vault-core.ts`. They run under Node, because workerd refuses to compile WebAssembly at runtime.
 
 Local workerd does not implement Durable Object jurisdictions and throws on `jurisdiction("eu")`. The tests record those calls instead (`test/setup.ts`), so the EU placement itself is only effective on Cloudflare. The same limit applies to `wrangler dev` without `--remote`.
+
+### Go CLI against a local Worker
+
+`wrangler dev --remote` no longer supports Durable Objects (it answers 500 with that message), so the CLI integration test runs against local workerd. `wrangler.dev.jsonc` serves the production code through `test/dev-entry.ts`, which lets `jurisdiction("eu")` return the plain namespace as `test/setup.ts` does; it has its own Worker name and no route. Never deploy it.
+
+```bash
+npx wrangler dev -c wrangler.dev.jsonc --port 8788 --persist-to "$(mktemp -d)"
+# from the repo root, in a second shell:
+HORT_TEST_SERVER=http://localhost:8788 go test ./internal/cli -run TestServerSync -count=1 -v
+```
+
+The CLI speaks https only; the test puts a local TLS proxy in front of the Worker, which also simulates a refused push and a lost push answer. A fresh `--persist-to` directory resets the rate limits (locally every request shares the IP bucket `unknown`).
 
 ## Web app and landing page
 

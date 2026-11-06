@@ -92,6 +92,7 @@ type Status struct {
 	Registered  *bool  `json:"registered,omitempty"`
 	DeviceID    string `json:"device_id,omitempty"`
 	SecretCount *int   `json:"secret_count,omitempty"`
+	LastSyncAt  string `json:"last_sync_at,omitempty"`
 }
 
 // FormatStatus formats the vault status. Apps integrating Hort can parse the
@@ -119,6 +120,9 @@ func FormatStatus(st Status, jsonOutput bool) string {
 		fmt.Fprintf(&b, "Registered: %t\n", *st.Registered)
 		fmt.Fprintf(&b, "Device:     %s\n", st.DeviceID)
 		fmt.Fprintf(&b, "Secrets:    %d\n", *st.SecretCount)
+	}
+	if st.LastSyncAt != "" {
+		fmt.Fprintf(&b, "Last sync:  %s\n", st.LastSyncAt)
 	}
 	if !st.Unlocked {
 		fmt.Fprintln(&b, "Next:       run `hort unlock` to use secrets")

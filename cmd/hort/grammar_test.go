@@ -28,7 +28,7 @@ func hortStdin(t *testing.T, home, stdin string, args ...string) cliResult {
 func newVault(t *testing.T) string {
 	t.Helper()
 	home := t.TempDir()
-	hortOK(t, home, "init")
+	hortOK(t, home, "init", "--server", offlineServer)
 	return home
 }
 
@@ -160,18 +160,18 @@ func TestCLIRemovedRootGrammar(t *testing.T) {
 func TestCLIHelpAndRecoveryTopic(t *testing.T) {
 	home := t.TempDir()
 	help := hort(t, home, "--help")
-	for _, want := range []string{"hort get <name> [<field>]", "hort set <name> [<field>]", "hort delete <name>", "hort list", "hort describe", "hort search", "hort history", "hort migrate", "hort help recovery"} {
+	for _, want := range []string{"hort get <name> [<field>]", "hort set <name> [<field>]", "hort delete <name>", "hort list", "hort describe", "hort search", "hort history", "hort migrate", "hort help recovery", "hort sync", "hort enroll <account-id>", "hort devices revoke <device-id>"} {
 		if help.code != 0 || !strings.Contains(help.stdout, want) {
 			t.Fatalf("help lacks %q: %+v", want, help)
 		}
 	}
-	for _, removed := range []string{"--secret", "--set-secret", "--list", "--describe", "--delete", "hort sync", "hort mcp", "hort enroll", "hort devices"} {
+	for _, removed := range []string{"--secret", "--set-secret", "--list", "--describe", "--delete", "hort mcp"} {
 		if strings.Contains(help.stdout, removed) {
 			t.Errorf("help names %q", removed)
 		}
 	}
 	recovery := hort(t, home, "help", "recovery")
-	if recovery.code != 0 || !strings.Contains(recovery.stdout, "hort passphrase") || !strings.Contains(recovery.stdout, "hort kit") || !strings.Contains(recovery.stdout, "compromised") {
+	if recovery.code != 0 || !strings.Contains(recovery.stdout, "hort passphrase") || !strings.Contains(recovery.stdout, "hort kit") || !strings.Contains(recovery.stdout, "compromised") || !strings.Contains(recovery.stdout, "hort devices revoke") {
 		t.Fatalf("recovery: %+v", recovery)
 	}
 }

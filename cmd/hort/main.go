@@ -192,6 +192,53 @@ func main() {
 		},
 	})
 
+	syncCmd := &cobra.Command{
+		Use:   "sync",
+		Short: "Sync with the server; the first run registers the account",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			j, _ := cmd.Flags().GetBool("json")
+			return cli.CmdSync(j)
+		},
+	}
+	jsonFlag(syncCmd, "JSON output {pulled, pushed, skipped_invalid, cursor}")
+	root.AddCommand(syncCmd)
+
+	enrollCmd := &cobra.Command{
+		Use:   "enroll ACCOUNT_ID",
+		Short: "Add this device to an existing account (needs no vault here)",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			server, _ := cmd.Flags().GetString("server")
+			name, _ := cmd.Flags().GetString("name")
+			return cli.CmdEnroll(args[0], server, name)
+		},
+	}
+	enrollCmd.Flags().String("server", "", "Sync server URL (default https://hort.pm)")
+	enrollCmd.Flags().String("name", "", "Name of this device (default <os>-<4 random chars>)")
+	root.AddCommand(enrollCmd)
+
+	devicesCmd := &cobra.Command{
+		Use:   "devices",
+		Short: "List the devices of this account",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			j, _ := cmd.Flags().GetBool("json")
+			return cli.CmdDevices(j)
+		},
+	}
+	jsonFlag(devicesCmd, "JSON output")
+	devicesCmd.AddCommand(&cobra.Command{
+		Use:   "revoke DEVICE_ID",
+		Short: "End a device's server access",
+		Long:  "End a device's server access. " + cli.RevokeNote,
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return cli.CmdRevokeDevice(args[0])
+		},
+	})
+	root.AddCommand(devicesCmd)
+
 	statusCmd := &cobra.Command{
 		Use:   "status",
 		Short: "Show local vault status",

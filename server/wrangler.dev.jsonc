@@ -1,0 +1,23 @@
+// Local integration runs of the Go CLI only:
+//   npx wrangler dev -c wrangler.dev.jsonc --persist-to "$(mktemp -d)"
+// The production Worker code behind test/dev-entry.ts, which works around
+// the missing jurisdiction support of local workerd. No route, its own name;
+// never deploy this file.
+{
+  "name": "hort-api-dev",
+  "main": "test/dev-entry.ts",
+  "compatibility_date": "2026-08-01",
+  "build": { "command": "npm run build" },
+  "assets": { "directory": "./public", "run_worker_first": ["/api/*"] },
+  "durable_objects": {
+    "bindings": [
+      { "name": "ACCOUNT", "class_name": "Account" },
+      { "name": "RATE_LIMITER", "class_name": "RateLimiter" },
+      { "name": "CHALLENGE", "class_name": "Challenge" }
+    ]
+  },
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["Account", "RateLimiter"] },
+    { "tag": "v2", "new_sqlite_classes": ["Challenge"] }
+  ]
+}
