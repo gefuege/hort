@@ -213,6 +213,7 @@ export class Account extends DurableObject<Env> {
   async revokeDevice(req: Signed, id: string): Promise<Response> {
     const auth = await this.authenticate(req, true);
     if (auth instanceof Response) return auth;
+    if (id === req.device) return fail(409, "a device cannot revoke itself");
     const device = this.device(id);
     if (!device) return fail(404, "device not found");
     if (device.revoked_at !== null) return json(200, { devices_version: this.account()!.devices_version });

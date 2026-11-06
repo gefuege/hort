@@ -15,8 +15,48 @@ function accountStub(env: Env, accountId: string) {
   return env.ACCOUNT.jurisdiction("eu").getByName(accountId);
 }
 
+// Rate-limit key: IPv4 as is, IPv6 reduced to its /64 so rotating addresses
+// inside one allocation shares a bucket. IPv4-mapped IPv6 counts as IPv4.
 function clientIp(request: Request): string {
-  return request.headers.get("CF-Connecting-IP") ?? "unknown";
+  const raw = request.headers.get("CF-Connecting-IP");
+  if (!raw) return "unknown";
+  const ip = raw.toLowerCase();
+  if (!ip.includes(":")) return ip;
+  const mapped = ip.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
+  if (mapped) return mapped[1];
+  const [head, tail, extra] = ip.split("::");
+  if (extra !== undefined) return ip;
+  const groups = (part: string) => (part ? part.split(":") : []);
+  const front = groups(head);
+  const back = groups(tail ?? "");
+  const all = tail === undefined ? front : [...front, ...Array<string>(Math.max(0, 8 - front.length - back.length)).fill("0"), ...back];
+  if (all.length < 4 || all.some((g, i) => i < 4 && !/^[0-9a-f]{1,4}$/.test(g))) return ip;
+  return `${all.slice(0, 4).map((g) => parseInt(g, 16).toString(16)).join(":")}::/64`;
+}
+
+// Reads at most MAX_BODY_BYTES from the stream and cancels it beyond that.
+async function readBody(request: Request): Promise<Uint8Array | null> {
+  if (!request.body) return new Uint8Array();
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let length = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    length += value.length;
+    if (length > MAX_BODY_BYTES) {
+      await reader.cancel();
+      return null;
+    }
+    chunks.push(value);
+  }
+  const body = new Uint8Array(length);
+  let offset = 0;
+  for (const chunk of chunks) {
+    body.set(chunk, offset);
+    offset += chunk.length;
+  }
+  return body;
 }
 
 async function constantTimeEqual(a: string, b: string): Promise<boolean> {
@@ -46,8 +86,8 @@ async function readSigned(request: Request, url: URL, kind: "ak" | "device"): Pr
   const signature = b64Decode(h.get("Hort-Signature") ?? "");
   if (!signature || signature.length !== 64) return fail(400, "invalid Hort-Signature header");
   if (Number(h.get("Content-Length") ?? 0) > MAX_BODY_BYTES) return fail(413, "request body exceeds 64 KiB");
-  const body = new Uint8Array(await request.arrayBuffer());
-  if (body.length > MAX_BODY_BYTES) return fail(413, "request body exceeds 64 KiB");
+  const body = await readBody(request);
+  if (!body) return fail(413, "request body exceeds 64 KiB");
   return { accountId, device, method: request.method, pathWithQuery: url.pathname + url.search, timestamp, signature, body };
 }
 

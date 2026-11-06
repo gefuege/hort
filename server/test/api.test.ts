@@ -221,6 +221,19 @@ describe("POST /api/v1/accounts", () => {
   });
 });
 
+describe("input boundary", () => {
+  it("rejects a body over 64 KiB without Content-Length", async () => {
+    const f = await randomFixture();
+    const big = new Uint8Array(64 * 1024 + 1);
+    const stream = new ReadableStream({ start(c) { c.enqueue(big.subarray(0, 40000)); c.enqueue(big.subarray(40000)); c.close(); } });
+    const req = await signedRequest(createCall(f));
+    const chunked = new Request(req.url, { method: "POST", headers: req.headers, body: stream, duplex: "half" } as RequestInit);
+    expect(chunked.headers.get("Content-Length")).toBeNull();
+    const res = await exports.default.fetch(chunked);
+    expect(res.status).toBe(413);
+  });
+});
+
 describe("GET /api/v1/accounts/{id}/slot", () => {
   it("returns the passphrase slot, version, ak_sig and ak_pub without authentication", async () => {
     // Storage is shared within this file: the vector account may already exist (200) or not (201).
@@ -253,6 +266,18 @@ describe("GET /api/v1/accounts/{id}/slot", () => {
   });
 });
 
+describe("rate-limit key", () => {
+  it("shares one slot bucket per IPv6 /64 and separates other prefixes", async () => {
+    const f = await created(await randomFixture());
+    const p = hexEncode(random(4)).replace(/(.{4})(.{4})/, "$1:$2");
+    // Ten fetches in one /64, varying spelling, case and interface identifier.
+    const same = [`${p}:1:2::1`, `${p}:0001:0002:aaaa:bbbb:cccc:dddd`.toUpperCase(), `${p}:1:2:3:4:5:6`, `${p}:1:2::9`, `${p}:1:2::a`];
+    for (let i = 0; i < 10; i++) expect((await fetchSlot(f.account, same[i % same.length])).status).toBe(200);
+    expect((await fetchSlot(f.account, `${p}:1:2::ff`)).status).toBe(429);
+    expect((await fetchSlot(f.account, `${p}:1:3::1`)).status).toBe(200);
+  });
+});
+
 describe("devices", () => {
   it("enrolls, lists and revokes devices and bumps devices_version", async () => {
     const f = await created(await randomFixture());
@@ -274,6 +299,14 @@ describe("devices", () => {
     expect(await again.json()).toEqual({ devices_version: 3 });
     const unknown = await call({ account: f.account, device: f.deviceId, key: f.device, method: "DELETE", path: `/api/v1/devices/${hexEncode(random(16))}` });
     expect(unknown.status).toBe(404);
+  });
+
+  it("rejects a device revoking itself and keeps it active", async () => {
+    const f = await created(await randomFixture());
+    const res = await call({ account: f.account, device: f.deviceId, key: f.device, method: "DELETE", path: `/api/v1/devices/${f.deviceId}` });
+    expect(res.status).toBe(409);
+    expect(await res.text()).toBe("a device cannot revoke itself\n");
+    expect((await listDevices(f)).status).toBe(200);
   });
 
   it("treats an enrollment replay as idempotent", async () => {
