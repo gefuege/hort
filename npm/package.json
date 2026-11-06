@@ -1,8 +1,13 @@
 {
   "name": "@s16e/hort",
-  "version": "0.2.6",
+  "version": "0.4.0",
   "description": "Local secret store for humans and AI agents",
-  "keywords": ["secrets", "vault", "cli", "ai-agents"],
+  "keywords": [
+    "secrets",
+    "vault",
+    "cli",
+    "ai-agents"
+  ],
   "license": "MIT",
   "author": "Sebastian Breitzke",
   "repository": {
@@ -22,8 +27,15 @@
     "README.md",
     "LICENSE"
   ],
-  "os": ["darwin", "linux", "win32"],
-  "cpu": ["x64", "arm64"],
+  "os": [
+    "darwin",
+    "linux",
+    "win32"
+  ],
+  "cpu": [
+    "x64",
+    "arm64"
+  ],
   "engines": {
     "node": ">=16"
   }
