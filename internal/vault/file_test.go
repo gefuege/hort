@@ -174,6 +174,35 @@ func TestCreateRefusesExistingVault(t *testing.T) {
 	}
 }
 
+func TestCreateRefusesLeftoversOfMovedVault(t *testing.T) {
+	for _, leftover := range []string{"secret-key", "backup"} {
+		t.Run(leftover, func(t *testing.T) {
+			setHomeDir(t, t.TempDir())
+			ref := primaryRefOrFatal(t)
+			if err := os.MkdirAll(hortDirOrFatal(t), 0700); err != nil {
+				t.Fatal(err)
+			}
+			path := ref.SecretKeyPath
+			if leftover == "backup" {
+				path = BackupPathFor(ref)
+			}
+			want := []byte("synthetic-" + leftover)
+			if err := os.WriteFile(path, want, 0600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := createVault(ref, DefaultServer, "d", []byte("p"), fastArgon); err == nil || !strings.Contains(err.Error(), path) {
+				t.Fatalf("init ignored %s: %v", path, err)
+			}
+			if got, _ := os.ReadFile(path); !bytes.Equal(got, want) {
+				t.Fatal("leftover changed")
+			}
+			if _, err := os.Stat(ref.Path); !os.IsNotExist(err) {
+				t.Fatal("refused init wrote a vault")
+			}
+		})
+	}
+}
+
 func hortDirOrFatal(t *testing.T) string {
 	t.Helper()
 	dir, err := HortDir()

@@ -211,6 +211,15 @@ func createVault(ref VaultRef, server, deviceName string, passphrase []byte, par
 	} else if exists {
 		return NewVault{}, fmt.Errorf("a vault already exists at %s", ref.Path)
 	}
+	// A vault moved away still needs its Secret Key, and its backup would be
+	// replaced by the first save of the new vault.
+	for _, path := range []string{ref.SecretKeyPath, BackupPathFor(ref)} {
+		if _, err := os.Lstat(path); err == nil {
+			return NewVault{}, fmt.Errorf("%s exists and may belong to a vault moved away; remove it only if no vault uses it, then run init again", path)
+		} else if !os.IsNotExist(err) {
+			return NewVault{}, err
+		}
+	}
 
 	nv := NewVault{Server: server}
 	if nv.AccountID, err = randomBytes(AccountIDSize); err != nil {
