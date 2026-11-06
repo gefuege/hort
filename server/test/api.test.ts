@@ -708,6 +708,28 @@ describe("revisions", () => {
     expect(from).toEqual([f.deviceId, null]);
   });
 
+  it("refuses a session of another account than Hort-Account names, and accepts a matching or missing header", async () => {
+    const a = await created(await randomFixture());
+    const b = await created(await randomFixture());
+    const cookie = await session(a);
+    const r = revision();
+    const asB = { "Hort-Account": b.account };
+    const mismatchPull = await sessionFetch(cookie, "GET", "/api/v1/revisions?after=0", undefined, asB);
+    expect(mismatchPull.status).toBe(409);
+    expect(await mismatchPull.text()).toBe("signed in to a different account\n");
+    expect((await sessionFetch(cookie, "POST", "/api/v1/revisions", { revisions: [r] }, asB)).status).toBe(409);
+    expect((await sessionFetch(cookie, "GET", "/api/v1/devices", undefined, asB)).status).toBe(409);
+    expect((await page(a, "?after=0")).revisions).toEqual([]);
+    expect((await page(b, "?after=0")).revisions).toEqual([]);
+
+    expect((await sessionFetch(cookie, "POST", "/api/v1/revisions", { revisions: [r] }, { "Hort-Account": a.account })).status).toBe(200);
+    expect((await sessionFetch(cookie, "GET", "/api/v1/revisions?after=0", undefined, { "Hort-Account": a.account })).status).toBe(200);
+    expect((await sessionFetch(cookie, "GET", "/api/v1/revisions?after=0")).status).toBe(200);
+    // Sign-out ends the cookie's own session whatever the header says.
+    expect((await sessionFetch(cookie, "DELETE", "/api/v1/session", undefined, asB)).status).toBe(204);
+    expect((await sessionFetch(cookie, "GET", "/api/v1/revisions?after=0")).status).toBe(401);
+  });
+
   it("isolates accounts and rejects foreign, revoked and AK signatures", async () => {
     const a = await created(await randomFixture());
     const b = await created(await randomFixture());

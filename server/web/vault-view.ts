@@ -4,8 +4,26 @@
 // through validateWrite and the Append rule against the in-memory entry, then
 // POST /revisions. Values reach the DOM only on an explicit "Show".
 import { b64Decode, b64Encode } from "../src/wire";
-import { action, api, field, h, messageOf, ok, status, unlocked, type Unlocked } from "./app";
-import { accountIdEncode, appendStamp, current, lookupKey, newId, nowNs, openRevision, sealRevision, validateWrite, type Op, type Revision } from "./vault-core";
+import { accountIdEncode, appendStamp, current, lookupKey, newId, nowNs, openRevision, sealRevision, validateWrite, type AccountKeys, type Op, type Revision } from "./vault-core";
+
+type Child = Node | string | null | false | undefined;
+type StatusOut = { el: HTMLElement; set: (text: string, kind?: "error" | "ok") => void };
+type Unlocked = { accountId: Uint8Array; keys: AccountKeys };
+type Api = Pick<Host, "api" | "ok">;
+
+// What the page needs from the app shell, which owns the unlocked vault.
+export type Host = {
+  h: <K extends keyof HTMLElementTagNameMap>(tag: K, props?: Record<string, unknown>, ...children: Child[]) => HTMLElementTagNameMap[K];
+  field: (label: string, input: HTMLInputElement | HTMLTextAreaElement) => HTMLElement;
+  status: () => StatusOut;
+  action: (button: HTMLButtonElement, out: StatusOut, run: () => Promise<void>) => void;
+  messageOf: (err: unknown) => string;
+  // Session calls carry Hort-Account of the unlocked vault; the server answers
+  // 409 when the session belongs to another account.
+  api: (method: string, path: string, o?: { body?: string }) => Promise<Response>;
+  ok: <T>(res: Response) => Promise<T>;
+  unlocked: () => Unlocked | null;
+};
 
 type Vault = { account: string; cursor: number; entries: Map<string, Revision[]>; ids: Set<string>; skipped: number };
 let vault: Vault | null = null;
@@ -14,7 +32,17 @@ export function forgetVault(): void {
   vault = null;
 }
 
-class SignInRequired extends Error {}
+// The server refused the session: missing or expired (401), or signed in to
+// another account than the vault unlocked in this tab (409).
+export class SignInRequired extends Error {}
+
+function sessionRefused(res: Response): SignInRequired | null {
+  if (res.status === 401) return new SignInRequired("Your vault is unlocked, but loading it needs a passkey sign-in on this device.");
+  if (res.status === 409) {
+    return new SignInRequired("You are signed in to a different account than the vault unlocked in this tab. Sign in with a passkey of this account, or use its Emergency Kit.");
+  }
+  return null;
+}
 
 type Page = { revisions: { seq: number; id: string; ct: string }[]; cursor: number; more: boolean };
 
@@ -28,22 +56,24 @@ function remember(v: Vault, name: string, r: Revision): void {
 
 // Pulls everything after the cursor and merges by revision ID. A revision
 // that does not decrypt or decode is skipped and counted (§3.4).
-async function pull(u: Unlocked): Promise<Vault> {
+export async function pull(host: Api, u: Unlocked): Promise<Vault> {
   const account = accountIdEncode(u.accountId);
   if (vault?.account !== account) vault = { account, cursor: 0, entries: new Map(), ids: new Set(), skipped: 0 };
   const v = vault;
   for (;;) {
-    const res = await api("GET", `/api/v1/revisions?after=${v.cursor}`);
-    if (res.status === 401) throw new SignInRequired();
-    const page = await ok<Page>(res);
+    const res = await host.api("GET", `/api/v1/revisions?after=${v.cursor}`);
+    const refused = sessionRefused(res);
+    if (refused) throw refused;
+    const page = await host.ok<Page>(res);
     for (const { id, ct } of page.revisions) {
       if (v.ids.has(id)) continue;
       try {
         const { name, revision } = await openRevision(u.keys, id, b64Decode(ct) ?? new Uint8Array());
         remember(v, name, revision);
-      } catch (err) {
+      } catch {
+        // The error may quote decrypted bytes, so only the ID is logged.
         v.skipped++;
-        console.warn(`skipped revision ${id}: ${messageOf(err)}`);
+        console.warn(`skipped revision ${id}: it does not decrypt or decode`);
       }
     }
     v.cursor = page.cursor;
@@ -55,8 +85,8 @@ type Change = { op: Op; field: string; key: string; value: string };
 
 // Pulls deltas first, so the Append rule sees writes from other devices,
 // then stamps, validates, seals and pushes the changes as one batch.
-async function write(u: Unlocked, name: string, changes: Change[]): Promise<void> {
-  const v = await pull(u);
+export async function write(host: Api, u: Unlocked, name: string, changes: Change[]): Promise<void> {
+  const v = await pull(host, u);
   const known = [...(v.entries.get(name) ?? [])];
   const built: Revision[] = [];
   for (const c of changes) {
@@ -67,22 +97,32 @@ async function write(u: Unlocked, name: string, changes: Change[]): Promise<void
     built.push(r);
   }
   const revisions = await Promise.all(built.map(async (r) => ({ id: r.id, ct: b64Encode(await sealRevision(u.keys, name, r)) })));
-  const res = await api("POST", "/api/v1/revisions", { body: JSON.stringify({ revisions }) });
-  if (res.status === 401) throw new SignInRequired();
-  const result = await ok<{ accepted: string[]; duplicate: string[] }>(res);
+  const res = await host.api("POST", "/api/v1/revisions", { body: JSON.stringify({ revisions }) });
+  const refused = sessionRefused(res);
+  if (refused) throw refused;
+  const result = await host.ok<{ accepted: string[]; duplicate: string[] }>(res);
   const stored = new Set([...result.accepted, ...result.duplicate]);
   for (const r of built) if (stored.has(r.id)) remember(v, name, r);
 }
 
 // ---------------------------------------------------------------------------
-// Clipboard: cleared 30 s after a copy. Browsers allow the write only while
-// the tab has focus, so a clear that fails is retried when the tab regains it.
+// Clipboard: cleared 30 s after a copy. Browsers may refuse a write without a
+// recent user action in the tab, so a clear that fails is retried on the next
+// pointer or key press here.
 
 let clearTimer: number | undefined;
+const RETRY_EVENTS = ["pointerdown", "keydown"] as const;
 
 function clearClipboard(): void {
   clearTimer = undefined;
-  navigator.clipboard.writeText("").catch(() => window.addEventListener("focus", clearClipboard, { once: true }));
+  navigator.clipboard.writeText("").catch(() => {
+    for (const t of RETRY_EVENTS) window.addEventListener(t, retryClear);
+  });
+}
+
+function retryClear(): void {
+  for (const t of RETRY_EVENTS) window.removeEventListener(t, retryClear);
+  clearClipboard();
 }
 
 async function copy(value: string): Promise<void> {
@@ -91,7 +131,7 @@ async function copy(value: string): Promise<void> {
   } catch {
     throw new Error("This browser did not allow copying to the clipboard. Use Show and copy the value by hand.");
   }
-  window.removeEventListener("focus", clearClipboard);
+  for (const t of RETRY_EVENTS) window.removeEventListener(t, retryClear);
   window.clearTimeout(clearTimer);
   clearTimer = window.setTimeout(clearClipboard, 30_000);
 }
@@ -111,34 +151,47 @@ function variantLabel(fieldName: string, key: string): string {
 
 // The add form and an open editor show the same labels, so ids come from a counter.
 let inputs = 0;
-const textInput = (props: Record<string, unknown> = {}) => h("input", { id: `v-${++inputs}`, autocomplete: "off", spellcheck: false, ...props });
-const valueInput = () => h("textarea", { id: `v-${++inputs}`, autocomplete: "off", spellcheck: false, rows: 3, required: true });
 
-function signInPrompt(main: HTMLElement, text: string): void {
-  main.append(
-    h("p", { class: "sec-intro" }, text),
-    h("div", { class: "actions" }, h("a", { class: "btn btn-primary", href: "/login" }, "Sign in with a passkey"), h("a", { class: "btn btn-ghost", href: "/recover" }, "Use your Emergency Kit")),
-  );
-}
+export async function vaultView(main: HTMLElement, host: Host): Promise<void> {
+  const { h, field, status, action, messageOf } = host;
+  const textInput = (props: Record<string, unknown> = {}) => h("input", { id: `v-${++inputs}`, autocomplete: "off", spellcheck: false, ...props });
+  const valueInput = () => h("textarea", { id: `v-${++inputs}`, autocomplete: "off", spellcheck: false, rows: 3 });
+  const body = h("div", {});
+  const signInPrompt = (text: string) =>
+    body.replaceChildren(
+      h("p", { class: "sec-intro" }, text),
+      h("div", { class: "actions" }, h("a", { class: "btn btn-primary", href: "/login" }, "Sign in with a passkey"), h("a", { class: "btn btn-ghost", href: "/recover" }, "Use your Emergency Kit")),
+    );
+  main.append(body);
 
-export async function vaultView(main: HTMLElement): Promise<void> {
-  const u = unlocked;
+  const u = host.unlocked();
   if (!u) {
-    signInPrompt(main, "Your vault is locked in this tab. Sign in with a passkey that unlocks it, or use your Emergency Kit.");
+    signInPrompt("Your vault is locked in this tab. Sign in with a passkey that unlocks it, or use your Emergency Kit.");
     return;
   }
+  // False once another view replaced this one or the tab locked or switched vaults.
+  const live = () => body.isConnected && host.unlocked() === u;
+  // Runs a pull or write; a refused session swaps the whole view for the sign-in prompt.
+  const run = async <T>(task: () => Promise<T>): Promise<T | null> => {
+    try {
+      const result = await task();
+      return live() ? result : null;
+    } catch (err) {
+      if (!live()) return null;
+      if (err instanceof SignInRequired) {
+        signInPrompt(err.message);
+        return null;
+      }
+      throw err;
+    }
+  };
+
   const out = status();
-  main.append(out.el);
+  body.append(out.el);
   out.set("Loading your vault …");
-  let v: Vault;
-  try {
-    v = await pull(u);
-  } catch (err) {
-    if (!(err instanceof SignInRequired)) throw err;
-    out.set("");
-    signInPrompt(main, "Your vault is unlocked, but loading it needs a passkey sign-in on this device.");
-    return;
-  }
+  const loaded = await run(() => pull(host, u));
+  if (!loaded) return;
+  const v = loaded;
   out.set("");
 
   let open: string | null = null; // entry whose editor is shown
@@ -151,12 +204,7 @@ export async function vaultView(main: HTMLElement): Promise<void> {
 
   // Runs a write, then redraws from memory; errors stay next to the form.
   const save = async (name: string, changes: Change[], done: string) => {
-    try {
-      await write(u, name, changes);
-    } catch (err) {
-      if (err instanceof SignInRequired) throw new Error("Your sign-in has expired. Sign in with your passkey again.");
-      throw err;
-    }
+    if ((await run(() => write(host, u, name, changes).then(() => true))) === null) return;
     draw();
     out.set(done, "ok");
   };
@@ -176,14 +224,14 @@ export async function vaultView(main: HTMLElement): Promise<void> {
       h("div", { class: "actions" }, h("button", { class: "btn btn-primary", type: "submit" }, "Save value")),
       setOut.el,
     );
-    submit(setForm, setOut, () =>
+    submit(setForm, setOut, messageOf, () =>
       save(name, [{ op: "set", field: f.value.trim(), key: lookupKey(env.value.trim(), ctx.value.trim()), value: value.value }], `Saved a value for ${name}.`),
     );
 
     const descOut = status();
     const desc = textInput({ value: description });
     const descForm = h("form", { class: "form" }, field("Description", desc), h("div", { class: "actions" }, h("button", { class: "btn btn-ghost", type: "submit" }, "Save description")), descOut.el);
-    submit(descForm, descOut, () => save(name, [{ op: "describe", field: "", key: "", value: desc.value.trim() }], `Saved the description of ${name}.`));
+    submit(descForm, descOut, messageOf, () => save(name, [{ op: "describe", field: "", key: "", value: desc.value.trim() }], `Saved the description of ${name}.`));
 
     const delOut = status();
     const del = h("button", { class: "btn btn-ghost btn-danger", type: "button" }, "Delete secret");
@@ -231,7 +279,7 @@ export async function vaultView(main: HTMLElement): Promise<void> {
       const copyButton = h("button", { class: "btn btn-ghost btn-small", type: "button" }, "Copy");
       action(copyButton, rowOut, async () => {
         await copy(x.value);
-        rowOut.set("Copied. The clipboard is cleared in 30 s.", "ok");
+        rowOut.set("Copied. Hort tries to clear the clipboard after 30 s; some browsers do not allow it.", "ok");
       });
       const del = h("button", { class: "btn btn-ghost btn-small", type: "button", "aria-label": `Delete ${variantLabel(x.field, x.key)}` }, "Delete");
       action(del, rowOut, async () => {
@@ -295,7 +343,7 @@ export async function vaultView(main: HTMLElement): Promise<void> {
       h("div", { class: "actions" }, h("button", { class: "btn btn-primary", type: "submit" }, "Save"), h("button", { class: "btn btn-ghost", type: "button", onclick: () => addArea.replaceChildren() }, "Cancel")),
       formOut.el,
     );
-    submit(form, formOut, async () => {
+    submit(form, formOut, messageOf, async () => {
       const n = name.value.trim();
       const changes: Change[] = [{ op: "set", field: f.value.trim(), key: lookupKey(env.value.trim(), ctx.value.trim()), value: value.value }];
       const d = desc.value.trim();
@@ -312,17 +360,17 @@ export async function vaultView(main: HTMLElement): Promise<void> {
     addArea.querySelector("input")?.focus();
   });
   action(refreshButton, out, async () => {
-    await pull(u);
+    if ((await run(() => pull(host, u))) === null) return;
     draw();
     out.set("");
   });
 
-  main.append(h("div", { class: "vault-bar" }, search, addButton, refreshButton), addArea, count, list);
+  body.append(h("div", { class: "vault-bar" }, search, addButton, refreshButton), addArea, count, list);
   draw();
 }
 
 // Form submit with the submit button disabled and errors shown in place.
-function submit(form: HTMLFormElement, out: ReturnType<typeof status>, run: () => Promise<void>): void {
+function submit(form: HTMLFormElement, out: StatusOut, messageOf: Host["messageOf"], run: () => Promise<void>): void {
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
     const button = form.querySelector<HTMLButtonElement>("button[type=submit]");

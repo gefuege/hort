@@ -106,7 +106,11 @@ async function readSigned(request: Request, url: URL, kind: "ak" | "device", max
 // and carries a random token; the account DO stores only its SHA-256.
 // State-changing calls also need Hort-CSRF: 1, which a cross-origin page
 // cannot send without a preflight, and an Origin equal to the site origin.
-async function readSession(request: Request, url: URL, write: boolean): Promise<SessionAuth | Response> {
+// The web app names the vault it has unlocked in Hort-Account; a session of
+// another account is refused, so nothing is read from or written to the wrong
+// account. Without the header the cookie alone decides. Sign-out skips the
+// check: it only ends the cookie's own session.
+async function readSession(request: Request, url: URL, write: boolean, bindAccount = true): Promise<SessionAuth | Response> {
   const cookie = (request.headers.get("Cookie") ?? "").split(/;\s*/).find((c) => c.startsWith(`${SESSION_COOKIE}=`));
   const [accountId, token] = (cookie?.slice(SESSION_COOKIE.length + 1) ?? "").split(".");
   const tokenBytes = token ? b64urlDecode(token) : null;
@@ -117,6 +121,8 @@ async function readSession(request: Request, url: URL, write: boolean): Promise<
     if (request.headers.get("Hort-CSRF") !== "1") return fail(403, "missing Hort-CSRF header");
     if (request.headers.get("Origin") !== url.origin) return fail(403, "cross-origin request refused");
   }
+  const claimed = request.headers.get("Hort-Account");
+  if (bindAccount && claimed !== null && claimed !== accountId) return fail(409, "signed in to a different account");
   return { accountId, session: hexEncode(await sha256(tokenBytes)) };
 }
 
@@ -287,7 +293,7 @@ async function route(request: Request, env: Bindings): Promise<Response> {
 
   if (path === "/api/v1/session") {
     if (method !== "DELETE") return fail(405, "method not allowed");
-    const session = await readSession(request, url, true);
+    const session = await readSession(request, url, true, false);
     if (session instanceof Response) return session;
     const res = await accountStub(env, session.accountId).logout(session);
     const cleared = new Response(res.body, res);

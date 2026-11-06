@@ -1,4 +1,4 @@
-// Hort web app: /login, /recover, /devices and /vault (contract §5.4, §8.1, §8.2).
+// Hort web app: /login, /recover, /devices, /vault and /r/<id> (contract §5.4, §8.1, §8.2).
 // The vault key lives only in this module's memory. The pages are one
 // app: links between them swap the view without a page load, so an unlocked
 // vault stays unlocked; closing the tab or signing out drops everything.
@@ -32,8 +32,8 @@ import { forgetVault, vaultView } from "./vault-view";
 // ---------------------------------------------------------------------------
 // State, memory only
 
-export type Unlocked = { accountId: Uint8Array; vk: Uint8Array; keys: AccountKeys };
-export let unlocked: Unlocked | null = null;
+type Unlocked = { accountId: Uint8Array; vk: Uint8Array; keys: AccountKeys };
+let unlocked: Unlocked | null = null;
 let signedIn = false;
 // Kit values typed on /recover, kept for the print view on that page only.
 let kit: { accountId: string; secretKey: string } | null = null;
@@ -61,7 +61,7 @@ async function unlock(accountId: Uint8Array, vk: Uint8Array, akPub: Uint8Array, 
 
 type Child = Node | string | null | false | undefined;
 
-export function h<K extends keyof HTMLElementTagNameMap>(tag: K, props: Record<string, unknown> = {}, ...children: Child[]): HTMLElementTagNameMap[K] {
+function h<K extends keyof HTMLElementTagNameMap>(tag: K, props: Record<string, unknown> = {}, ...children: Child[]): HTMLElementTagNameMap[K] {
   const el = document.createElement(tag);
   for (const [k, v] of Object.entries(props)) {
     if (v === undefined || v === false) continue;
@@ -78,12 +78,12 @@ function add(el: HTMLElement, ...children: Child[]): void {
   for (const c of children) if (c !== null && c !== false && c !== undefined) el.append(c);
 }
 
-export function field(label: string, input: HTMLInputElement | HTMLTextAreaElement, hint?: string): HTMLElement {
+function field(label: string, input: HTMLInputElement | HTMLTextAreaElement, hint?: string): HTMLElement {
   input.id ||= `f-${label.toLowerCase().replace(/\W+/g, "-")}`;
   return h("div", { class: "field" }, h("label", { htmlFor: input.id }, label), input, hint ? h("p", { class: "hint" }, hint) : null);
 }
 
-export function status(): { el: HTMLElement; set: (text: string, kind?: "error" | "ok") => void } {
+function status(): { el: HTMLElement; set: (text: string, kind?: "error" | "ok") => void } {
   const el = h("p", { class: "status", role: "status" });
   return {
     el,
@@ -97,7 +97,7 @@ export function status(): { el: HTMLElement; set: (text: string, kind?: "error" 
 const time = (t: number | null) => (t === null ? "never" : new Date(t * 1000).toLocaleString());
 
 // Runs a button action with the button disabled and errors shown in place.
-export function action(button: HTMLButtonElement, out: ReturnType<typeof status>, run: () => Promise<void>): void {
+function action(button: HTMLButtonElement, out: ReturnType<typeof status>, run: () => Promise<void>): void {
   button.addEventListener("click", async () => {
     button.disabled = true;
     try {
@@ -110,7 +110,7 @@ export function action(button: HTMLButtonElement, out: ReturnType<typeof status>
   });
 }
 
-export function messageOf(err: unknown): string {
+function messageOf(err: unknown): string {
   if (err instanceof DOMException && err.name === "NotAllowedError") return "The passkey prompt was cancelled or timed out.";
   if (err instanceof DOMException && err.name === "InvalidStateError") return "This passkey is already registered for this account.";
   return err instanceof Error ? err.message : String(err);
@@ -119,15 +119,17 @@ export function messageOf(err: unknown): string {
 // ---------------------------------------------------------------------------
 // API
 
-export async function api(method: string, path: string, o: { body?: string; ak?: AccountKeys } = {}): Promise<Response> {
+async function api(method: string, path: string, o: { body?: string; ak?: AccountKeys } = {}): Promise<Response> {
   const body = o.body ?? "";
   const headers: Record<string, string> = o.ak ? await akHeaders(o.ak, method, path, str(body)) : {};
+  // A session call names the unlocked account, so the server refuses a session of another account (409).
+  if (!o.ak && unlocked) headers["Hort-Account"] = accountIdEncode(unlocked.accountId);
   if (method !== "GET") headers["Hort-CSRF"] = "1";
   if (o.body !== undefined) headers["Content-Type"] = "application/json";
   return fetch(path, { method, headers, body: method === "GET" ? undefined : body, credentials: "same-origin" });
 }
 
-export async function ok<T>(res: Response): Promise<T> {
+async function ok<T>(res: Response): Promise<T> {
   if (!res.ok) throw new Error((await res.text()).trim() || `request failed (${res.status})`);
   return res.status === 204 ? (undefined as T) : ((await res.json()) as T);
 }
@@ -569,7 +571,7 @@ const routes: Record<string, { tag: string; title: string; view: (main: HTMLElem
   "/login": { tag: "// login", title: "Sign in", view: loginView },
   "/recover": { tag: "// recover", title: "Recover access", view: recoverView },
   "/devices": { tag: "// devices", title: "Devices", view: devicesView },
-  "/vault": { tag: "// vault", title: "Vault", view: vaultView },
+  "/vault": { tag: "// vault", title: "Vault", view: (main) => vaultView(main, { h, field, status, action, messageOf, api, ok, unlocked: () => unlocked }) },
 };
 
 // /r/<id>: an agent's secret request (contract §7.3).
