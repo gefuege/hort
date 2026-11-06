@@ -409,3 +409,79 @@ func captureStderr(t *testing.T) *stderrLog {
 	})
 	return log
 }
+
+// TestRegistrationToken needs a Worker that was started with a registration token:
+//
+//	cd server && npx wrangler dev -c wrangler.dev.jsonc --persist-to "$(mktemp -d)" --var REGISTRATION_TOKEN:synthetic-registration-token
+//	HORT_TEST_TOKEN_SERVER=http://localhost:8787 go test ./internal/cli -run TestRegistrationToken -count=1 -v
+func TestRegistrationToken(t *testing.T) {
+	target := os.Getenv("HORT_TEST_TOKEN_SERVER")
+	if target == "" {
+		t.Skip("HORT_TEST_TOKEN_SERVER is not set")
+	}
+	const token = "synthetic-registration-token"
+	srv := httptest.NewTLSServer(&faultProxy{target: strings.TrimRight(target, "/")})
+	defer srv.Close()
+	defer func(c *http.Client) { api.HTTPClient = c }(api.HTTPClient)
+	api.HTTPClient = srv.Client()
+	errs := captureStderr(t)
+	t.Setenv("HORT_PASSPHRASE", "synthetic-remote-passphrase")
+	t.Setenv("HORT_REGISTRATION_TOKEN", "")
+
+	// Without the variable init warns with the server message and the vault stays usable.
+	a := t.TempDir()
+	use(t, a)
+	must(t, CmdInit(srv.URL, "dev-a"))
+	if body(t, a).Sync.Registered {
+		t.Fatal("registered without a token")
+	}
+	if out := errs.since(0); !strings.Contains(out, "a registration token is required") {
+		t.Fatalf("server message missing: %s", out)
+	}
+	must(t, CmdSet("alpha", "", "a-value", "", "", ""))
+	if got, err := readStore().GetSecret("alpha", "", "", ""); err != nil || got != "a-value" {
+		t.Fatalf("local read: %q %v", got, err)
+	}
+
+	// A wrong token is refused the same way.
+	t.Setenv("HORT_REGISTRATION_TOKEN", "synthetic-wrong-token")
+	if err := CmdSync(false); err == nil {
+		t.Fatal("sync registered with a wrong token")
+	}
+	if body(t, a).Sync.Registered {
+		t.Fatal("registered with a wrong token")
+	}
+
+	// The first sync with the right token registers.
+	t.Setenv("HORT_REGISTRATION_TOKEN", token)
+	must(t, CmdSync(false))
+	if !body(t, a).Sync.Registered {
+		t.Fatal("sync did not register with the token")
+	}
+
+	// init registers with the token as well.
+	b := t.TempDir()
+	use(t, b)
+	must(t, CmdInit(srv.URL, "dev-b"))
+	if !body(t, b).Sync.Registered {
+		t.Fatalf("init did not register: %s", errs.text())
+	}
+
+	// The token reaches neither stderr nor any file under a home.
+	for _, secret := range []string{token, "synthetic-wrong-token"} {
+		if strings.Contains(errs.since(0), secret) {
+			t.Fatalf("%q on stderr", secret)
+		}
+		for _, home := range []string{a, b} {
+			_ = filepath.Walk(home, func(p string, info os.FileInfo, err error) error {
+				if err != nil || info.IsDir() {
+					return nil
+				}
+				if data, _ := os.ReadFile(p); bytes.Contains(data, []byte(secret)) {
+					t.Errorf("%q in %s", secret, p)
+				}
+				return nil
+			})
+		}
+	}
+}

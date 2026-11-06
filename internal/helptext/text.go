@@ -43,7 +43,9 @@ MANAGE:
 SYNC AND DEVICES:
   hort sync [--json]                     Sync with the server now, without a time limit. The
                                          first run registers the account (init does it when
-                                         the server answers).
+                                         the server answers). A server that only takes
+                                         invited accounts needs HORT_REGISTRATION_TOKEN
+                                         set for that first run.
   hort enroll <account-id> [--server <url>] [--name <n>]
                                          Add this device to an existing account. Asks for the
                                          Secret Key and the passphrase, then pulls the vault.
@@ -80,6 +82,8 @@ FLAGS:
   HORT_PASSPHRASE and HORT_SECRET_KEY replace the passphrase prompt and the
   Secret Key file for automation. Without a terminal, init prints the
   Emergency Kit and skips the typed-back confirmation.
+  HORT_REGISTRATION_TOKEN is sent only when init or the first sync registers
+  the account; it is never stored or printed.
 
 KEYS:
   Your vault opens only with your passphrase plus your Secret Key. The Secret

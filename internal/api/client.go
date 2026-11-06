@@ -39,6 +39,10 @@ type Client struct {
 	AccountID []byte
 	Device    string // lowercase hex device ID, or vault.AKDeviceID
 	Key       ed25519.PrivateKey
+
+	// RegistrationToken is sent as Hort-Registration-Token when not empty;
+	// only account registration sets it (§5.1).
+	RegistrationToken string
 }
 
 // Error is a non-2xx answer: the HTTP status and the server's one-line message.
@@ -81,6 +85,9 @@ func (c Client) Do(method, path string, body, out any) error {
 	req.Header.Set("Hort-Signature", base64.StdEncoding.EncodeToString(sig))
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
+	}
+	if c.RegistrationToken != "" {
+		req.Header.Set("Hort-Registration-Token", c.RegistrationToken)
 	}
 	return send(req, out)
 }

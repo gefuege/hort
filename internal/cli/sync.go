@@ -105,7 +105,9 @@ func readLastSync(ref vault.VaultRef) string {
 func register(ref vault.VaultRef, vk []byte, data *vault.VaultData, acct vault.Account) error {
 	d := data.Device
 	slot := api.Slot{Version: acct.Slot.Version, Bytes: acct.Slot.Bytes, AKSig: acct.Slot.AKSig}
-	version, err := akClient(acct).CreateAccount(publicKey(acct.Keys.AK), slot, api.NewDevice{ID: d.ID, Pub: publicKey(d.Key()), Name: d.Name})
+	c := akClient(acct)
+	c.RegistrationToken = os.Getenv("HORT_REGISTRATION_TOKEN")
+	version, err := c.CreateAccount(publicKey(acct.Keys.AK), slot, api.NewDevice{ID: d.ID, Pub: publicKey(d.Key()), Name: d.Name})
 	if err != nil {
 		return fmt.Errorf("registering the account on %s: %w", acct.Server, err)
 	}
