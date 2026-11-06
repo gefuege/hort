@@ -60,7 +60,8 @@ const MAX_PENDING_REQUESTS = 50;
 const MAX_ENVELOPE_BYTES = 64 * 1024;
 const MAX_META_BYTES = 16 * 1024; // name <= 128 B plus description and parts; far below an envelope
 const MIN_CT_BYTES = 28; // nonce(12) + GCM tag(16)
-const MAX_PUSH_REVISIONS = 500;
+const MAX_PUSH_REVISIONS = 500; // also the most rows per pull page
+const MAX_PAGE_CT_BYTES = 4 * 1024 * 1024; // keeps a pull page response near 5.5 MB of base64
 const MAX_ACCOUNT_REVISIONS = 50_000;
 const MAX_ACCOUNT_CT_BYTES = 64 * 1024 * 1024;
 const REQUEST_TTL_SECONDS = 24 * 60 * 60;
@@ -126,6 +127,26 @@ async function parseSlot(
 function ciphertext(v: unknown, max: number): Uint8Array | null {
   const bytes = typeof v === "string" ? b64Decode(v) : null;
   return bytes && bytes.length >= MIN_CT_BYTES && bytes.length <= max ? bytes : null;
+}
+
+// Parses {revisions: [{id, ct}]} with 1 to MAX_PUSH_REVISIONS entries. An ID
+// repeated in the body counts once, with its first ct.
+function parseRevisions(body: Uint8Array): Map<string, Uint8Array> | Response {
+  const parsed = parseObject(body, ["revisions"]);
+  const list = parsed && Array.isArray(parsed.revisions) ? parsed.revisions : null;
+  if (!list || list.length < 1 || list.length > MAX_PUSH_REVISIONS) {
+    return fail(400, `body must be {revisions: [{id, ct}]} with 1 to ${MAX_PUSH_REVISIONS} revisions`);
+  }
+  const revisions = new Map<string, Uint8Array>();
+  for (const item of list) {
+    const o = asObject(item, ["id", "ct"]);
+    if (!o || typeof o.id !== "string" || !hexDecode(o.id, 16)) return fail(400, "revision ID must be 16 bytes of lowercase hex");
+    const ct = typeof o.ct === "string" ? b64Decode(o.ct) : null;
+    if (!ct || ct.length < MIN_CT_BYTES) return fail(400, `revision ct must be base64 of at least ${MIN_CT_BYTES} bytes`);
+    if (ct.length > MAX_ENVELOPE_BYTES) return fail(413, "revision envelope exceeds 64 KiB");
+    if (!revisions.has(o.id)) revisions.set(o.id, ct);
+  }
+  return revisions;
 }
 
 export class Account extends DurableObject<Env> {
@@ -558,36 +579,13 @@ export class Account extends DurableObject<Env> {
     return json(200, { status: "declined" });
   }
 
-  // POST /api/v1/requests/{id}/fulfill {revisions:[{id, ct}]} (contract §7.3),
-  // session only; the Worker checked Hort-CSRF and Origin. Revisions and
-  // status change in one transaction. Revisions already stored (by ID) count
-  // as duplicates.
-  async fulfillRequest(req: SessionAuth, id: string, body: Uint8Array): Promise<Response> {
-    const auth = await this.authenticate(req, true);
-    if (auth instanceof Response) return auth;
-    const parsed = parseObject(body, ["revisions"]);
-    const list = parsed && Array.isArray(parsed.revisions) ? parsed.revisions : null;
-    if (!list || list.length < 1 || list.length > MAX_PUSH_REVISIONS) {
-      return fail(400, `body must be {revisions: [{id, ct}]} with 1 to ${MAX_PUSH_REVISIONS} revisions`);
-    }
-    const revisions = new Map<string, Uint8Array>();
-    for (const item of list) {
-      const o = asObject(item, ["id", "ct"]);
-      if (!o || typeof o.id !== "string" || !hexDecode(o.id, 16)) return fail(400, "revision ID must be 16 bytes of lowercase hex");
-      const ct = typeof o.ct === "string" ? b64Decode(o.ct) : null;
-      if (!ct || ct.length < MIN_CT_BYTES) return fail(400, `revision ct must be base64 of at least ${MIN_CT_BYTES} bytes`);
-      if (ct.length > MAX_ENVELOPE_BYTES) return fail(413, "revision envelope exceeds 64 KiB");
-      if (!revisions.has(o.id)) revisions.set(o.id, ct);
-    }
-
-    // No await below: state check and writes are one atomic step.
-    if (!this.sessionValid(req.session)) return fail(401, SESSION_EXPIRED);
-    this.expireDue();
-    const r = this.request(id);
-    if (!r) return fail(404, "request not found");
-    if (r.status !== "pending") return fail(409, `request is ${r.status}`);
+  // Inserts the revisions whose ID is not stored yet and returns the split,
+  // or a 413 when the account limits would be exceeded. Synchronous, so a
+  // caller runs it inside one atomic step with its own checks.
+  private storeRevisions(revisions: Map<string, Uint8Array>, fromDevice: string | null): { accepted: string[]; duplicate: string[] } | Response {
+    const ids = [...revisions.keys()];
     const stored = new Set(
-      this.sql.exec<{ id: string }>(`SELECT id FROM revisions WHERE id IN (${[...revisions.keys()].map(() => "?").join(",")})`, ...revisions.keys())
+      this.sql.exec<{ id: string }>(`SELECT id FROM revisions WHERE id IN (${ids.map(() => "?").join(",")})`, ...ids)
         .toArray().map((row) => row.id),
     );
     const fresh = [...revisions].filter(([rid]) => !stored.has(rid));
@@ -597,12 +595,69 @@ export class Account extends DurableObject<Env> {
       return fail(413, "account revision storage limit reached");
     }
     const t = now();
-    this.ctx.storage.transactionSync(() => {
-      for (const [rid, ct] of fresh) {
-        this.sql.exec("INSERT INTO revisions (id, ct, from_device, received_at) VALUES (?, ?, NULL, ?)", rid, ct, t);
-      }
+    for (const [rid, ct] of fresh) {
+      this.sql.exec("INSERT INTO revisions (id, ct, from_device, received_at) VALUES (?, ?, ?, ?)", rid, ct, fromDevice, t);
+    }
+    return { accepted: fresh.map(([rid]) => rid), duplicate: ids.filter((rid) => stored.has(rid)) };
+  }
+
+  // POST /api/v1/revisions {revisions:[{id, ct}]}, device-signed (contract
+  // §6.3, §6.6). An ID already stored is a duplicate whatever its ct: the
+  // server cannot tell envelopes apart, and the same ID with other content
+  // can only come from a bug, which the pulling client reports.
+  async pushRevisions(req: Signed): Promise<Response> {
+    const auth = await this.authenticate(req, true);
+    if (auth instanceof Response) return auth;
+    const revisions = parseRevisions(req.body);
+    if (revisions instanceof Response) return revisions;
+    // No await below: limit check and inserts are one atomic step.
+    const result = this.ctx.storage.transactionSync(() => this.storeRevisions(revisions, req.device));
+    if (result instanceof Response) return result;
+    return json(200, result);
+  }
+
+  // GET /api/v1/revisions?after=SEQ&limit=N, device-signed (contract §6.3,
+  // §6.6). A page ends at `limit` rows or MAX_PAGE_CT_BYTES of ct, whichever
+  // comes first, and always holds at least one row when one exists.
+  async listRevisions(req: Signed, after: number, limit: number): Promise<Response> {
+    const auth = await this.authenticate(req, false);
+    if (auth instanceof Response) return auth;
+    const revisions: { seq: number; id: string; ct: string }[] = [];
+    let bytes = 0;
+    let cursor = after;
+    for (const row of this.sql.exec<{ seq: number; id: string; ct: ArrayBuffer }>("SELECT seq, id, ct FROM revisions WHERE seq > ? ORDER BY seq LIMIT ?", after, limit)) {
+      if (revisions.length > 0 && bytes + row.ct.byteLength > MAX_PAGE_CT_BYTES) break;
+      bytes += row.ct.byteLength;
+      revisions.push({ seq: row.seq, id: row.id, ct: b64Encode(new Uint8Array(row.ct)) });
+      cursor = row.seq;
+    }
+    const more = this.sql.exec<{ n: number }>("SELECT count(*) AS n FROM (SELECT 1 FROM revisions WHERE seq > ? LIMIT 1)", cursor).one().n > 0;
+    return json(200, { revisions, cursor, more, devices_version: auth.account.devices_version });
+  }
+
+  // POST /api/v1/requests/{id}/fulfill {revisions:[{id, ct}]} (contract §7.3),
+  // session only; the Worker checked Hort-CSRF and Origin. Revisions and
+  // status change in one transaction. Revisions already stored (by ID) count
+  // as duplicates.
+  async fulfillRequest(req: SessionAuth, id: string, body: Uint8Array): Promise<Response> {
+    const auth = await this.authenticate(req, true);
+    if (auth instanceof Response) return auth;
+    const revisions = parseRevisions(body);
+    if (revisions instanceof Response) return revisions;
+
+    // No await below: state check and writes are one atomic step.
+    if (!this.sessionValid(req.session)) return fail(401, SESSION_EXPIRED);
+    this.expireDue();
+    const r = this.request(id);
+    if (!r) return fail(404, "request not found");
+    if (r.status !== "pending") return fail(409, `request is ${r.status}`);
+    const result = this.ctx.storage.transactionSync(() => {
+      const stored = this.storeRevisions(revisions, null);
+      if (stored instanceof Response) return stored;
       this.sql.exec("UPDATE requests SET status = 'fulfilled', revision_ids = ? WHERE id = ?", JSON.stringify([...revisions.keys()]), id);
+      return stored;
     });
-    return json(200, { accepted: fresh.map(([rid]) => rid), duplicate: [...stored] });
+    if (result instanceof Response) return result;
+    return json(200, result);
   }
 }

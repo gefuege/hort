@@ -15,6 +15,9 @@ const MAX_BODY_BYTES = 64 * 1024;
 // A fulfil carries a set and a describe revision, each up to a 64 KiB
 // envelope, base64-encoded in JSON.
 const MAX_FULFILL_BODY_BYTES = 256 * 1024;
+// A push carries up to 500 envelopes of up to 64 KiB each; the client splits
+// larger batches by this size (contract §6.6).
+const MAX_PUSH_BODY_BYTES = 4 * 1024 * 1024;
 
 type Bindings = Env & { REGISTRATION_TOKEN?: string };
 
@@ -77,7 +80,7 @@ async function constantTimeEqual(a: string, b: string): Promise<boolean> {
 
 // Stateless checks of the signature headers (contract §6.2) and reading the
 // exact body bytes. Key lookup and verification happen in the account DO.
-async function readSigned(request: Request, url: URL, kind: "ak" | "device"): Promise<Signed | Response> {
+async function readSigned(request: Request, url: URL, kind: "ak" | "device", maxBody = MAX_BODY_BYTES): Promise<Signed | Response> {
   const h = request.headers;
   const accountId = h.get("Hort-Account") ?? "";
   if (!accountIdDecode(accountId)) return fail(400, "invalid Hort-Account header");
@@ -92,9 +95,10 @@ async function readSigned(request: Request, url: URL, kind: "ak" | "device"): Pr
   }
   const signature = b64Decode(h.get("Hort-Signature") ?? "");
   if (!signature || signature.length !== 64) return fail(400, "invalid Hort-Signature header");
-  if (Number(h.get("Content-Length") ?? 0) > MAX_BODY_BYTES) return fail(413, "request body exceeds 64 KiB");
-  const body = await readBody(request);
-  if (!body) return fail(413, "request body exceeds 64 KiB");
+  const tooLarge = `request body exceeds ${maxBody / 1024} KiB`;
+  if (Number(h.get("Content-Length") ?? 0) > maxBody) return fail(413, tooLarge);
+  const body = await readBody(request, maxBody);
+  if (!body) return fail(413, tooLarge);
   return { accountId, device, method: request.method, pathWithQuery: url.pathname + url.search, timestamp, signature, body };
 }
 
@@ -181,6 +185,23 @@ async function route(request: Request, env: Bindings): Promise<Response> {
     const req = await readSigned(request, url, "ak");
     if (req instanceof Response) return req;
     return accountStub(env, req.accountId).putSlot(req, m[1]);
+  }
+
+  if (path === "/api/v1/revisions") {
+    if (method === "POST") {
+      const req = await readSigned(request, url, "device", MAX_PUSH_BODY_BYTES);
+      if (req instanceof Response) return req;
+      return accountStub(env, req.accountId).pushRevisions(req);
+    }
+    if (method === "GET") {
+      const q = url.search.match(/^\?after=(0|[1-9][0-9]{0,14})(?:&limit=([1-9][0-9]{0,2}))?$/);
+      const limit = q ? Number(q[2] ?? 500) : 0;
+      if (!q || limit > 500) return fail(400, "query must be ?after=SEQ with an optional &limit=1..500");
+      const req = await readSigned(request, url, "device");
+      if (req instanceof Response) return req;
+      return accountStub(env, req.accountId).listRevisions(req, Number(q[1]), limit);
+    }
+    return fail(405, "method not allowed");
   }
 
   if (path === "/api/v1/requests") {

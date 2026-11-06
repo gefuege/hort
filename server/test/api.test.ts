@@ -582,3 +582,118 @@ describe("requests", () => {
     expect(limited).toBeGreaterThan(0);
   });
 });
+
+// Revisions (contract §6.3, §6.6).
+type Page = { revisions: { seq: number; id: string; ct: string }[]; cursor: number; more: boolean; devices_version: number };
+const push = (f: Fixture, revisions: unknown, deviceId = f.deviceId, key = f.device) =>
+  call({ account: f.account, device: deviceId, key, method: "POST", path: "/api/v1/revisions", body: JSON.stringify({ revisions }) });
+const pull = (f: Fixture, query: string, deviceId = f.deviceId, key = f.device) =>
+  call({ account: f.account, device: deviceId, key, method: "GET", path: `/api/v1/revisions${query}` });
+const page = async (f: Fixture, query: string) => {
+  const res = await pull(f, query);
+  expect(res.status, await res.clone().text()).toBe(200);
+  return (await res.json()) as Page;
+};
+const fill = (f: Fixture, rows: number, ctBytes: number) =>
+  runInDurableObject(env.ACCOUNT.getByName(f.account), (_i, state) => {
+    for (let i = 0; i < rows; i++) {
+      state.storage.sql.exec("INSERT INTO revisions (id, ct, from_device, received_at) VALUES (?, ?, NULL, 0)", rid(), new Uint8Array(ctBytes));
+    }
+  });
+
+describe("revisions", () => {
+  it("pushes with dedupe by ID and pulls by cursor with more", async () => {
+    const f = await created(await randomFixture());
+    const [r1, r2, r3] = [revision(), revision(), revision()];
+    const first = await push(f, [r1, r2, r1]);
+    expect(first.status).toBe(200);
+    expect(await first.json()).toEqual({ accepted: [r1.id, r2.id], duplicate: [] });
+    // The same ID with other content is a duplicate: the server cannot judge envelopes.
+    const second = await push(f, [{ id: r2.id, ct: r3.ct }, r3]);
+    expect(await second.json()).toEqual({ accepted: [r3.id], duplicate: [r2.id] });
+
+    const all = await page(f, "?after=0");
+    expect(all.revisions.map((r) => [r.id, r.ct])).toEqual([[r1.id, r1.ct], [r2.id, r2.ct], [r3.id, r3.ct]]);
+    expect(all.more).toBe(false);
+    expect(all.cursor).toBe(all.revisions[2].seq);
+    expect(all.devices_version).toBe(1);
+
+    const p1 = await page(f, "?after=0&limit=2");
+    expect(p1.revisions.map((r) => r.id)).toEqual([r1.id, r2.id]);
+    expect(p1.more).toBe(true);
+    const p2 = await page(f, `?after=${p1.cursor}&limit=2`);
+    expect(p2.revisions.map((r) => r.id)).toEqual([r3.id]);
+    expect(p2.more).toBe(false);
+    expect(await page(f, `?after=${p2.cursor}`)).toMatchObject({ revisions: [], cursor: p2.cursor, more: false });
+
+    const other = await enroll(f);
+    expect((await pull(f, "?after=0", other.id, other.key)).status).toBe(200);
+    expect((await page(f, "?after=0")).devices_version).toBe(2);
+    const from = await runInDurableObject(env.ACCOUNT.getByName(f.account), (_i, state) =>
+      state.storage.sql.exec<{ from_device: string }>("SELECT from_device FROM revisions ORDER BY seq").toArray().map((r) => r.from_device));
+    expect(from).toEqual([f.deviceId, f.deviceId, f.deviceId]);
+  });
+
+  it("validates push bodies, envelope size and the pull query", async () => {
+    const f = await created(await randomFixture());
+    const invalid = [[], [{ id: "x", ct: revision().ct }], [{ id: rid(), ct: "!!" }], [{ id: rid(), ct: b64Encode(random(27)) }], [{ id: rid() }], Array.from({ length: 501 }, revision)];
+    for (const revisions of invalid) expect((await push(f, revisions)).status).toBe(400);
+    expect((await push(f, [revision(), { id: rid(), ct: b64Encode(new Uint8Array(64 * 1024 + 1)) }])).status).toBe(413);
+    // One envelope at the 64 KiB limit is larger than the 64 KiB body limit of other endpoints.
+    const max = { id: rid(), ct: b64Encode(new Uint8Array(64 * 1024)) };
+    expect(await (await push(f, [max])).json()).toEqual({ accepted: [max.id], duplicate: [] });
+    const tooBig = await push(f, Array.from({ length: 49 }, () => ({ id: rid(), ct: b64Encode(new Uint8Array(64 * 1024)) })));
+    expect(tooBig.status).toBe(413);
+    expect(await tooBig.text()).toBe("request body exceeds 4096 KiB\n");
+    for (const q of ["", "?after=-1", "?after=01", "?after=1&limit=0", "?after=1&limit=501", "?limit=5", "?after=1&x=2", "?after=abc"]) {
+      expect((await pull(f, q)).status, q).toBe(400);
+    }
+    expect((await page(f, "?after=0")).revisions.map((r) => r.id)).toEqual([max.id]);
+  });
+
+  it("ends a page at 4 MiB of ct but always returns one row", async () => {
+    const f = await created(await randomFixture());
+    await fill(f, 3, 1_500_000);
+    const p1 = await page(f, "?after=0");
+    expect(p1.revisions.length).toBe(2);
+    expect(p1.more).toBe(true);
+    const p2 = await page(f, `?after=${p1.cursor}`);
+    expect(p2.revisions.length).toBe(1);
+    expect(p2.more).toBe(false);
+  });
+
+  it("enforces 50,000 revisions per account", async () => {
+    const f = await created(await randomFixture());
+    await fill(f, 49_999, 28);
+    const over = await push(f, [revision(), revision()]);
+    expect(over.status).toBe(413);
+    expect(await over.text()).toBe("account revision storage limit reached\n");
+    expect((await push(f, [revision()])).status).toBe(200);
+  });
+
+  it("enforces 64 MiB of ct per account", async () => {
+    const f = await created(await randomFixture());
+    const row = 1_900_000;
+    const rows = Math.floor((64 * 1024 * 1024) / row);
+    await fill(f, rows, row);
+    await fill(f, 1, 64 * 1024 * 1024 - rows * row - 100);
+    expect((await push(f, [{ id: rid(), ct: b64Encode(random(101)) }])).status).toBe(413);
+    expect((await push(f, [{ id: rid(), ct: b64Encode(random(100)) }])).status).toBe(200);
+  });
+
+  it("isolates accounts and rejects foreign, revoked and AK signatures", async () => {
+    const a = await created(await randomFixture());
+    const b = await created(await randomFixture());
+    const r = revision();
+    await push(a, [r]);
+    expect((await page(b, "?after=0")).revisions).toEqual([]);
+    expect(await (await push(b, [r])).json()).toEqual({ accepted: [r.id], duplicate: [] }); // no dedupe across accounts
+    expect((await pull(b, "?after=0", a.deviceId, a.device)).status).toBe(401);
+    expect((await push(a, [revision()], a.deviceId, await newKey())).status).toBe(401);
+    expect((await push(a, [revision()], "ak", a.ak)).status).toBe(401);
+    const second = await enroll(a);
+    await call({ account: a.account, device: a.deviceId, key: a.device, method: "DELETE", path: `/api/v1/devices/${second.id}` });
+    expect((await push(a, [revision()], second.id, second.key)).status).toBe(403);
+    expect((await pull(a, "?after=0", second.id, second.key)).status).toBe(403);
+  });
+});
