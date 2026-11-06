@@ -3,7 +3,7 @@
 **Local secret store for humans and AI agents.**
 
 <p align="center">
-  <img src="hort.png" alt="Hort Logo" width="400">
+  <img src="hort-logo-transparent.png" alt="Hort Logo" width="400">
 </p>
 
 ## Why
@@ -56,9 +56,9 @@ Updates: `brew upgrade hort`
 ### Linux
 
 ```bash
-VERSION=$(curl -fsSI -o /dev/null -w '%{redirect_url}' https://github.com/sebastian-breitzke/hort/releases/latest | grep -oE '[^/]+$') \
+VERSION=$(curl -fsSI -o /dev/null -w '%{redirect_url}' https://github.com/gefuege/hort/releases/latest | grep -oE '[^/]+$') \
   && ARCH=$(uname -m | sed 's/x86_64/amd64/') \
-  && curl -fsSL "https://github.com/sebastian-breitzke/hort/releases/download/${VERSION}/hort_${VERSION#v}_linux_${ARCH}.tar.gz" \
+  && curl -fsSL "https://github.com/gefuege/hort/releases/download/${VERSION}/hort_${VERSION#v}_linux_${ARCH}.tar.gz" \
   | tar -xz -C /tmp hort \
   && sudo mv /tmp/hort /usr/local/bin/hort \
   && hort init
