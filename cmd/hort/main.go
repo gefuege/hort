@@ -239,6 +239,16 @@ func main() {
 	})
 	root.AddCommand(devicesCmd)
 
+	root.AddCommand(&cobra.Command{
+		Use:   "mcp",
+		Short: "Serve the request_secret tool to an MCP client on stdio",
+		Long:  helptext.MCPText,
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return cli.CmdMCP()
+		},
+	})
+
 	statusCmd := &cobra.Command{
 		Use:   "status",
 		Short: "Show local vault status",

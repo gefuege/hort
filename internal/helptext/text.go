@@ -58,6 +58,11 @@ SYNC AND DEVICES:
   notice: new device "<name>" enrolled <time>, or notice: device "<name>" revoked.
   The server stores only ciphertext.
 
+AGENT REQUESTS:
+  hort mcp                               MCP server on stdio with one tool, request_secret.
+                                         It asks the user to enter a secret in the Hort web
+                                         app; the value never enters the chat. See 'hort mcp --help'.
+
 TOPICS:
   hort help recovery                     What can and cannot be recovered
 
@@ -143,6 +148,27 @@ EXAMPLES:
 
   # Store a value without putting it into process arguments
   printf '%s' "$TOKEN" | hort set grafana-token --value-stdin --env prod
+`
+
+// MCPText is the help of 'hort mcp' (contract §7).
+const MCPText = `Serve the request_secret tool to an MCP client on stdio.
+
+The tool asks the user to enter a secret in Hort without the value entering the
+chat. It takes name, description, and optionally field, env and context, and
+returns only name and status: stored, pending, declined, expired or conflict.
+Read the value afterwards with 'hort get'. There is no tool that reads values
+or lists secrets.
+
+The user enters the value at https://hort.pm/r/<id>, signed in with a passkey.
+A client that supports URL elicitation opens that page itself; any other
+client gets status pending with the url, and the agent calls request_secret
+again with the same arguments to check the status. A request expires after 24
+hours.
+
+The vault must be unlocked ('hort unlock') and registered on the server.
+
+Set up Claude Code:
+  claude mcp add hort -- hort mcp
 `
 
 // RecoveryText answers "what if I lose something" and is shown by
