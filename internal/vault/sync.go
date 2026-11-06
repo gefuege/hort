@@ -23,6 +23,8 @@ type SyncResult struct {
 	Read          int
 	Unreadable    []string
 	OwnUnreadable bool
+	Pending       []string
+	OwnPending    bool
 	NewRevisions  int
 	Pushed        bool
 }
@@ -32,10 +34,14 @@ type syncFolder struct {
 	ownRaw        []byte
 	unreadable    []string
 	ownUnreadable bool
+	pending       []string
+	ownPending    bool
 }
 
 // readSyncFolder never fails on a single file: a partial delivery or a foreign
-// key is reported and the next run reads whatever has arrived by then.
+// key is reported and the next run reads whatever has arrived by then. A file
+// the read itself fails on, such as a not yet downloaded iCloud placeholder, is
+// pending rather than unreadable; the failed read is what starts the download.
 func readSyncFolder(dir, ownName string, key []byte) (syncFolder, error) {
 	files, err := os.ReadDir(dir)
 	if err != nil {
@@ -51,10 +57,12 @@ func readSyncFolder(dir, ownName string, key []byte) (syncFolder, error) {
 		if os.IsNotExist(err) {
 			continue
 		}
-		var data *VaultData
-		if err == nil {
-			data, err = decodeSyncFile(raw, key)
+		if err != nil {
+			folder.pending = append(folder.pending, name)
+			folder.ownPending = folder.ownPending || name == ownName
+			continue
 		}
+		data, err := decodeSyncFile(raw, key)
 		if err != nil {
 			folder.unreadable = append(folder.unreadable, name)
 			folder.ownUnreadable = folder.ownUnreadable || name == ownName
@@ -126,7 +134,7 @@ func Sync(ref VaultRef, key []byte) (SyncResult, error) {
 	if err != nil {
 		return SyncResult{}, err
 	}
-	result := SyncResult{Read: len(folder.vaults), Unreadable: folder.unreadable, OwnUnreadable: folder.ownUnreadable}
+	result := SyncResult{Read: len(folder.vaults), Unreadable: folder.unreadable, OwnUnreadable: folder.ownUnreadable, Pending: folder.pending, OwnPending: folder.ownPending}
 
 	err = UpdateVault(ref, key, func(data *VaultData) error {
 		result.NewRevisions = mergeRevisions(data, folder.vaults)
@@ -139,8 +147,9 @@ func Sync(ref VaultRef, key []byte) (SyncResult, error) {
 		return SyncResult{}, fmt.Errorf("merging sync folder: %w", err)
 	}
 
-	// An unreadable own file may be all that is left of an earlier key.
-	if folder.ownUnreadable {
+	// An unreadable own file may be all that is left of an earlier key; a pending
+	// one is not overwritten before it has arrived.
+	if folder.ownUnreadable || folder.ownPending {
 		return result, nil
 	}
 	_, raw, err := LoadVault(ref, key)
@@ -185,6 +194,9 @@ func SetupSync(ref VaultRef, key []byte, path string) (SyncResult, error) {
 	}
 	if len(folder.unreadable) > 0 {
 		return SyncResult{}, fmt.Errorf("sync folder holds files this vault cannot read or decrypt (%s), possibly from a different vault key; nothing changed", strings.Join(folder.unreadable, ", "))
+	}
+	if len(folder.pending) > 0 {
+		return SyncResult{}, fmt.Errorf("sync folder holds files that are not downloaded yet (%s), so their key is unchecked; run again once they have arrived; nothing changed", strings.Join(folder.pending, ", "))
 	}
 	err = UpdateSourceRegistry(func(reg *SourceRegistry) error {
 		reg.SyncFile = filepath.Join(dir, name)

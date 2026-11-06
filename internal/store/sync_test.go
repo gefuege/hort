@@ -685,3 +685,110 @@ func TestParallelWritersLoseNoRevisionDuringSync(t *testing.T) {
 		}
 	}
 }
+
+// lockedFile stands in for an iCloud placeholder: the read fails now and works
+// once the file has arrived.
+func lockedFile(t *testing.T, path string, content []byte) (arrive func()) {
+	t.Helper()
+	if err := os.WriteFile(path, content, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.ReadFile(path); err == nil {
+		t.Skip("file permissions do not stop reads here")
+	}
+	return func() {
+		if err := os.Chmod(path, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestSyncTreatsNotYetReadableFileAsPending(t *testing.T) {
+	a, b := twoDevices(t)
+	b.record("from-b", "set", "*:*", "value", at16)
+	b.sync()
+	peer, err := os.ReadFile(ownFile(t, b))
+	if err != nil {
+		t.Fatal(err)
+	}
+	arrive := lockedFile(t, filepath.Join(a.folder, "hort-peer.enc"), peer)
+
+	// A pending peer neither counts as defect nor blocks the own push.
+	a.record("from-a", "set", "*:*", "value", at15)
+	got := a.sync()
+	if len(got.Pending) != 1 || got.Pending[0] != "hort-peer.enc" || len(got.Unreadable) != 0 || got.OwnPending || got.OwnUnreadable || !got.Pushed {
+		t.Fatalf("pending peer: %+v", got)
+	}
+	arrive()
+	if got := a.sync(); len(got.Pending) != 0 || got.NewRevisions != 1 {
+		t.Fatalf("arrived peer: %+v", got)
+	}
+	a.wantValue("from-b", "value")
+
+	// A pending own file is no defect, but nothing is pushed over it.
+	own := ownFile(t, a)
+	ownRaw, err := os.ReadFile(own)
+	if err != nil {
+		t.Fatal(err)
+	}
+	arrive = lockedFile(t, own, ownRaw)
+	a.record("later", "set", "*:*", "value", at16)
+	got = a.sync()
+	if !got.OwnPending || got.OwnUnreadable || len(got.Unreadable) != 0 || got.Pushed {
+		t.Fatalf("pending own file: %+v", got)
+	}
+	arrive()
+	if got := a.sync(); !got.Pushed || got.OwnPending {
+		t.Fatalf("own file arrived: %+v", got)
+	}
+}
+
+func TestSetupStopsWithoutChangesOnPendingOrGarbageFile(t *testing.T) {
+	for _, tc := range []struct{ name, want string }{
+		{"pending", "not downloaded yet"},
+		{"garbage", "cannot read or decrypt"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a, _ := twoDevices(t)
+			if tc.name == "pending" {
+				lockedFile(t, filepath.Join(a.folder, "hort-peer.enc"), []byte("anything"))
+			} else if err := os.WriteFile(filepath.Join(a.folder, "hort-peer.enc"), []byte("garbage"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			// A device with the shared key that has not set up yet.
+			fresh := &device{t: t, home: t.TempDir(), folder: a.folder, key: a.key}
+			raw, err := os.ReadFile(a.ref().Path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ref, key := fresh.ref(), a.key
+			if err := os.MkdirAll(filepath.Dir(ref.Path), 0700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(ref.Path, raw, 0600); err != nil {
+				t.Fatal(err)
+			}
+			if err := vault.SaveSessionFor(ref, key); err != nil {
+				t.Fatal(err)
+			}
+			before, err := os.ReadFile(ref.Path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = vault.SetupSync(ref, key, a.folder)
+			if err == nil || !strings.Contains(err.Error(), tc.want) || !strings.Contains(err.Error(), "nothing changed") {
+				t.Fatalf("setup: %v", err)
+			}
+			after, err := os.ReadFile(ref.Path)
+			if err != nil || !bytes.Equal(before, after) {
+				t.Fatal("local vault changed")
+			}
+			if own := ownFile(t, fresh); own != "" {
+				t.Fatalf("setup was stored: %s", own)
+			}
+		})
+	}
+}

@@ -59,6 +59,12 @@ func warnSyncFiles(result vault.SyncResult) {
 	for _, name := range result.Unreadable {
 		fmt.Fprintf(os.Stderr, "warning: skipped sync file %s: cannot read or decrypt it\n", name)
 	}
+	for _, name := range result.Pending {
+		fmt.Fprintf(os.Stderr, "warning: sync file %s is not downloaded yet, the next run reads it\n", name)
+	}
+	if result.OwnPending {
+		fmt.Fprintln(os.Stderr, "warning: this device's sync file is not downloaded yet, so nothing was pushed; the next run does")
+	}
 	if result.OwnUnreadable {
 		fmt.Fprintln(os.Stderr, "warning: this device's sync file cannot be read or decrypted, so nothing was pushed; remove it from the sync folder by hand and the next run writes it anew")
 	}
@@ -104,8 +110,8 @@ func reportSync(result vault.SyncResult) {
 	if result.Pushed {
 		pushed = "pushed"
 	}
-	fmt.Fprintf(os.Stderr, "Sync: %d files read, %d unreadable, %d new revisions, %s.\n",
-		result.Read, len(result.Unreadable), result.NewRevisions, pushed)
+	fmt.Fprintf(os.Stderr, "Sync: %d files read, %d unreadable, %d not downloaded yet, %d new revisions, %s.\n",
+		result.Read, len(result.Unreadable), len(result.Pending), result.NewRevisions, pushed)
 }
 
 // CmdSync runs one exchange without a time limit and reports it.
