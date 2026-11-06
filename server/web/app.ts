@@ -7,10 +7,10 @@ import { b64Decode, b64Encode, b64urlDecode, b64urlEncode, str } from "../src/wi
 import {
   accountIdEncode,
   akHeaders,
-  argonSlotParams,
   deriveAccountKeys,
   formatSecretKey,
   parseAccountId,
+  newPassphraseSlot,
   parseArgonParams,
   parseSecretKey,
   parseSlotBytes,
@@ -19,7 +19,6 @@ import {
   passphraseKEKBytes,
   PASSPHRASE_SLOT,
   prfEvalSalt,
-  PRODUCTION_ARGON,
   unwrapSlot,
   verifySlotAuthority,
   wrapSlot,
@@ -354,7 +353,7 @@ function unlockedPanel(): HTMLElement {
     h("h2", { class: "panel-h" }, "Vault unlocked"),
     h("p", {}, "Account ", h("code", {}, accountIdEncode(unlocked!.accountId))),
     h("p", { class: "muted" }, "Your vault key stays in this tab only. Closing the tab or signing out locks it again."),
-    h("div", { class: "actions" }, signedIn ? h("a", { class: "btn btn-primary", href: "/vault" }, "Open vault") : null, signedIn ? h("a", { class: "btn btn-ghost", href: "/devices" }, "Devices") : null, signOutButton),
+    h("div", { class: "actions" }, signedIn ? h("a", { class: "btn btn-primary", href: "/vault" }, "Open vault") : null, signedIn ? h("a", { class: "btn btn-ghost", href: "/devices" }, "Devices") : null, location.pathname === "/recover" ? null : h("a", { class: "btn btn-ghost", href: "/recover" }, "Set new passphrase"), signOutButton),
     out.el,
   );
 }
@@ -434,26 +433,33 @@ function recoverView(main: HTMLElement): void {
   const passOut = status();
   const newPass = h("input", { type: "password", autocomplete: "new-password", required: true });
   const repeat = h("input", { type: "password", autocomplete: "new-password", required: true });
+  // Unlocked with the kit, the Secret Key is known; unlocked with a passkey, it comes from the printed kit.
+  const keyInput = kit ? null : h("input", { autocomplete: "off", spellcheck: false, required: true, placeholder: "H4-XXXXXX-XXXXX-XXXXX-XXXXX-XXXXX-X" });
   const passSubmit = h("button", { class: "btn btn-ghost", type: "submit" }, "Set new passphrase");
-  const passForm = h("form", { class: "form" }, field("New passphrase", newPass), field("Repeat new passphrase", repeat), h("div", { class: "actions" }, passSubmit), passOut.el);
+  const passForm = h(
+    "form",
+    { class: "form" },
+    keyInput && field("Secret Key", keyInput, "From your Emergency Kit. A Secret Key that is not yours makes the new passphrase useless, and your passkeys stay the way in."),
+    field("New passphrase", newPass),
+    field("Repeat new passphrase", repeat),
+    h("div", { class: "actions" }, passSubmit),
+    passOut.el,
+  );
   passForm.addEventListener("submit", async (e) => {
     e.preventDefault();
     passSubmit.disabled = true;
     try {
       if (newPass.value !== repeat.value) throw new Error("The two passphrases differ.");
-      if (!kit) throw new Error("Unlock with your Emergency Kit on this page first.");
+      const secretKey = await parseSecretKey(kit ? kit.secretKey : keyInput!.value);
       passOut.set("Setting the new passphrase … this takes a few seconds.");
-      const res = await fetch(`/api/v1/accounts/${kit.accountId}/slot`);
+      const res = await fetch(`/api/v1/accounts/${accountIdEncode(u.accountId)}/slot`);
       const { slot } = await ok<{ slot: WireSlot }>(res);
-      const secretKey = await parseSecretKey(kit.secretKey);
-      const salt = crypto.getRandomValues(new Uint8Array(32));
-      const kek = await passphraseKEKBytes(newPass.value, secretKey, u.accountId, salt, PRODUCTION_ARGON);
-      const s = await wrapSlot(kek, u.vk, u.keys, PASSPHRASE_SLOT, slot.version + 1, argonSlotParams(salt, PRODUCTION_ARGON));
-      kek.fill(0);
+      const s = await newPassphraseSlot(u.keys, u.vk, secretKey, newPass.value, slot.version);
       const body = JSON.stringify({ version: s.version, bytes: b64Encode(s.bytes), ak_sig: b64Encode(s.akSig) });
       await ok(await api("PUT", `/api/v1/slots/${PASSPHRASE_SLOT}`, { ak: u.keys, body }));
       newPass.value = "";
       repeat.value = "";
+      if (keyInput) keyInput.value = "";
       passOut.set("New passphrase set. Your devices pick it up at their next sync; your Secret Key stays the same.", "ok");
     } catch (err) {
       passOut.set(messageOf(err), "error");
@@ -481,7 +487,7 @@ function recoverView(main: HTMLElement): void {
   add(main,
     h("p", { class: "sec-intro" }, "Your vault is unlocked in this tab. Register a passkey so you can sign in on this device, or set a new passphrase."),
     h("section", { class: "panel" }, h("h2", { class: "panel-h" }, "Passkey"), h("div", { class: "actions" }, registerButton), passkeyOut.el, next),
-    kit && h("section", { class: "panel" }, h("h2", { class: "panel-h" }, "New passphrase"), passForm),
+    h("section", { class: "panel" }, h("h2", { class: "panel-h" }, "New passphrase"), passForm),
     kit ? h("section", { class: "panel" }, h("h2", { class: "panel-h" }, "Emergency Kit"), h("p", { class: "muted" }, "Print the kit with the values you just entered. Nothing is stored."), h("div", { class: "actions" }, printButton)) : null,
     unlockedPanel(),
   );

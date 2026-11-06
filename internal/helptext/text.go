@@ -178,12 +178,14 @@ Set up Claude Code:
 `
 
 // RecoveryText answers "what if I lose something" and is shown by
-// 'hort help recovery'. Rows for browser recovery come with that feature.
+// 'hort help recovery'.
 const RecoveryText = `What can and cannot be recovered.
 
   Lost or compromised     Still available         Outcome
   ----------------------  ----------------------  ------------------------------------------
   Passphrase              an unlocked device      'hort passphrase' sets a new one
+  Passphrase              a passkey that          hort.pm unlocks with the passkey.
+                          unlocks the vault       With your Secret Key, set a new passphrase
   Secret Key              an unlocked device      'hort kit' prints it again
   A locked device was     anything                'hort devices revoke <id>' ends its server
   lost                                            access. A thief still needs the passphrase

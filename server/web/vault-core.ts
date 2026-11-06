@@ -141,6 +141,24 @@ export async function wrapSlot(
   return { version, bytes, akSig };
 }
 
+// A fresh passphrase slot one version above the current one, signed with AK (§2.2, §2.8).
+export async function newPassphraseSlot(
+  keys: AccountKeys,
+  vk: Uint8Array,
+  secretKey: Uint8Array,
+  passphrase: string,
+  currentVersion: number,
+  p: ArgonParams = PRODUCTION_ARGON,
+): Promise<SlotRecord> {
+  const salt = crypto.getRandomValues(new Uint8Array(32));
+  const kek = await passphraseKEKBytes(passphrase, secretKey, keys.accountId, salt, p);
+  try {
+    return await wrapSlot(kek, vk, keys, PASSPHRASE_SLOT, currentVersion + 1, argonSlotParams(salt, p));
+  } finally {
+    kek.fill(0);
+  }
+}
+
 export type ParsedSlot = { params: Uint8Array; nonce: Uint8Array; wrapped: Uint8Array };
 
 export function parseSlotBytes(bytes: Uint8Array): ParsedSlot | null {

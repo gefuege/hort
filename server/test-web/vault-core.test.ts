@@ -23,8 +23,10 @@ import {
   history,
   hkdf,
   openRequestMeta,
+  newPassphraseSlot,
   openRevision,
   parseAccountId,
+  PASSPHRASE_SLOT,
   parseArgonParams,
   parseSecretKey,
   parseSlotBytes,
@@ -264,5 +266,28 @@ describe("write validation (§3.4)", () => {
   it("allows delete and delete-entry on legacy names and keys", () => {
     expect(validateWrite("legacy name", r({ op: "delete-entry", key: "", value: "" }))).toBeNull();
     expect(validateWrite("legacy name", r({ op: "delete", key: "a b:*", value: "" }))).toBeNull();
+  });
+});
+
+describe("newPassphraseSlot", () => {
+  it("writes version+1 with a valid ak_sig that the Secret Key and new passphrase open", async () => {
+    const accountId = crypto.getRandomValues(new Uint8Array(16));
+    const vk = crypto.getRandomValues(new Uint8Array(32));
+    const secretKey = crypto.getRandomValues(new Uint8Array(32));
+    const keys = await deriveAccountKeys(vk, accountId);
+    const argon = { t: 1, m: 256, p: 1 };
+    const slot = await newPassphraseSlot(keys, vk, secretKey, "new passphrase", 4, argon);
+    expect(slot.version).toBe(5);
+    expect(await verifySlotAuthority(keys, keys.akPub, PASSPHRASE_SLOT, slot)).toBe(true);
+    expect(await verifySlotAuthority(keys, keys.akPub, PASSPHRASE_SLOT, { ...slot, version: 6 })).toBe(false);
+
+    const parsed = parseSlotBytes(slot.bytes)!;
+    const params = parseArgonParams(parsed.params)!;
+    expect(params.argon).toEqual(argon);
+    const open = async (pass: string, key: Uint8Array) =>
+      unwrapSlot(await passphraseKEKBytes(pass, key, accountId, params.salt, params.argon), accountId, PASSPHRASE_SLOT, slot.version, parsed);
+    expect(hexEncode(await open("new passphrase", secretKey))).toBe(hexEncode(vk));
+    await expect(open("old passphrase", secretKey)).rejects.toThrow("slot does not open");
+    await expect(open("new passphrase", crypto.getRandomValues(new Uint8Array(32)))).rejects.toThrow("slot does not open");
   });
 });
