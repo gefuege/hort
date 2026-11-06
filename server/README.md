@@ -36,7 +36,7 @@ Local workerd does not implement Durable Object jurisdictions and throws on `jur
 The same Worker serves hort.pm. `wrangler.jsonc` sets `run_worker_first: ["/api/*"]`; every other path is a static asset from `public/`:
 
 - `index.html`, `impressum.html`, `privacy.html`, `style.css`, `fonts/`, `img/`: the landing page and legal pages (design B · Phosphor, self-hosted fonts under OFL, no third-party requests).
-- `vault.html`, `recover.html`, `devices.html` and `r.html` (served for `/r/<id>` through `_redirects`): the web app shell with layout, navigation and a one-sentence placeholder per page. The functions follow with S6.2 to S6.4.
+- `login.html`, `vault.html`, `recover.html`, `devices.html` and `r.html` (served for `/r/<id>` through `_redirects`): the web app shell with layout, navigation and a one-sentence placeholder per page. The functions follow with S6.2 to S6.4.
 - `_headers` carries the security headers for assets. Cloudflare does not apply that file to Worker responses, so `src/entry.ts` sets the same list on `/api/*`; `test/web.test.ts` keeps both identical. The CSP allows `script-src 'self' 'wasm-unsafe-eval'` for the Argon2id WASM and loads nothing from another origin.
 
 `npm run check:web [base-url]` requests the pages and `/api/v1/nope` of a running Worker (default `http://localhost:8787` from `npx wrangler dev`) and checks status and headers.

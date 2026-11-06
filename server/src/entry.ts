@@ -8,7 +8,7 @@ export { RateLimiter } from "./rate-limiter";
 // the two lists identical.
 export const SECURITY_HEADERS: Record<string, string> = {
   "Content-Security-Policy":
-    "default-src 'self'; img-src 'self' data:; style-src 'self'; font-src 'self'; script-src 'self' 'wasm-unsafe-eval'; object-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'",
+    "default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; img-src 'self'; font-src 'self'; connect-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'; require-trusted-types-for 'script'",
   "Referrer-Policy": "no-referrer",
   "X-Content-Type-Options": "nosniff",
   "Cross-Origin-Opener-Policy": "same-origin",
