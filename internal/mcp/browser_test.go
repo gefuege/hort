@@ -143,7 +143,7 @@ func must1[T any](v T, err error) T {
 // browserFulfill answers request id like the page: a set revision stamped
 // with the Append rule against what the vault knows, a describe revision when
 // the description differs, sealed with RK, sent with the session cookie.
-func browserFulfill(t *testing.T, target, cookie string, data *vault.VaultData, acct vault.Account, dev api.Client, id, value string) {
+func browserFulfill(t *testing.T, target, cookie string, data *vault.VaultData, acct vault.Account, dev api.Client, id, value string, skipSet bool) {
 	t.Helper()
 	st, err := dev.GetRequest(id)
 	if err != nil {
@@ -155,8 +155,11 @@ func browserFulfill(t *testing.T, target, cookie string, data *vault.VaultData, 
 	}
 	entry := data.Secrets[meta.Name]
 	set := vault.Revision{ID: randomHex(), Op: "set", Field: meta.Field, Key: vault.MakeLookupKey(meta.Env, meta.Context), Value: value}
-	entry.Append(set)
-	revs := []vault.Revision{entry.Revisions[len(entry.Revisions)-1]}
+	var revs []vault.Revision
+	if !skipSet {
+		entry.Append(set)
+		revs = append(revs, entry.Revisions[len(entry.Revisions)-1])
+	}
 	if _, current, _ := entry.Current(); current != meta.Description {
 		describe := vault.Revision{ID: randomHex(), Op: "describe", Value: meta.Description}
 		entry.Append(describe)

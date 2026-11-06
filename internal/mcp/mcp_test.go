@@ -3,6 +3,7 @@ package mcp_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/http/httputil"
@@ -13,6 +14,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -35,6 +37,9 @@ type rig struct {
 	dev     api.Client
 	cookie  string
 	secrets []string // every value entered, for the "never in any output" check
+
+	syncFails    atomic.Bool // makes the tool's sync fail
+	fulfillNoSet atomic.Bool // makes the next fulfill carry no set revision
 
 	mu   sync.Mutex
 	seen []string // every JSON the tool returned to a client
@@ -179,14 +184,75 @@ func TestRequestSecret(t *testing.T) {
 		}
 	})
 
-	t.Run("a protocol version without server-initiated requests gets the text", func(t *testing.T) {
-		cs := r.connect(&client{newest: true, onElicit: func(*sdk.ElicitRequest) *sdk.ElicitResult {
-			t.Error("elicitation sent on a version that forbids it")
+	t.Run("a client offering 2026-07-28 first still gets URL elicitation on 2025-11-25", func(t *testing.T) {
+		asked := 0
+		cs := r.connect(&client{onElicit: func(*sdk.ElicitRequest) *sdk.ElicitResult {
+			asked++
 			return &sdk.ElicitResult{Action: "cancel"}
 		}})
-		out := r.output(r.call(cs, map[string]any{"name": "newest-secret", "description": "Newest protocol"}))
-		if out.Status != "pending" || !strings.Contains(r.last(), "/r/"+out.RequestID) || !strings.Contains(r.last(), "Ask the user to open") {
-			t.Fatalf("result: %+v %s", out, r.last())
+		if v := cs.InitializeResult().ProtocolVersion; v != "2025-11-25" {
+			t.Fatalf("negotiated %s", v)
+		}
+		out := r.output(r.call(cs, map[string]any{"name": "negotiate-secret", "description": "Negotiation"}))
+		if asked != 1 || out.Status != "pending" || out.URL == "" {
+			t.Fatalf("asked %d times: %+v", asked, out)
+		}
+	})
+
+	t.Run("a second call does not wait for the first one's elicitation", func(t *testing.T) {
+		release := make(chan struct{})
+		started := make(chan struct{})
+		var once sync.Once
+		cs := r.connect(&client{onElicit: func(req *sdk.ElicitRequest) *sdk.ElicitResult {
+			first := false
+			once.Do(func() { first = true })
+			if first {
+				close(started)
+				<-release
+				return &sdk.ElicitResult{Action: "cancel"}
+			}
+			r.fulfill(req.Params.ElicitationID, "parallel-value-1")
+			return &sdk.ElicitResult{Action: "accept"}
+		}})
+		blocked := make(chan error, 1)
+		go func() {
+			_, err := cs.CallTool(context.Background(), &sdk.CallToolParams{Name: "request_secret", Arguments: map[string]any{"name": "parallel-a", "description": "Blocked"}})
+			blocked <- err
+		}()
+		<-started
+		done := make(chan mcp.Output, 1)
+		go func() { done <- r.output(r.call(cs, map[string]any{"name": "parallel-b", "description": "Free"})) }()
+		select {
+		case out := <-done:
+			if out.Status != "stored" {
+				t.Fatalf("second call: %+v", out)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("the second call waits for the first one's elicitation")
+		}
+		close(release)
+		if err := <-blocked; err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	t.Run("a mismatch frees the tuple, a failed sync keeps the request", func(t *testing.T) {
+		cs := r.connect(nil)
+		args := map[string]any{"name": "mismatch-secret", "description": "Mismatch"}
+		first := r.output(r.call(cs, args))
+		r.fulfillNoSet.Store(true)
+		r.fulfill(first.RequestID, "mismatch-value-1")
+		r.syncFails.Store(true)
+		if res := r.call(cs, args); !res.IsError {
+			t.Fatalf("sync failure not reported: %s", r.last())
+		}
+		r.syncFails.Store(false)
+		if res := r.call(cs, args); !res.IsError || !strings.Contains(r.last(), "does not match") {
+			t.Fatalf("mismatch not reported: %s", r.last())
+		}
+		again := r.output(r.call(cs, args))
+		if again.Status != "pending" || again.RequestID == first.RequestID {
+			t.Fatalf("tuple stayed blocked: %+v, first %s", again, first.RequestID)
 		}
 	})
 
@@ -309,7 +375,6 @@ func TestStdioBinary(t *testing.T) {
 // client is the scripted MCP client. A nil onElicit is a client without URL mode.
 type client struct {
 	onElicit func(*sdk.ElicitRequest) *sdk.ElicitResult
-	newest   bool // negotiate the SDK's newest protocol version instead of 2025-11-25
 	mu       sync.Mutex
 	done     []string
 }
@@ -347,18 +412,19 @@ func (r *rig) connect(c *client) session {
 	ctx, cancel := context.WithCancel(context.Background())
 	r.t.Cleanup(cancel)
 	st, ct := sdk.NewInMemoryTransports()
-	server := mcp.New(mcp.Deps{Sync: func(vault.VaultRef, []byte) error { return cli.CmdSync(false) }})
+	server := mcp.New(mcp.Deps{Sync: func(vault.VaultRef, []byte) error {
+		if r.syncFails.Load() {
+			return errors.New("synthetic sync failure")
+		}
+		return cli.CmdSync(false)
+	}})
 	ss, err := server.Connect(ctx, st, nil)
 	if err != nil {
 		r.t.Fatal(err)
 	}
 	r.t.Cleanup(func() { _ = ss.Close() })
-	// URL elicitation is the 2025-11-25 mechanism; the SDK's newest version (2026-07-28) forbids it.
-	sessionOpts := &sdk.ClientSessionOptions{ProtocolVersion: "2025-11-25"}
-	if c.newest {
-		sessionOpts = nil
-	}
-	cs, err := sdk.NewClient(&sdk.Implementation{Name: "test"}, opts).Connect(ctx, ct, sessionOpts)
+	// The SDK client offers its newest version (2026-07-28) first, as Claude Code does.
+	cs, err := sdk.NewClient(&sdk.Implementation{Name: "test"}, opts).Connect(ctx, ct, nil)
 	if err != nil {
 		r.t.Fatal(err)
 	}
@@ -421,7 +487,7 @@ func (r *rig) fulfill(id, value string) {
 	r.mu.Lock()
 	r.secrets = append(r.secrets, value)
 	r.mu.Unlock()
-	browserFulfill(r.t, r.target, r.cookie, data, r.acct, r.dev, id, value)
+	browserFulfill(r.t, r.target, r.cookie, data, r.acct, r.dev, id, value, r.fulfillNoSet.Swap(false))
 }
 
 // pushCompeting is another device writing the same value a moment later.

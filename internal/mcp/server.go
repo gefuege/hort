@@ -100,7 +100,12 @@ type tuple struct{ name, field, key string }
 // New returns the MCP server with its one tool.
 func New(deps Deps) *sdk.Server {
 	s := &server{deps: deps, open: map[tuple]string{}}
-	srv := sdk.NewServer(&sdk.Implementation{Name: "hort", Version: "1.0.0"}, nil)
+	// URL elicitation is a server-initiated request, which protocol 2026-07-28 forbids
+	// while a tool runs. Claude Code tries server/discover first; without that
+	// version in the list it falls back to initialize 2025-11-25 with elicitation.url.
+	srv := sdk.NewServer(&sdk.Implementation{Name: "hort", Version: "1.0.0"}, &sdk.ServerOptions{
+		SupportedProtocolVersions: []string{"2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"},
+	})
 	sdk.AddTool(srv, &sdk.Tool{
 		Name:         "request_secret",
 		Description:  "Ask the user to enter a secret in Hort without the value entering the chat. Use this instead of asking for a secret in chat. Returns only name and status; read the value later with `hort get`.",
@@ -151,8 +156,6 @@ func (s *server) requestSecret(ctx context.Context, req *sdk.CallToolRequest, in
 	key := tuple{in.Name, in.Field, vault.MakeLookupKey(in.Env, in.Context)}
 	out := Output{Status: "pending", Name: in.Name, Field: in.Field, Env: in.Env, Context: in.Context}
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	id, state, err := s.findOrCreate(c, acct, in, key)
 	if err != nil {
 		return nil, out, err
@@ -177,7 +180,7 @@ func (s *server) requestSecret(ctx context.Context, req *sdk.CallToolRequest, in
 	case api.RequestFulfilled:
 		return s.finish(ctx, ss, urlMode, ref, vk, c, id, in, key, out)
 	case api.RequestDeclined, api.RequestExpired:
-		delete(s.open, key)
+		s.forget(key)
 		out.Status, out.URL = state, ""
 		return nil, out, nil
 	}
@@ -188,6 +191,8 @@ func (s *server) requestSecret(ctx context.Context, req *sdk.CallToolRequest, in
 // the one this process holds, a pending one the server lists (§7.2 step 2),
 // or a new one (step 3).
 func (s *server) findOrCreate(c api.Client, acct vault.Account, in Input, key tuple) (string, string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if id, ok := s.open[key]; ok {
 		st, err := c.GetRequest(id)
 		if err != nil {
@@ -229,6 +234,12 @@ func (s *server) findOrCreate(c api.Client, acct vault.Account, in Input, key tu
 	}
 	s.open[key] = id
 	return id, api.RequestPending, nil
+}
+
+func (s *server) forget(key tuple) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.open, key)
 }
 
 func canElicitURL(ss *sdk.ServerSession) bool {
@@ -301,9 +312,11 @@ func (s *server) finish(ctx context.Context, ss *sdk.ServerSession, urlMode bool
 	}
 	status, err := verify(data, st.RevisionIDs, key)
 	if err != nil {
+		// A mismatch will not heal on a repeat call; do not keep the tuple blocked.
+		s.forget(key)
 		return nil, out, err
 	}
-	delete(s.open, key)
+	s.forget(key)
 	out.Status, out.URL = status, ""
 	if urlMode {
 		_ = ss.NotifyElicitationComplete(ctx, &sdk.ElicitationCompleteParams{ElicitationID: id})
