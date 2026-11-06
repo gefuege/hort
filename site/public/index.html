@@ -29,7 +29,7 @@
   </div>
   <div class="term hero-term">
     <div class="term-bar"><i></i><i></i><i></i><span>zsh — ~/shop</span></div>
-<pre><span class="t-p">$</span> hort --list
+<pre tabindex="0"><span class="t-p">$</span> hort --list
 <span class="t-v">openai-key</span>     <span class="t-m">OpenAI API key</span>        <span class="t-m">[env: *]</span>
 <span class="t-v">db-password</span>    <span class="t-m">PostgreSQL password</span>   <span class="t-m">[env: *, prod]</span>
 
@@ -51,7 +51,7 @@
   <div class="examples">
     <div class="example">
       <p class="label">Today</p>
-      <div class="term"><pre><span class="t-m"># What's there?</span>
+      <div class="term"><pre tabindex="0"><span class="t-m"># What's there?</span>
 <span class="t-p">$</span> hort --list --json
 
 <span class="t-m"># Use it</span>
@@ -63,7 +63,7 @@
     </div>
     <div class="example">
       <p class="label soon">Coming with 1.0</p>
-      <div class="term"><pre><span class="t-a">agent</span>  › I need the Stripe client ID for this integration.
+      <div class="term"><pre tabindex="0"><span class="t-a">agent</span>  › I need the Stripe client ID for this integration.
 <span class="t-p">hort</span>   › Requested "stripe / client_id". Waiting for you on hort.pm …
 <span class="t-v">you</span>    › <span class="t-m">(open the link, enter the value, done)</span>
 <span class="t-a">agent</span>  › $ hort get stripe client_id</pre></div>
@@ -127,16 +127,15 @@
   <p class="sec-tag">// install</p>
   <h2 class="sec-h">Install in one line.</h2>
   <div class="install-grid">
-    <div><h3>macOS (Homebrew)</h3><div class="term"><pre>brew install sebastian-breitzke/tap/hort &amp;&amp; hort init</pre></div></div>
-    <div><h3>npm (any OS)</h3><div class="term"><pre>npm install -g @s16e/hort &amp;&amp; hort init</pre></div></div>
-    <div><h3>Windows (Scoop)</h3><div class="term"><pre>scoop bucket add sebastian-breitzke https://github.com/sebastian-breitzke/scoop-bucket
+    <div><h3>macOS (Homebrew)</h3><div class="term"><pre tabindex="0">brew install sebastian-breitzke/tap/hort &amp;&amp; hort init</pre></div></div>
+    <div><h3>npm (any OS)</h3><div class="term"><pre tabindex="0">npm install -g @s16e/hort &amp;&amp; hort init</pre></div></div>
+    <div><h3>Windows (Scoop)</h3><div class="term"><pre tabindex="0">scoop bucket add sebastian-breitzke https://github.com/sebastian-breitzke/scoop-bucket
 scoop install hort
 hort init</pre></div></div>
-    <div><h3>Go</h3><div class="term"><pre>go install github.com/sebastian-breitzke/hort/cmd/hort@latest &amp;&amp; hort init</pre></div></div>
+    <div><h3>Linux and Windows binaries</h3><p class="after-line"><a href="https://github.com/gefuege/hort/releases">GitHub Releases</a></p></div>
   </div>
-  <p>Linux and Windows binaries → <a href="https://github.com/gefuege/hort/releases">GitHub Releases</a></p>
   <h3 class="sub-h after">After install</h3>
-  <div class="term"><pre>hort --set-secret openai-key --value-stdin --description "OpenAI API key"
+  <div class="term"><pre tabindex="0">hort --set-secret openai-key --value-stdin --description "OpenAI API key"
 hort --secret openai-key</pre></div>
   <p class="after-line">Set a passphrase during <code>hort init</code>. That's it. Then tell your agent to run <code>hort --help</code>.</p>
 </div>
@@ -161,7 +160,7 @@ hort --secret openai-key</pre></div>
       <a href="https://www.npmjs.com/package/@s16e/hort">npm (@s16e/hort)</a>
       <a href="#security">Security model</a>
       <a href="/impressum">Impressum</a>
-      <a href="/privacy">Privacy</a>
+      <a href="/privacy">Privacy (Datenschutz)</a>
     </div>
     <p>No tracking cookies. No tracking. No third-party scripts.</p>
     <p>© 2026 Sebastian Breitzke · MIT License</p>

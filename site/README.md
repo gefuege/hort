@@ -8,5 +8,3 @@ Static landing page, served by an assets-only Cloudflare Worker (`hort-site`, no
 Preview: `cd site && npx wrangler dev`, then open the printed local URL.
 
 Deploy: `cd site && npx wrangler deploy` (binds the custom domain `hort.pm`).
-
-Open before going live: `public/impressum.html` and `public/privacy.html` carry TODO markers; the owner supplies the legal data.
