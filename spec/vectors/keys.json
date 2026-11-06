@@ -1,0 +1,13 @@
+{
+  "description": "HKDF-SHA256(ikm=VK, salt=account_id, info) for FK (hort/v4/file), RK (hort/v4/revision), AKs (hort/v4/account-auth); AK = Ed25519 key from seed AKs (contract §2.1).",
+  "vectors": [
+    {
+      "vk_hex": "ac741eb3882b62f2e77ddb783b0de34183194178c2c5d654c39f3c17b19160da",
+      "account_id_hex": "02bbde121c1c4b97706161d94fba838d",
+      "fk_hex": "1bf88d56f421c9d1bc45718842d243ff0a7978fa754e0b497de601c8c2b538a7",
+      "rk_hex": "01e4bceae0b33dfbdf7526ac1e23852c865f7964464a83557816481941858767",
+      "aks_hex": "679897cf1cfb46e98ad4832f20a62f1981a2ee544f0e919d2ebbc971ed6a2d70",
+      "ak_public_hex": "90d61c42d64f388c20f5dc00870072534e922cce7621f52874dca8344bf99ef9"
+    }
+  ]
+}

@@ -159,7 +159,7 @@ func TestCreateV3RawKeyRoundTrip(t *testing.T) {
 		t.Fatalf("reload: %v", err)
 	}
 	values, _, _ := data2.Secrets["k"].Current()
-	if values[MakeLookupKey("*", "*")] != "v" {
+	if values[ValueKey{Key: MakeLookupKey("*", "*")}] != "v" {
 		t.Fatalf("expected round-trip value, got %+v", data2.Secrets)
 	}
 }

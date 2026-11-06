@@ -85,21 +85,6 @@ func (s *Store) sourceByName(name string) (*Source, error) {
 	return nil, fmt.Errorf("source %q is not mounted or not unlocked", name)
 }
 
-func resolve(entry vault.Entry, env, context string) (string, bool) {
-	values, _, _ := entry.Current()
-	if env == "" {
-		env = "*"
-	}
-	if context == "" {
-		context = "*"
-	}
-	for _, key := range []string{vault.MakeLookupKey(env, context), vault.MakeLookupKey(env, "*"), vault.MakeLookupKey("*", "*")} {
-		if value, ok := values[key]; ok {
-			return value, true
-		}
-	}
-	return "", false
-}
 func (s *Store) GetSecret(name, env, context string) (string, string, error) {
 	var value, source string
 	var names []string
@@ -109,7 +94,7 @@ func (s *Store) GetSecret(name, env, context string) (string, string, error) {
 			fmt.Fprintf(os.Stderr, "warning: source %s unreadable: %v\n", src.Name, err)
 			continue
 		}
-		if v, ok := resolve(data.Secrets[name], env, context); ok {
+		if v, ok := data.Secrets[name].Resolve("", env, context); ok {
 			value = v
 			source = src.Name
 			names = append(names, src.Name)
@@ -133,7 +118,7 @@ func (s *Store) GetFrom(source, name, env, context string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if v, ok := resolve(data.Secrets[name], env, context); ok {
+	if v, ok := data.Secrets[name].Resolve("", env, context); ok {
 		return v, nil
 	}
 	return "", fmt.Errorf("secret %q not found in source %q (env=%q, context=%q)", name, src.Name, env, context)
@@ -225,7 +210,7 @@ func (s *Store) Delete(source, name, env, context string) error {
 			return fmt.Errorf("entry %q not found in source %q", name, src.Name)
 		}
 		if op == "delete" {
-			if _, ok := values[key]; !ok {
+			if _, ok := values[vault.ValueKey{Key: key}]; !ok {
 				return fmt.Errorf("entry %q has no variant %q", name, key)
 			}
 		}
@@ -248,9 +233,9 @@ func (s *Store) ContextValues(source, name, env string) (map[string]string, erro
 	}
 	result := map[string]string{}
 	values, _, _ := data.Secrets[name].Current()
-	for key, value := range values {
-		if strings.HasPrefix(key, env+":") {
-			_, ctx := vault.ParseLookupKey(key)
+	for vk, value := range values {
+		if vk.Field == "" && strings.HasPrefix(vk.Key, env+":") {
+			_, ctx := vault.ParseLookupKey(vk.Key)
 			result[ctx] = value
 		}
 	}
@@ -303,8 +288,8 @@ func entryToInfo(name, source string, entry vault.Entry) EntryInfo {
 	values, description, _ := entry.Current()
 	envs, contexts := map[string]bool{}, map[string]bool{}
 	variants := make([]VariantInfo, 0, len(values))
-	for key := range values {
-		env, ctx := vault.ParseLookupKey(key)
+	for vk := range values {
+		env, ctx := vault.ParseLookupKey(vk.Key)
 		envs[env] = true
 		if ctx != "*" {
 			contexts[ctx] = true

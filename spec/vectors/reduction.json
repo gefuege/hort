@@ -1,0 +1,478 @@
+{
+  "description": "Reduction (contract §3.1-§3.3, Append rule §3.2). History order: unknown recorded_at first, then UTC time compared at nanosecond precision, then ID (byte-wise ascending). Values are keyed by (field, lookup key). Revisions are listed in arrival order, which must not matter. resolve: (F, E:C), then (F, E:*), then (F, *:*); empty env or context means *; value null = not found.",
+  "vectors": {
+    "append": [
+      {
+        "name": "local clock ahead of every known revision: now",
+        "existing": [
+          {
+            "id": "00000000000000000000000000000001",
+            "recorded_at": "2026-01-01T00:00:00Z",
+            "op": "set",
+            "key": "*:*",
+            "value": "a"
+          }
+        ],
+        "now": "2026-01-01T00:00:05Z",
+        "recorded_at": "2026-01-01T00:00:05Z"
+      },
+      {
+        "name": "known revision from a clock running ahead: newest + 1 ns",
+        "existing": [
+          {
+            "id": "00000000000000000000000000000001",
+            "recorded_at": "2026-01-01T00:10:00Z",
+            "op": "set",
+            "key": "*:*",
+            "value": "a"
+          },
+          {
+            "id": "00000000000000000000000000000002",
+            "recorded_at": "2026-01-01T00:20:00.5Z",
+            "op": "delete-entry",
+            "key": "",
+            "value": ""
+          }
+        ],
+        "now": "2026-01-01T00:00:05Z",
+        "recorded_at": "2026-01-01T00:20:00.500000001Z"
+      },
+      {
+        "name": "equal time: newest + 1 ns",
+        "existing": [
+          {
+            "id": "00000000000000000000000000000001",
+            "recorded_at": "2026-01-01T00:00:05Z",
+            "op": "set",
+            "key": "*:*",
+            "value": "a"
+          }
+        ],
+        "now": "2026-01-01T00:00:05Z",
+        "recorded_at": "2026-01-01T00:00:05.000000001Z"
+      },
+      {
+        "name": "revisions without time are ignored",
+        "existing": [
+          {
+            "id": "00000000000000000000000000000001",
+            "recorded_at": null,
+            "op": "set",
+            "key": "*:*",
+            "value": "imported"
+          }
+        ],
+        "now": "2026-01-01T00:00:05Z",
+        "recorded_at": "2026-01-01T00:00:05Z"
+      }
+    ],
+    "reduce": [
+      {
+        "name": "order: unknown time first, then UTC time with nanoseconds, then ID",
+        "revisions": [
+          {
+            "id": "00000000000000000000000000000004",
+            "recorded_at": "2026-01-01T00:00:00.000000002Z",
+            "op": "set",
+            "key": "*:*",
+            "value": "latest by nanoseconds"
+          },
+          {
+            "id": "00000000000000000000000000000003",
+            "recorded_at": "2026-01-01T00:00:00.000000001Z",
+            "op": "set",
+            "key": "*:*",
+            "value": "tie, higher ID"
+          },
+          {
+            "id": "00000000000000000000000000000002",
+            "recorded_at": "2026-01-01T00:00:00.000000001Z",
+            "op": "set",
+            "key": "*:*",
+            "value": "tie, lower ID"
+          },
+          {
+            "id": "00000000000000000000000000000001",
+            "recorded_at": null,
+            "op": "set",
+            "key": "*:*",
+            "value": "imported without time"
+          },
+          {
+            "id": "00000000000000000000000000000005",
+            "recorded_at": null,
+            "op": "describe",
+            "key": "",
+            "value": "imported description"
+          }
+        ],
+        "history_ids": [
+          "00000000000000000000000000000001",
+          "00000000000000000000000000000005",
+          "00000000000000000000000000000002",
+          "00000000000000000000000000000003",
+          "00000000000000000000000000000004"
+        ],
+        "values": [
+          {
+            "field": "",
+            "key": "*:*",
+            "value": "latest by nanoseconds"
+          }
+        ],
+        "description": "imported description",
+        "visible": true,
+        "resolve": [
+          {
+            "field": "",
+            "env": "",
+            "context": "",
+            "value": "latest by nanoseconds"
+          }
+        ]
+      },
+      {
+        "name": "fields: values keyed by field and lookup key, resolution stays inside the field",
+        "revisions": [
+          {
+            "id": "00000000000000000000000000000001",
+            "recorded_at": "2026-01-01T00:00:00Z",
+            "op": "set",
+            "key": "*:*",
+            "value": "default baseline"
+          },
+          {
+            "id": "00000000000000000000000000000002",
+            "recorded_at": "2026-01-01T00:00:01Z",
+            "op": "set",
+            "field": "password",
+            "key": "*:*",
+            "value": "password baseline"
+          },
+          {
+            "id": "00000000000000000000000000000003",
+            "recorded_at": "2026-01-01T00:00:02Z",
+            "op": "set",
+            "field": "password",
+            "key": "prod:*",
+            "value": "password prod"
+          },
+          {
+            "id": "00000000000000000000000000000004",
+            "recorded_at": "2026-01-01T00:00:03Z",
+            "op": "set",
+            "field": "password",
+            "key": "prod:heine",
+            "value": "password prod heine"
+          },
+          {
+            "id": "00000000000000000000000000000005",
+            "recorded_at": "2026-01-01T00:00:04Z",
+            "op": "set",
+            "field": "user",
+            "key": "prod:*",
+            "value": "user prod"
+          }
+        ],
+        "history_ids": [
+          "00000000000000000000000000000001",
+          "00000000000000000000000000000002",
+          "00000000000000000000000000000003",
+          "00000000000000000000000000000004",
+          "00000000000000000000000000000005"
+        ],
+        "values": [
+          {
+            "field": "",
+            "key": "*:*",
+            "value": "default baseline"
+          },
+          {
+            "field": "password",
+            "key": "*:*",
+            "value": "password baseline"
+          },
+          {
+            "field": "password",
+            "key": "prod:*",
+            "value": "password prod"
+          },
+          {
+            "field": "password",
+            "key": "prod:heine",
+            "value": "password prod heine"
+          },
+          {
+            "field": "user",
+            "key": "prod:*",
+            "value": "user prod"
+          }
+        ],
+        "description": "",
+        "visible": true,
+        "resolve": [
+          {
+            "field": "password",
+            "env": "prod",
+            "context": "heine",
+            "value": "password prod heine"
+          },
+          {
+            "field": "password",
+            "env": "prod",
+            "context": "other",
+            "value": "password prod"
+          },
+          {
+            "field": "password",
+            "env": "dev",
+            "context": "heine",
+            "value": "password baseline"
+          },
+          {
+            "field": "",
+            "env": "prod",
+            "context": "heine",
+            "value": "default baseline"
+          },
+          {
+            "field": "user",
+            "env": "dev",
+            "context": "",
+            "value": null
+          },
+          {
+            "field": "user",
+            "env": "prod",
+            "context": "heine",
+            "value": "user prod"
+          },
+          {
+            "field": "missing",
+            "env": "",
+            "context": "",
+            "value": null
+          }
+        ]
+      },
+      {
+        "name": "delete removes one field and lookup key only",
+        "revisions": [
+          {
+            "id": "00000000000000000000000000000001",
+            "recorded_at": "2026-01-01T00:00:00Z",
+            "op": "set",
+            "key": "prod:*",
+            "value": "default prod"
+          },
+          {
+            "id": "00000000000000000000000000000002",
+            "recorded_at": "2026-01-01T00:00:01Z",
+            "op": "set",
+            "field": "password",
+            "key": "prod:*",
+            "value": "password prod"
+          },
+          {
+            "id": "00000000000000000000000000000003",
+            "recorded_at": "2026-01-01T00:00:02Z",
+            "op": "delete",
+            "field": "password",
+            "key": "prod:*",
+            "value": ""
+          }
+        ],
+        "history_ids": [
+          "00000000000000000000000000000001",
+          "00000000000000000000000000000002",
+          "00000000000000000000000000000003"
+        ],
+        "values": [
+          {
+            "field": "",
+            "key": "prod:*",
+            "value": "default prod"
+          }
+        ],
+        "description": "",
+        "visible": true,
+        "resolve": [
+          {
+            "field": "password",
+            "env": "prod",
+            "context": "",
+            "value": null
+          },
+          {
+            "field": "",
+            "env": "prod",
+            "context": "",
+            "value": "default prod"
+          }
+        ]
+      },
+      {
+        "name": "delete-entry clears every field and the description; describe does not revive; set revives only its value",
+        "revisions": [
+          {
+            "id": "00000000000000000000000000000001",
+            "recorded_at": "2026-01-01T00:00:00Z",
+            "op": "set",
+            "key": "*:*",
+            "value": "old default"
+          },
+          {
+            "id": "00000000000000000000000000000002",
+            "recorded_at": "2026-01-01T00:00:01Z",
+            "op": "set",
+            "field": "password",
+            "key": "*:*",
+            "value": "old password"
+          },
+          {
+            "id": "00000000000000000000000000000003",
+            "recorded_at": "2026-01-01T00:00:02Z",
+            "op": "describe",
+            "key": "",
+            "value": "old description"
+          },
+          {
+            "id": "00000000000000000000000000000004",
+            "recorded_at": "2026-01-01T00:00:03Z",
+            "op": "delete-entry",
+            "key": "",
+            "value": ""
+          },
+          {
+            "id": "00000000000000000000000000000005",
+            "recorded_at": "2026-01-01T00:00:04Z",
+            "op": "describe",
+            "key": "",
+            "value": "new description"
+          },
+          {
+            "id": "00000000000000000000000000000006",
+            "recorded_at": "2026-01-01T00:00:05Z",
+            "op": "set",
+            "field": "password",
+            "key": "dev:*",
+            "value": "revived"
+          }
+        ],
+        "history_ids": [
+          "00000000000000000000000000000001",
+          "00000000000000000000000000000002",
+          "00000000000000000000000000000003",
+          "00000000000000000000000000000004",
+          "00000000000000000000000000000005",
+          "00000000000000000000000000000006"
+        ],
+        "values": [
+          {
+            "field": "password",
+            "key": "dev:*",
+            "value": "revived"
+          }
+        ],
+        "description": "new description",
+        "visible": true,
+        "resolve": [
+          {
+            "field": "password",
+            "env": "dev",
+            "context": "",
+            "value": "revived"
+          },
+          {
+            "field": "password",
+            "env": "",
+            "context": "",
+            "value": null
+          },
+          {
+            "field": "",
+            "env": "",
+            "context": "",
+            "value": null
+          }
+        ]
+      },
+      {
+        "name": "delete-entry without a later set leaves the entry invisible",
+        "revisions": [
+          {
+            "id": "00000000000000000000000000000001",
+            "recorded_at": "2026-01-01T00:00:00Z",
+            "op": "set",
+            "key": "*:*",
+            "value": "v"
+          },
+          {
+            "id": "00000000000000000000000000000002",
+            "recorded_at": "2026-01-01T00:00:01Z",
+            "op": "delete-entry",
+            "key": "",
+            "value": ""
+          },
+          {
+            "id": "00000000000000000000000000000003",
+            "recorded_at": "2026-01-01T00:00:02Z",
+            "op": "describe",
+            "key": "",
+            "value": "after delete"
+          }
+        ],
+        "history_ids": [
+          "00000000000000000000000000000001",
+          "00000000000000000000000000000002",
+          "00000000000000000000000000000003"
+        ],
+        "values": [],
+        "description": "after delete",
+        "visible": false,
+        "resolve": [
+          {
+            "field": "",
+            "env": "",
+            "context": "",
+            "value": null
+          }
+        ]
+      },
+      {
+        "name": "describe alone makes an entry visible without values",
+        "revisions": [
+          {
+            "id": "00000000000000000000000000000001",
+            "recorded_at": "2026-01-01T00:00:00Z",
+            "op": "describe",
+            "key": "",
+            "value": "first"
+          },
+          {
+            "id": "00000000000000000000000000000002",
+            "recorded_at": "2026-01-01T00:00:01Z",
+            "op": "describe",
+            "key": "",
+            "value": "second"
+          }
+        ],
+        "history_ids": [
+          "00000000000000000000000000000001",
+          "00000000000000000000000000000002"
+        ],
+        "values": [],
+        "description": "second",
+        "visible": true,
+        "resolve": [
+          {
+            "field": "",
+            "env": "",
+            "context": "",
+            "value": null
+          }
+        ]
+      }
+    ]
+  }
+}

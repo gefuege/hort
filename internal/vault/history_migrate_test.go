@@ -41,7 +41,7 @@ func TestRevisionReductionIsArrivalIndependent(t *testing.T) {
 	}
 	e := Entry{Revisions: revisions[:3]}
 	values, _, _ := e.Current()
-	if values["*:*"] != "tie-winner" {
+	if values[ValueKey{Key: "*:*"}] != "tie-winner" {
 		t.Fatal("ID tie order failed")
 	}
 }
@@ -61,7 +61,7 @@ func TestWholeEntryDeleteAndRevival(t *testing.T) {
 	}
 	e.Revisions = append(e.Revisions, revisionAt(5, &after, "set", "dev:*", "revived"))
 	values, desc, visible := e.Current()
-	if !visible || len(values) != 1 || values["dev:*"] != "revived" || desc != "description cannot revive" {
+	if !visible || len(values) != 1 || values[ValueKey{Key: "dev:*"}] != "revived" || desc != "description cannot revive" {
 		t.Fatal("set did not revive only its scope")
 	}
 }
@@ -131,7 +131,7 @@ func TestExplicitMigrationPreservesCompleteContentAndBackup(t *testing.T) {
 				t.Fatal("wrong migrated contract")
 			}
 			values, desc, visible := data.Secrets["ä"].Current()
-			want := map[string]string{"*:*": "", "prod:*": "prod", "odd": "kept", "prod:ctx:tail": "exact", "": "empty key"}
+			want := map[ValueKey]string{{Key: "*:*"}: "", {Key: "prod:*"}: "prod", {Key: "odd"}: "kept", {Key: "prod:ctx:tail"}: "exact", {Key: ""}: "empty key"}
 			if !visible || desc != "Größe" || !reflect.DeepEqual(values, want) {
 				t.Fatal("legacy keys/values/description changed")
 			}

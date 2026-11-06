@@ -33,10 +33,13 @@ func strictJSON(raw []byte, dst any) error {
 			case '{':
 				seen := map[string]bool{}
 				fields := map[string]reflect.Type{}
+				optional := map[string]bool{}
 				if typ.Kind() == reflect.Struct {
 					for i := 0; i < typ.NumField(); i++ {
 						f := typ.Field(i)
-						fields[strings.Split(f.Tag.Get("json"), ",")[0]] = f.Type
+						name, opts, _ := strings.Cut(f.Tag.Get("json"), ",")
+						fields[name] = f.Type
+						optional[name] = opts == "omitempty"
 					}
 				}
 				for dec.More() {
@@ -63,7 +66,7 @@ func strictJSON(raw []byte, dst any) error {
 					}
 				}
 				for field := range fields {
-					if !seen[field] {
+					if !seen[field] && !optional[field] {
 						return fmt.Errorf("missing JSON field %q", field)
 					}
 				}
@@ -222,7 +225,11 @@ func MigrateVault(ref VaultRef, key []byte) error {
 	}
 	for _, entries := range []map[string]legacyEntry{old.Secrets, old.Configs} {
 		for name, e := range entries {
-			values, desc, visible := roundtrip.Secrets[name].Current()
+			current, desc, visible := roundtrip.Secrets[name].Current()
+			values := map[LookupKey]string{}
+			for k, v := range current {
+				values[k.Key] = v
+			}
 			if !visible || desc != *e.Description || !reflect.DeepEqual(values, e.Values) {
 				return fmt.Errorf("migration content mismatch for %q", name)
 			}

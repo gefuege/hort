@@ -1,0 +1,66 @@
+{
+  "description": "Passphrase slot KEK by 2SKD and passkey slot KEK from PRF (contract §2.2). A = Argon2id(NFC(passphrase), slot_salt, t, m, p, 32); S = HKDF(secret_key, account_id, hort/v4/secret-key); KEK = HKDF(A XOR S, slot_salt, hort/v4/kek). Passkey: eval salt = SHA-256(\"hort/v4/prf\\n\" || account_id); KEK = HKDF(PRF, account_id, hort/v4/kek-passkey).",
+  "vectors": {
+    "passkey": [
+      {
+        "account_id_hex": "02bbde121c1c4b97706161d94fba838d",
+        "prf_eval_salt_hex": "5d00cb55e822cf4e73a6ad74af0b886f0bd1a0b7032e6f2d8257178162f4a3c9",
+        "prf_output_hex": "2c19e22c3564cac963b0d73494ecb08c19c4f9ea8d2a38575ff77280d28ed974",
+        "kek_hex": "1e8a1b4f87e5257b6132f26f4f53cb07ebad9f2c4acd752021b16bd5e54d060f"
+      }
+    ],
+    "passphrase": [
+      {
+        "name": "production parameters",
+        "test_params_only": false,
+        "passphrase_utf8_hex": "4772c3bcc39f65206175732048616e6e6f766572",
+        "passphrase_nfc_hex": "4772c3bcc39f65206175732048616e6e6f766572",
+        "secret_key_hex": "3cd9a14b13be06752d38d33a632868e3",
+        "account_id_hex": "02bbde121c1c4b97706161d94fba838d",
+        "slot_salt_hex": "54c1b684f5148636a138ec79a93badfd0e8f4eab7c3b93c656cb15c458cd3480",
+        "argon": {
+          "t": 3,
+          "m_kib": 65536,
+          "p": 4
+        },
+        "argon_output_hex": "8eaa714a76ad045308ed3d4f6c94c9dfa4445213eb33a3a89d729c1b7ee8f7b7",
+        "secret_key_half_hex": "7aec89b33274a18c3546788887c80755e1f9154936c1484993baa41902f69c5b",
+        "kek_hex": "6177876997166743b911d75343e00ebd502d923f1274ad69bebfff09eb15dc0a"
+      },
+      {
+        "name": "test parameters, NFC input",
+        "test_params_only": true,
+        "passphrase_utf8_hex": "4772c3bcc39f65206175732048616e6e6f766572",
+        "passphrase_nfc_hex": "4772c3bcc39f65206175732048616e6e6f766572",
+        "secret_key_hex": "3cd9a14b13be06752d38d33a632868e3",
+        "account_id_hex": "02bbde121c1c4b97706161d94fba838d",
+        "slot_salt_hex": "54c1b684f5148636a138ec79a93badfd0e8f4eab7c3b93c656cb15c458cd3480",
+        "argon": {
+          "t": 1,
+          "m_kib": 256,
+          "p": 1
+        },
+        "argon_output_hex": "6048f46b1ca542b5cec910b0ac758b4e41943342ed9ca010b25ff50fd7d6b8d2",
+        "secret_key_half_hex": "7aec89b33274a18c3546788887c80755e1f9154936c1484993baa41902f69c5b",
+        "kek_hex": "050993b8461f30f2e084af73edb0a2a1cb05fc7ff3ba62bf31b6735ed3ed7c55"
+      },
+      {
+        "name": "test parameters, NFD input normalizes to the same KEK",
+        "test_params_only": true,
+        "passphrase_utf8_hex": "477275cc88c39f65206175732048616e6e6f766572",
+        "passphrase_nfc_hex": "4772c3bcc39f65206175732048616e6e6f766572",
+        "secret_key_hex": "3cd9a14b13be06752d38d33a632868e3",
+        "account_id_hex": "02bbde121c1c4b97706161d94fba838d",
+        "slot_salt_hex": "54c1b684f5148636a138ec79a93badfd0e8f4eab7c3b93c656cb15c458cd3480",
+        "argon": {
+          "t": 1,
+          "m_kib": 256,
+          "p": 1
+        },
+        "argon_output_hex": "6048f46b1ca542b5cec910b0ac758b4e41943342ed9ca010b25ff50fd7d6b8d2",
+        "secret_key_half_hex": "7aec89b33274a18c3546788887c80755e1f9154936c1484993baa41902f69c5b",
+        "kek_hex": "050993b8461f30f2e084af73edb0a2a1cb05fc7ff3ba62bf31b6735ed3ed7c55"
+      }
+    ]
+  }
+}

@@ -54,19 +54,25 @@ func GenerateSalt() ([]byte, error) {
 // sealGCM encrypts plaintext under key with a fresh nonce and returns both.
 // v3 binds the header prefix as AAD; GCM authenticates the nonce itself.
 func sealGCM(plaintext, key, aad []byte) ([]byte, []byte, error) {
-	block, err := aes.NewCipher(key)
-	if err != nil {
-		return nil, nil, fmt.Errorf("creating cipher: %w", err)
-	}
-	gcm, err := cipher.NewGCM(block)
-	if err != nil {
-		return nil, nil, fmt.Errorf("creating GCM: %w", err)
-	}
 	nonce := make([]byte, NonceSize)
 	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
 		return nil, nil, fmt.Errorf("generating nonce: %w", err)
 	}
-	return gcm.Seal(nil, nonce, plaintext, aad), nonce, nil
+	ciphertext, err := sealGCMWithNonce(plaintext, key, nonce, aad)
+	return ciphertext, nonce, err
+}
+
+// sealGCMWithNonce encrypts with a caller-chosen nonce; only test vectors pin it.
+func sealGCMWithNonce(plaintext, key, nonce, aad []byte) ([]byte, error) {
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, fmt.Errorf("creating cipher: %w", err)
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, fmt.Errorf("creating GCM: %w", err)
+	}
+	return gcm.Seal(nil, nonce, plaintext, aad), nil
 }
 
 // openGCM decrypts ciphertext using key and nonce.

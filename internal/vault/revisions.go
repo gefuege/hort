@@ -17,6 +17,7 @@ type Revision struct {
 	ID         string     `json:"id"`
 	RecordedAt *time.Time `json:"recorded_at"`
 	Op         string     `json:"op"`
+	Field      string     `json:"field,omitempty"` // "" is the default field; omitted so v3 files stay byte-compatible
 	Key        LookupKey  `json:"key"`
 	Value      string     `json:"value"`
 }
@@ -41,7 +42,10 @@ func NewRevision(op, key, value string) (Revision, error) {
 // Append stamps r behind every revision the entry already knows, so a local
 // change is never outranked by a pulled revision from a clock running ahead.
 func (e *Entry) Append(r Revision) {
-	at := time.Now().UTC()
+	e.appendAt(r, time.Now().UTC())
+}
+
+func (e *Entry) appendAt(r Revision, at time.Time) {
 	for _, known := range e.Revisions {
 		if known.RecordedAt != nil && !known.RecordedAt.Before(at) {
 			at = known.RecordedAt.UTC().Add(time.Nanosecond)
@@ -70,18 +74,24 @@ func (e Entry) History() []Revision {
 	return out
 }
 
+// ValueKey addresses one value of an entry: a field and its lookup key.
+type ValueKey struct {
+	Field string
+	Key   LookupKey
+}
+
 // Current is an ephemeral projection, never a second persisted state.
-func (e Entry) Current() (values map[LookupKey]string, description string, visible bool) {
-	values = make(map[LookupKey]string)
+func (e Entry) Current() (values map[ValueKey]string, description string, visible bool) {
+	values = make(map[ValueKey]string)
 	deleted := false
 	for _, r := range e.History() {
 		switch r.Op {
 		case "set":
-			values[r.Key] = r.Value
+			values[ValueKey{r.Field, r.Key}] = r.Value
 			visible = true
 			deleted = false
 		case "delete":
-			delete(values, r.Key)
+			delete(values, ValueKey{r.Field, r.Key})
 		case "delete-entry":
 			clear(values)
 			description = ""
@@ -95,6 +105,18 @@ func (e Entry) Current() (values map[LookupKey]string, description string, visib
 		}
 	}
 	return
+}
+
+// Resolve reads one field for env and context, falling back to env:* and *:*
+// within that field only (§3.3).
+func (e Entry) Resolve(field, env, context string) (string, bool) {
+	values, _, _ := e.Current()
+	for _, key := range []LookupKey{MakeLookupKey(env, context), MakeLookupKey(env, "*"), MakeLookupKey("*", "*")} {
+		if value, ok := values[ValueKey{field, key}]; ok {
+			return value, true
+		}
+	}
+	return "", false
 }
 
 func validID(id string) bool {
@@ -115,6 +137,9 @@ func validateVault(d *VaultData) error {
 				return fmt.Errorf("invalid or duplicate revision identity for %q", name)
 			}
 			ids[r.ID] = true
+			if r.Field != "" {
+				return fmt.Errorf("v3 revisions carry no field for %q", name)
+			}
 			if r.RecordedAt != nil {
 				_, offset := r.RecordedAt.Zone()
 				if offset != 0 {

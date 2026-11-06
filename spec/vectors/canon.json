@@ -1,0 +1,41 @@
+{
+  "description": "canon(tag, f1..fn) = tag || u32be(len f1) || f1 || ... (contract §2.1). hort/v4/test is a test-only tag.",
+  "vectors": [
+    {
+      "name": "tag only",
+      "tag": "hort/v4/test\n",
+      "fields_hex": [],
+      "output_hex": "686f72742f76342f746573740a"
+    },
+    {
+      "name": "one empty field",
+      "tag": "hort/v4/test\n",
+      "fields_hex": [
+        ""
+      ],
+      "output_hex": "686f72742f76342f746573740a00000000"
+    },
+    {
+      "name": "several fields including an empty one",
+      "tag": "hort/v4/test\n",
+      "fields_hex": [
+        "70617373706872617365",
+        "",
+        "0000000000000001",
+        "ff"
+      ],
+      "output_hex": "686f72742f76342f746573740a0000000a706173737068726173650000000000000008000000000000000100000001ff"
+    },
+    {
+      "name": "passphrase slot_params",
+      "tag": "hort/v4/argon\n",
+      "fields_hex": [
+        "54c1b684f5148636a138ec79a93badfd0e8f4eab7c3b93c656cb15c458cd3480",
+        "00000003",
+        "00010000",
+        "04"
+      ],
+      "output_hex": "686f72742f76342f6172676f6e0a0000002054c1b684f5148636a138ec79a93badfd0e8f4eab7c3b93c656cb15c458cd3480000000040000000300000004000100000000000104"
+    }
+  ]
+}

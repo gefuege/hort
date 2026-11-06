@@ -1,0 +1,58 @@
+{
+  "description": "Request meta (contract §7.2 step 3, tag per Kopf decision): meta_ct = nonce(12) || AES-256-GCM(RK, JSON meta, aad = canon(\"hort/v4/req-meta\\n\", account_id, request id bytes)). Request signature (contract §6.2): Ed25519 over canon(\"hort/v4/req\\n\", account_id, device id bytes or \"ak\", METHOD, PATH_WITH_QUERY, u64 timestamp, SHA-256(body)).",
+  "vectors": {
+    "meta": [
+      {
+        "request_id": "654b37d0080c8974e3bcc2b1de471086",
+        "meta": {
+          "name": "openai",
+          "description": "API key for the summarizer",
+          "field": "",
+          "env": "prod",
+          "context": ""
+        },
+        "rk_hex": "01e4bceae0b33dfbdf7526ac1e23852c865f7964464a83557816481941858767",
+        "account_id_hex": "02bbde121c1c4b97706161d94fba838d",
+        "aad_hex": "686f72742f76342f7265712d6d6574610a0000001002bbde121c1c4b97706161d94fba838d00000010654b37d0080c8974e3bcc2b1de471086",
+        "nonce_hex": "85d481788032fc7d971bccd3",
+        "plaintext": "{\"name\":\"openai\",\"description\":\"API key for the summarizer\",\"field\":\"\",\"env\":\"prod\",\"context\":\"\"}",
+        "meta_ct_hex": "85d481788032fc7d971bccd3b51abef4ba5b206da7fb4b063aeec279251707477cba3cd125b737670040a0814d01e747c5f0bd83f5c2437871717efcdc2391162ed5e373a7a6fc261ec791140866a94edb2e48cafa6f96bebcc724b78f54b6ad9dcc914cc235be84b4c311aac5d54dc12435c4652b7018e4047f966932",
+        "meta_ct_base64": "hdSBeIAy/H2XG8zTtRq+9LpbIG2n+0sGOu7CeSUXB0d8ujzRJbc3ZwBAoIFNAedHxfC9g/XCQ3hxcX783CORFi7V43OnpvwmHseRFAhmqU7bLkjK+m+WvrzHJLePVLatncyRTMI1voS0wxGqxdVNwSQ1xGUrcBjkBH+WaTI="
+      }
+    ],
+    "signature": [
+      {
+        "name": "device key, POST with body",
+        "hort_account": "0axxw4gw3h5sew31c7cmzem3hm",
+        "hort_device": "b084a24857fd1d7a8d8ae3392a01c0c2",
+        "account_id_hex": "02bbde121c1c4b97706161d94fba838d",
+        "device_field_hex": "b084a24857fd1d7a8d8ae3392a01c0c2",
+        "method": "POST",
+        "path_with_query": "/api/v1/requests",
+        "timestamp": 1793872800,
+        "body": "{\"id\":\"654b37d0080c8974e3bcc2b1de471086\",\"meta_ct\":\"hdSBeIAy/H2XG8zTtRq+9LpbIG2n+0sGOu7CeSUXB0d8ujzRJbc3ZwBAoIFNAedHxfC9g/XCQ3hxcX783CORFi7V43OnpvwmHseRFAhmqU7bLkjK+m+WvrzHJLePVLatncyRTMI1voS0wxGqxdVNwSQ1xGUrcBjkBH+WaTI=\"}",
+        "body_sha256_hex": "4e0d8eb3ffb2f6d82c0cdfcb0db4b4d34b15b5ae8287897a70923b96900a292b",
+        "message_hex": "686f72742f76342f7265710a0000001002bbde121c1c4b97706161d94fba838d00000010b084a24857fd1d7a8d8ae3392a01c0c200000004504f5354000000102f6170692f76312f726571756573747300000008000000006aec53a0000000204e0d8eb3ffb2f6d82c0cdfcb0db4b4d34b15b5ae8287897a70923b96900a292b",
+        "public_key_hex": "a8aa61e938df1211c9cbcfc5f782f83a5d9c5bac2f5b1e633926c5d469ad7564",
+        "signature_hex": "88052a93afa6f410fd6afe2eed8f9bcef18a603d6fb650aec1ffcec04944eded6d3943cb9247151bf79143987c2acb683fd159ca61bc1f826af63b75e7d5080d",
+        "hort_signature": "iAUqk6+m9BD9av4u7Y+bzvGKYD1vtlCuwf/OwElE7e1tOUPLkkcVG/eRQ5h8KstoP9FZymG8H4Jq9jt159UIDQ=="
+      },
+      {
+        "name": "AK, GET with query and empty body",
+        "hort_account": "0axxw4gw3h5sew31c7cmzem3hm",
+        "hort_device": "ak",
+        "account_id_hex": "02bbde121c1c4b97706161d94fba838d",
+        "device_field_hex": "616b",
+        "method": "GET",
+        "path_with_query": "/api/v1/revisions?after=0&limit=500",
+        "timestamp": 1793872801,
+        "body": "",
+        "body_sha256_hex": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "message_hex": "686f72742f76342f7265710a0000001002bbde121c1c4b97706161d94fba838d00000002616b00000003474554000000232f6170692f76312f7265766973696f6e733f61667465723d30266c696d69743d35303000000008000000006aec53a100000020e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "public_key_hex": "90d61c42d64f388c20f5dc00870072534e922cce7621f52874dca8344bf99ef9",
+        "signature_hex": "0bb59b14eea0d56d9712de8544a2f88b9f4173b4aa3772b5b8761aff4db86ed929b2ebe125ad16042191e2820425df47c470499b6dbfa1cb82ba37ec765bb203",
+        "hort_signature": "C7WbFO6g1W2XEt6FRKL4i59Bc7SqN3K1uHYa/024btkpsuvhJa0WBCGR4oIEJd9HxHBJm22/ocuCujfsdluyAw=="
+      }
+    ]
+  }
+}

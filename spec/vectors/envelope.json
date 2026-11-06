@@ -1,0 +1,96 @@
+{
+  "description": "Revision envelope (contract §6.4): envelope = nonce(12) || AES-256-GCM(RK, plaintext, aad = canon(\"hort/v4/rev\\n\", account_id, revision id bytes)). plaintext is UTF-8 JSON {\"name\", \"revision\"}; \"field\" is omitted when empty.",
+  "vectors": [
+    {
+      "name": "set on the default field",
+      "entry_name": "github-token",
+      "revision": {
+        "id": "00000000000000000000000000000001",
+        "recorded_at": "2026-11-06T10:00:00Z",
+        "op": "set",
+        "key": "*:*",
+        "value": "ghp_example"
+      },
+      "rk_hex": "01e4bceae0b33dfbdf7526ac1e23852c865f7964464a83557816481941858767",
+      "account_id_hex": "02bbde121c1c4b97706161d94fba838d",
+      "aad_hex": "686f72742f76342f7265760a0000001002bbde121c1c4b97706161d94fba838d0000001000000000000000000000000000000001",
+      "nonce_hex": "2a6e45d7364c18081f4941a8",
+      "plaintext": "{\"name\":\"github-token\",\"revision\":{\"id\":\"00000000000000000000000000000001\",\"recorded_at\":\"2026-11-06T10:00:00Z\",\"op\":\"set\",\"key\":\"*:*\",\"value\":\"ghp_example\"}}",
+      "envelope_hex": "2a6e45d7364c18081f4941a8181fc4fbb8821d86b0254a5e0c6370a29524952bb323018d962582a3531268763c4c8b731609eead8458c0ac1995f5c63d47a613020e247ea8d740d40650e8cb0f60628e9aaec39fd225f6265c1497eaa3d45254289784a463f18b2666d81045ad60c35cb2ffd329154d31be84f09a7e1123e9f84ef2cdf82551559ca39180872c7ab4eb3b8990c56619dfd27982a299e84c116cf790f23e6d2cbfefd5039143bceb56187e57224fa3d13aa3bd77",
+      "envelope_base64": "Km5F1zZMGAgfSUGoGB/E+7iCHYawJUpeDGNwopUklSuzIwGNliWCo1MSaHY8TItzFgnurYRYwKwZlfXGPUemEwIOJH6o10DUBlDoyw9gYo6arsOf0iX2JlwUl+qj1FJUKJeEpGPxiyZm2BBFrWDDXLL/0ykVTTG+hPCafhEj6fhO8s34JVFVnKORgIcserTrO4mQxWYZ39J5gqKZ6EwRbPeQ8j5tLL/v1QORQ7zrVhh+VyJPo9E6o713"
+    },
+    {
+      "name": "set on a named field with env and context",
+      "entry_name": "db",
+      "revision": {
+        "id": "00000000000000000000000000000002",
+        "recorded_at": "2026-11-06T10:00:00.000000001Z",
+        "op": "set",
+        "field": "password",
+        "key": "prod:heine",
+        "value": "s3cr3t ä"
+      },
+      "rk_hex": "01e4bceae0b33dfbdf7526ac1e23852c865f7964464a83557816481941858767",
+      "account_id_hex": "02bbde121c1c4b97706161d94fba838d",
+      "aad_hex": "686f72742f76342f7265760a0000001002bbde121c1c4b97706161d94fba838d0000001000000000000000000000000000000002",
+      "nonce_hex": "0d6bf68686dc0a8a1ead6333",
+      "plaintext": "{\"name\":\"db\",\"revision\":{\"id\":\"00000000000000000000000000000002\",\"recorded_at\":\"2026-11-06T10:00:00.000000001Z\",\"op\":\"set\",\"field\":\"password\",\"key\":\"prod:heine\",\"value\":\"s3cr3t ä\"}}",
+      "envelope_hex": "0d6bf68686dc0a8a1ead63335da794a666634fc6463056cb7999a67e4f19593dd3b9183d7f94b975537f51edc5f6fdc6706a46ef5996c988ff08028cc51d0647a6770e4bc18355594ccd05e7fa459a8e93d7a190456c48c3d01216eeafad5451599d0514cbe364bd1392da058d91935e9057cbf003e754e6f995d5df3c9cc975bc82f3fd79cfcc2a66137b797d9bf8abf95e7e79c6b4ab52ebb8cdf164bd9729bb54832cf491d59a1ca7f039b543966b2470e723aa990c45238cf09fc372b227ba1ff0a8ad576606e54dfccf5f344849732c",
+      "envelope_base64": "DWv2hobcCooerWMzXaeUpmZjT8ZGMFbLeZmmfk8ZWT3TuRg9f5S5dVN/Ue3F9v3GcGpG71mWyYj/CAKMxR0GR6Z3DkvBg1VZTM0F5/pFmo6T16GQRWxIw9ASFu6vrVRRWZ0FFMvjZL0TktoFjZGTXpBXy/AD51Tm+ZXV3zycyXW8gvP9ec/MKmYTe3l9m/ir+V5+eca0q1LruM3xZL2XKbtUgyz0kdWaHKfwObVDlmskcOcjqpkMRSOM8J/DcrInuh/wqK1XZgblTfzPXzRISXMs"
+    },
+    {
+      "name": "describe",
+      "entry_name": "db",
+      "revision": {
+        "id": "00000000000000000000000000000003",
+        "recorded_at": "2026-11-06T10:00:01Z",
+        "op": "describe",
+        "key": "",
+        "value": "Postgres of tenant heine"
+      },
+      "rk_hex": "01e4bceae0b33dfbdf7526ac1e23852c865f7964464a83557816481941858767",
+      "account_id_hex": "02bbde121c1c4b97706161d94fba838d",
+      "aad_hex": "686f72742f76342f7265760a0000001002bbde121c1c4b97706161d94fba838d0000001000000000000000000000000000000003",
+      "nonce_hex": "5905e8feb4cc10eb45fca31b",
+      "plaintext": "{\"name\":\"db\",\"revision\":{\"id\":\"00000000000000000000000000000003\",\"recorded_at\":\"2026-11-06T10:00:01Z\",\"op\":\"describe\",\"key\":\"\",\"value\":\"Postgres of tenant heine\"}}",
+      "envelope_hex": "5905e8feb4cc10eb45fca31b3e993053c9ab1c87624fc979787c121342f00616ed46a362fa27645df57dfe49a259ad7efef0cac92b2c36af00c3be2c7583c55ef98a9d2ceca475c58986b7ef51752aa5b25c49932979da1de6e8d01dc8c41fe2e661ec23dec23f06e3d302d57d1d6c4322654a892832800e504c652ac3a9822a7dbbed9d10d4e6fc2b8a4106eaebd12de05983c9d6aec2d706b0d4f51c08df902c7df2568355ddefeea9ccf628538ab2c0c5f212e0b43e27c4822ec9d33f94",
+      "envelope_base64": "WQXo/rTMEOtF/KMbPpkwU8mrHIdiT8l5eHwSE0LwBhbtRqNi+idkXfV9/kmiWa1+/vDKySssNq8Aw74sdYPFXvmKnSzspHXFiYa371F1KqWyXEmTKXnaHebo0B3IxB/i5mHsI97CPwbj0wLVfR1sQyJlSokoMoAOUExlKsOpgip9u+2dENTm/CuKQQbq69Et4FmDydauwtcGsNT1HAjfkCx98laDVd3v7qnM9ihTirLAxfIS4LQ+J8SCLsnTP5Q="
+    },
+    {
+      "name": "delete-entry",
+      "entry_name": "db",
+      "revision": {
+        "id": "00000000000000000000000000000004",
+        "recorded_at": "2026-11-06T10:00:02Z",
+        "op": "delete-entry",
+        "key": "",
+        "value": ""
+      },
+      "rk_hex": "01e4bceae0b33dfbdf7526ac1e23852c865f7964464a83557816481941858767",
+      "account_id_hex": "02bbde121c1c4b97706161d94fba838d",
+      "aad_hex": "686f72742f76342f7265760a0000001002bbde121c1c4b97706161d94fba838d0000001000000000000000000000000000000004",
+      "nonce_hex": "78aeca18f6fa024fafd766b7",
+      "plaintext": "{\"name\":\"db\",\"revision\":{\"id\":\"00000000000000000000000000000004\",\"recorded_at\":\"2026-11-06T10:00:02Z\",\"op\":\"delete-entry\",\"key\":\"\",\"value\":\"\"}}",
+      "envelope_hex": "78aeca18f6fa024fafd766b7efbef8652c6b3fc8580e556528e6b6bb819190bbdb636f84e7c0a2a603b2a8a604af9904117e10037283e28eb337faf564a34f9b6502a32514e7c20e4fabf64a40bd50e3f62d5e144e13256bfc084d7ac1bc63832ebb2b85439a8d263a37cee2597f4f4f184732322c3f1e8f73d32459051ee5cf885699dffcd4ba1daa00f08b437e4cfdb86624c001ff2bda245c766a632775e9332498ff3216ee3c1692c5",
+      "envelope_base64": "eK7KGPb6Ak+v12a37774ZSxrP8hYDlVlKOa2u4GRkLvbY2+E58CipgOyqKYEr5kEEX4QA3KD4o6zN/r1ZKNPm2UCoyUU58IOT6v2SkC9UOP2LV4UThMla/wITXrBvGODLrsrhUOajSY6N87iWX9PTxhHMjIsPx6Pc9MkWQUe5c+IVpnf/NS6HaoA8ItDfkz9uGYkwAH/K9okXHZqYyd16TMkmP8yFu48FpLF"
+    },
+    {
+      "name": "imported revision without time",
+      "entry_name": "legacy name",
+      "revision": {
+        "id": "00000000000000000000000000000005",
+        "recorded_at": null,
+        "op": "set",
+        "key": "prod:*",
+        "value": "v1"
+      },
+      "rk_hex": "01e4bceae0b33dfbdf7526ac1e23852c865f7964464a83557816481941858767",
+      "account_id_hex": "02bbde121c1c4b97706161d94fba838d",
+      "aad_hex": "686f72742f76342f7265760a0000001002bbde121c1c4b97706161d94fba838d0000001000000000000000000000000000000005",
+      "nonce_hex": "2519c785b52fc2373029e283",
+      "plaintext": "{\"name\":\"legacy name\",\"revision\":{\"id\":\"00000000000000000000000000000005\",\"recorded_at\":null,\"op\":\"set\",\"key\":\"prod:*\",\"value\":\"v1\"}}",
+      "envelope_hex": "2519c785b52fc2373029e283618a04eb3168fc4be70b7896f25e1c4e7a06e3fd65301c2799f3a2f411341f72168845300862add4089edc3f22570585e171e5a7f21b5873209e8f2a10bf4b0ef93a4e349a43c9334fdfdafaac1a5c841c00209592f30a6ac352850f9be16a6483d95f14957e43690b0a83f39e82bf7eacf69e9156f10add1f0252ada2ca1768ec8c1863aaeffce31e5629406fbe12d2d3350ed6a7",
+      "envelope_base64": "JRnHhbUvwjcwKeKDYYoE6zFo/EvnC3iW8l4cTnoG4/1lMBwnmfOi9BE0H3IWiEUwCGKt1Aie3D8iVwWF4XHlp/IbWHMgno8qEL9LDvk6TjSaQ8kzT9/a+qwaXIQcACCVkvMKasNShQ+b4Wpkg9lfFJV+Q2kLCoPznoK/fqz2npFW8QrdHwJSraLKF2jsjBhjqu/84x5WKUBvvhLS0zUO1qc="
+    }
+  ]
+}
