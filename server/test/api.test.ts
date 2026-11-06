@@ -1,5 +1,6 @@
 import { env, exports } from "cloudflare:workers";
-import { describe, expect, it } from "vitest";
+import { runInDurableObject } from "cloudflare:test";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import keyVectors from "../../spec/vectors/keys.json";
 import slotVectors from "../../spec/vectors/slot.json";
 import worker from "../src/index";
@@ -450,5 +451,226 @@ describe("PUT /api/v1/slots/passphrase", () => {
     const byDevice = await call({ account: f.account, device: f.deviceId, key: f.device, method: "PUT", path: "/api/v1/slots/passphrase", body: JSON.stringify(slotJson(slot)) });
     expect(byDevice.status).toBe(401);
     expect((await putSlot(f, slot, await newKey())).status).toBe(401);
+  });
+});
+
+// Requests (contract §6.3, §7.2, §7.3).
+const metaCt = () => b64Encode(random(60));
+const rid = () => hexEncode(random(16));
+const revision = () => ({ id: rid(), ct: b64Encode(random(80)) });
+
+const createRequest = (f: Fixture, body: unknown, deviceId = f.deviceId, key = f.device) =>
+  call({ account: f.account, device: deviceId, key, method: "POST", path: "/api/v1/requests", body: JSON.stringify(body) });
+const getRequest = (f: Fixture, id: string, deviceId = f.deviceId, key = f.device) =>
+  call({ account: f.account, device: deviceId, key, method: "GET", path: `/api/v1/requests/${id}` });
+const listPending = (f: Fixture) =>
+  call({ account: f.account, device: f.deviceId, key: f.device, method: "GET", path: "/api/v1/requests?status=pending" });
+const declineRequest = (f: Fixture, id: string, deviceId = f.deviceId, key = f.device) =>
+  call({ account: f.account, device: deviceId, key, method: "POST", path: `/api/v1/requests/${id}/decline` });
+const fulfill = (f: Fixture, id: string, body: unknown) =>
+  env.ACCOUNT.getByName(f.account).fulfillRequest(id, str(JSON.stringify(body)));
+
+type Info = { status: string; meta_ct: string; revision_ids: string[] };
+const info = async (f: Fixture, id: string) => (await (await getRequest(f, id)).json()) as Info;
+const pendingIds = async (f: Fixture) => ((await (await listPending(f)).json()) as { requests: { id: string }[] }).requests.map((r) => r.id);
+
+describe("requests", () => {
+  afterEach(() => vi.useRealTimers());
+
+  it("creates a request, a replay is idempotent and different content conflicts", async () => {
+    const f = await created(await randomFixture());
+    const id = rid();
+    const meta = metaCt();
+    const res = await createRequest(f, { id, meta_ct: meta });
+    expect(res.status).toBe(201);
+    expect(await res.json()).toEqual({ status: "pending" });
+    const replay = await createRequest(f, { id, meta_ct: meta });
+    expect(replay.status).toBe(200);
+    expect(await replay.json()).toEqual({ status: "pending" });
+    expect((await createRequest(f, { id, meta_ct: metaCt() })).status).toBe(409);
+    expect(await info(f, id)).toEqual({ status: "pending", meta_ct: meta, revision_ids: [] });
+  });
+
+  it("rejects malformed create bodies and bounds meta_ct", async () => {
+    const f = await created(await randomFixture());
+    for (const body of [
+      { id: "ABC", meta_ct: metaCt() },
+      { id: rid(), meta_ct: "!!" },
+      { id: rid(), meta_ct: b64Encode(random(10)) },
+      { id: rid(), meta_ct: b64Encode(random(16 * 1024 + 1)) },
+      { id: rid() },
+      { id: rid(), meta_ct: metaCt(), extra: 1 },
+    ]) {
+      expect((await createRequest(f, body)).status).toBe(400);
+    }
+    expect((await createRequest(f, { id: rid(), meta_ct: b64Encode(random(16 * 1024)) })).status).toBe(201);
+  });
+
+  it("allows at most 50 pending requests; a replay and freed slots still work", async () => {
+    const f = await created(await randomFixture());
+    const first = { id: rid(), meta_ct: metaCt() };
+    expect((await createRequest(f, first)).status).toBe(201);
+    for (let i = 1; i < 50; i++) expect((await createRequest(f, { id: rid(), meta_ct: metaCt() })).status).toBe(201);
+    const over = await createRequest(f, { id: rid(), meta_ct: metaCt() });
+    expect(over.status).toBe(429);
+    expect(await over.text()).toBe("too many pending requests (50); decline or wait for expiry\n");
+    expect((await createRequest(f, first)).status).toBe(200);
+    expect((await declineRequest(f, first.id)).status).toBe(200);
+    expect((await createRequest(f, { id: rid(), meta_ct: metaCt() })).status).toBe(201);
+  });
+
+  it("gets a request and answers 404 for an unknown or malformed ID", async () => {
+    const f = await created(await randomFixture());
+    expect((await getRequest(f, rid())).status).toBe(404);
+    expect((await getRequest(f, "nothex")).status).toBe(404);
+  });
+
+  it("lists pending requests only, oldest first, and requires status=pending", async () => {
+    const f = await created(await randomFixture());
+    const a = { id: rid(), meta_ct: metaCt() };
+    const b = { id: rid(), meta_ct: metaCt() };
+    await createRequest(f, a);
+    await createRequest(f, b);
+    await declineRequest(f, b.id);
+    const body = (await (await listPending(f)).json()) as { requests: unknown[] };
+    expect(body.requests).toEqual([{ id: a.id, meta_ct: a.meta_ct, created_at: expect.any(Number) }]);
+    const other = await call({ account: f.account, device: f.deviceId, key: f.device, method: "GET", path: "/api/v1/requests?status=done" });
+    expect(other.status).toBe(400);
+  });
+
+  it("expires a pending request lazily after 24 h", async () => {
+    const f = await created(await randomFixture());
+    const a = { id: rid(), meta_ct: metaCt() };
+    await createRequest(f, a);
+    vi.useFakeTimers({ toFake: ["Date"], now: Date.now() + 24 * 3600 * 1000 - 5000 });
+    expect((await info(f, a.id)).status).toBe("pending");
+    vi.setSystemTime(Date.now() + 5000);
+    expect((await info(f, a.id)).status).toBe("expired");
+    expect(await pendingIds(f)).toEqual([]);
+    const replay = await createRequest(f, a);
+    expect(await replay.json()).toEqual({ status: "expired" });
+    expect((await declineRequest(f, a.id)).status).toBe(409);
+    expect((await fulfill(f, a.id, { revisions: [revision()] })).status).toBe(409);
+  });
+
+  it("excludes expired requests from the list and frees pending capacity", async () => {
+    const f = await created(await randomFixture());
+    for (let i = 0; i < 50; i++) await createRequest(f, { id: rid(), meta_ct: metaCt() });
+    vi.useFakeTimers({ toFake: ["Date"], now: Date.now() + 24 * 3600 * 1000 });
+    expect(await pendingIds(f)).toEqual([]);
+    expect((await createRequest(f, { id: rid(), meta_ct: metaCt() })).status).toBe(201);
+  });
+
+  it("declines idempotently and refuses a non-pending state", async () => {
+    const f = await created(await randomFixture());
+    const a = { id: rid(), meta_ct: metaCt() };
+    await createRequest(f, a);
+    const res = await declineRequest(f, a.id);
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ status: "declined" });
+    expect((await declineRequest(f, a.id)).status).toBe(200);
+    expect((await info(f, a.id)).status).toBe("declined");
+    expect((await fulfill(f, a.id, { revisions: [revision()] })).status).toBe(409);
+
+    const b = { id: rid(), meta_ct: metaCt() };
+    await createRequest(f, b);
+    expect((await fulfill(f, b.id, { revisions: [revision()] })).status).toBe(200);
+    const late = await declineRequest(f, b.id);
+    expect(late.status).toBe(409);
+    expect(await late.text()).toBe("request is fulfilled\n");
+    expect((await declineRequest(f, rid())).status).toBe(404);
+  });
+
+  it("fulfills atomically: revisions, status and revision_ids together, with dedupe", async () => {
+    const f = await created(await randomFixture());
+    const a = { id: rid(), meta_ct: metaCt() };
+    const b = { id: rid(), meta_ct: metaCt() };
+    await createRequest(f, a);
+    await createRequest(f, b);
+    const r1 = revision();
+    const r2 = revision();
+    const res = await fulfill(f, a.id, { revisions: [r1, r2, r1] });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ accepted: [r1.id, r2.id], duplicate: [] });
+    expect(await info(f, a.id)).toMatchObject({ status: "fulfilled", revision_ids: [r1.id, r2.id] });
+    expect((await fulfill(f, a.id, { revisions: [revision()] })).status).toBe(409);
+
+    const r3 = revision();
+    const res2 = await fulfill(f, b.id, { revisions: [r2, r3] });
+    expect(await res2.json()).toEqual({ accepted: [r3.id], duplicate: [r2.id] });
+    expect((await info(f, b.id)).revision_ids).toEqual([r2.id, r3.id]);
+
+    const rows = await runInDurableObject(env.ACCOUNT.getByName(f.account), (_i, state) =>
+      state.storage.sql.exec<{ id: string; from_device: string | null }>("SELECT id, from_device FROM revisions ORDER BY seq").toArray());
+    expect(rows).toEqual([{ id: r1.id, from_device: null }, { id: r2.id, from_device: null }, { id: r3.id, from_device: null }]);
+  });
+
+  it("validates fulfill input and leaves the request pending on failure", async () => {
+    const f = await created(await randomFixture());
+    const a = { id: rid(), meta_ct: metaCt() };
+    await createRequest(f, a);
+    for (const body of [
+      { revisions: [] },
+      { revisions: [{ id: "x", ct: revision().ct }] },
+      { revisions: [{ id: rid(), ct: "!!" }] },
+      { revisions: [{ id: rid() }] },
+      { revisions: Array.from({ length: 501 }, revision) },
+      { revisions: [revision()], extra: 1 },
+    ]) {
+      expect((await fulfill(f, a.id, body)).status).toBe(400);
+    }
+    const big = await fulfill(f, a.id, { revisions: [revision(), { id: rid(), ct: b64Encode(new Uint8Array(64 * 1024 + 1)) }] });
+    expect(big.status).toBe(413);
+    expect((await info(f, a.id)).status).toBe("pending");
+    const rows = await runInDurableObject(env.ACCOUNT.getByName(f.account), (_i, state) =>
+      state.storage.sql.exec<{ n: number }>("SELECT count(*) AS n FROM revisions").one().n);
+    expect(rows).toBe(0);
+    expect((await fulfill(f, rid(), { revisions: [revision()] })).status).toBe(404);
+    expect((await fulfill(f, a.id, { revisions: [{ id: rid(), ct: b64Encode(new Uint8Array(64 * 1024)) }] })).status).toBe(200);
+  });
+
+  it("does not wire fulfill over HTTP before the session exists", async () => {
+    const f = await created(await randomFixture());
+    const a = { id: rid(), meta_ct: metaCt() };
+    await createRequest(f, a);
+    const res = await call({ account: f.account, device: f.deviceId, key: f.device, method: "POST", path: `/api/v1/requests/${a.id}/fulfill`, body: JSON.stringify({ revisions: [revision()] }) });
+    expect(res.status).toBe(401);
+    expect((await info(f, a.id)).status).toBe("pending");
+  });
+
+  it("isolates accounts: another account's request ID is 404 and untouched", async () => {
+    const a = await created(await randomFixture());
+    const b = await created(await randomFixture());
+    const req = { id: rid(), meta_ct: metaCt() };
+    await createRequest(a, req);
+    expect((await getRequest(b, req.id)).status).toBe(404);
+    expect((await declineRequest(b, req.id)).status).toBe(404);
+    expect((await fulfill(b, req.id, { revisions: [revision()] })).status).toBe(404);
+    expect(await pendingIds(b)).toEqual([]);
+    expect((await info(a, req.id)).status).toBe("pending");
+    expect((await getRequest(b, req.id, a.deviceId, a.device)).status).toBe(401);
+  });
+
+  it("rejects wrong signatures, AK signatures and revoked devices", async () => {
+    const f = await created(await randomFixture());
+    const a = { id: rid(), meta_ct: metaCt() };
+    expect((await createRequest(f, a, f.deviceId, await newKey())).status).toBe(401);
+    expect((await createRequest(f, a, "ak", f.ak)).status).toBe(401);
+    await createRequest(f, a);
+    expect((await getRequest(f, a.id, f.deviceId, await newKey())).status).toBe(401);
+    expect((await declineRequest(f, a.id, f.deviceId, await newKey())).status).toBe(401);
+    const second = await enroll(f);
+    await call({ account: f.account, device: f.deviceId, key: f.device, method: "DELETE", path: `/api/v1/devices/${second.id}` });
+    expect((await getRequest(f, a.id, second.id, second.key)).status).toBe(403);
+  });
+
+  it("applies the write rate limit to create and decline but not to reads", async () => {
+    const f = await created(await randomFixture());
+    const a = { id: rid(), meta_ct: metaCt() };
+    expect((await createRequest(f, a)).status).toBe(201);
+    for (let i = 0; i < 70; i++) expect((await getRequest(f, a.id)).status).toBe(200);
+    let limited = 0;
+    for (let i = 0; i < 70; i++) if ((await declineRequest(f, a.id)).status === 429) limited++;
+    expect(limited).toBeGreaterThan(0);
   });
 });

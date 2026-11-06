@@ -17,6 +17,20 @@ All paths start with `/api/v1`. Signed requests carry `Hort-Account` (lowercase 
 | `DELETE /devices/{id}` | device | → `{devices_version}` |
 | `PUT /slots/passphrase` | AK | `{version, bytes, ak_sig}` → `{version}`; the version must be higher than the stored one |
 
+Agent requests (contract §6.3, §7). The server holds only `meta_ct` and revision envelopes, never a name, description or value. `meta_ct` and `ct` are standard base64 of at least 28 bytes (nonce plus GCM tag); `meta_ct` is at most 16 KiB, an envelope at most 64 KiB.
+
+| Method and path | Auth | Body → response |
+|---|---|---|
+| `POST /requests` | device | `{id, meta_ct}` (`id`: 16 bytes lowercase hex, chosen by the client) → 201 `{status: "pending"}`; the request expires 24 h after creation. A replay with the same `meta_ct` → 200 `{status}` (the current state); the same `id` with a different `meta_ct` → 409; more than 50 pending → 429 |
+| `GET /requests/{id}` | device | → `{status, meta_ct, revision_ids}`; `revision_ids` is `[]` unless `fulfilled`; unknown ID or ID of another account → 404 |
+| `GET /requests?status=pending` | device | → `{requests: [{id, meta_ct, created_at}]}`, at most 50, oldest first; any other query → 400 |
+| `POST /requests/{id}/decline` | device | → `{status: "declined"}`; repeating it → 200; `fulfilled` or `expired` → 409 |
+| `POST /requests/{id}/fulfill` | passkey session + `Hort-CSRF` | `{revisions: [{id, ct}]}` (1 to 500) → `{accepted: [id], duplicate: [id]}` |
+
+`status` is `pending`, `fulfilled`, `declined` or `expired`. Expiry is lazy: every request operation first marks pending requests past `expires_at` as `expired`, so an expired request frees its pending slot and is never listed. Create and decline count against the write rate limit; reads do not.
+
+Fulfill is implemented as the Durable Object method `Account.fulfillRequest(id, body)` and tested there, but the HTTP route answers 401 until S6.2 adds the passkey session and the `Hort-CSRF` check; the method takes no signature, so only a Worker route that has authenticated the session may call it, and that route also applies the write rate limit. The method inserts the revisions (an ID already stored is `duplicate`; an ID repeated in the body counts once), sets `fulfilled` and `revision_ids` (each body ID once, in order, stored duplicates included) in one transaction, and works only on a `pending` request (else 409). The session branches of `GET` and `decline` follow with S6.2 as well.
+
 `slot.bytes` is `slot_bytes` from the vectors: `canon("hort/v4/slot-bytes\n", slot_params, wrap_nonce, wrapped_vk)`. The server stores a slot only if `ak_sig` verifies against the account's `ak_pub`.
 
 Errors are an HTTP status and one plain-text line. Rate limits (fixed windows, per Durable Object `RateLimiter`): 5 account creations per hour per IP, 10 slot fetches per minute per IP and account, 60 writes per minute per device. They answer 429 with `Retry-After`.

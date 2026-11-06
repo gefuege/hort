@@ -36,12 +36,21 @@ CREATE TABLE requests  (id TEXT PRIMARY KEY, status TEXT NOT NULL CHECK (status 
 // Contract §6.6.
 const MAX_ACTIVE_DEVICES = 20;
 const PASSPHRASE_SLOT = "passphrase";
+const MAX_PENDING_REQUESTS = 50;
+const MAX_ENVELOPE_BYTES = 64 * 1024;
+const MAX_META_BYTES = 16 * 1024; // name <= 128 B plus description and parts; far below an envelope
+const MIN_CT_BYTES = 28; // nonce(12) + GCM tag(16)
+const MAX_PUSH_REVISIONS = 500;
+const MAX_ACCOUNT_REVISIONS = 50_000;
+const MAX_ACCOUNT_CT_BYTES = 64 * 1024 * 1024;
+const REQUEST_TTL_SECONDS = 24 * 60 * 60;
 
 type AccountRow = { id: string; ak_pub: ArrayBuffer; devices_version: number };
 type DeviceRow = { id: string; pub: ArrayBuffer; name: string; created_at: number; last_seen_at: number | null; revoked_at: number | null };
 type SlotRow = { version: number; blob: ArrayBuffer; ak_sig: ArrayBuffer };
 type Slot = { version: number; bytes: Uint8Array; akSig: Uint8Array };
 type Device = { id: string; pub: Uint8Array; name: string };
+type RequestRow = { id: string; status: string; meta_ct: ArrayBuffer; from_device: string; created_at: number; revision_ids: string | null };
 
 const now = () => Math.floor(Date.now() / 1000);
 
@@ -75,6 +84,12 @@ async function parseSlot(obj: Record<string, unknown>, accountId: string, akPub:
   const msg = slotSigMessage(accountIdDecode(accountId)!, PASSPHRASE_SLOT, version, bytes);
   if (!(await ed25519Verify(akPub, akSig, msg))) return "slot ak_sig does not verify against the account key";
   return { version, bytes, akSig };
+}
+
+// Decodes a base64 ciphertext field within [MIN_CT_BYTES, max].
+function ciphertext(v: unknown, max: number): Uint8Array | null {
+  const bytes = typeof v === "string" ? b64Decode(v) : null;
+  return bytes && bytes.length >= MIN_CT_BYTES && bytes.length <= max ? bytes : null;
 }
 
 export class Account extends DurableObject<Env> {
@@ -242,5 +257,127 @@ export class Account extends DurableObject<Env> {
       slot.version, slot.bytes, slot.akSig, now(), PASSPHRASE_SLOT,
     );
     return json(200, { version: slot.version });
+  }
+
+  // Lazy expiry (contract §7.2): a pending request past expires_at becomes
+  // expired the first time any request operation touches the account.
+  private expireDue(): void {
+    this.sql.exec("UPDATE requests SET status = 'expired' WHERE status = 'pending' AND expires_at <= ?", now());
+  }
+
+  private request(id: string): RequestRow | null {
+    return this.sql.exec<RequestRow>("SELECT id, status, meta_ct, from_device, created_at, revision_ids FROM requests WHERE id = ?", id).toArray()[0] ?? null;
+  }
+
+  // POST /api/v1/requests, device-signed (contract §6.3, §7.2 step 3).
+  async createRequest(req: Signed): Promise<Response> {
+    const auth = await this.authenticate(req, true);
+    if (auth instanceof Response) return auth;
+    const body = parseObject(req.body, ["id", "meta_ct"]);
+    if (!body) return fail(400, "body must be {id, meta_ct}");
+    if (typeof body.id !== "string" || !hexDecode(body.id, 16)) return fail(400, "request ID must be 16 bytes of lowercase hex");
+    const meta = ciphertext(body.meta_ct, MAX_META_BYTES);
+    if (!meta) return fail(400, `meta_ct must be base64 of ${MIN_CT_BYTES} to ${MAX_META_BYTES} bytes`);
+
+    // No await below: expiry, checks and insert are one atomic step.
+    this.expireDue();
+    const existing = this.request(body.id);
+    if (existing) {
+      if (!equal(new Uint8Array(existing.meta_ct), meta)) return fail(409, "request ID exists with different content");
+      return json(200, { status: existing.status });
+    }
+    const pending = this.sql.exec<{ n: number }>("SELECT count(*) AS n FROM requests WHERE status = 'pending'").one().n;
+    if (pending >= MAX_PENDING_REQUESTS) return fail(429, `too many pending requests (${MAX_PENDING_REQUESTS}); decline or wait for expiry`);
+    const t = now();
+    this.sql.exec(
+      "INSERT INTO requests (id, status, meta_ct, from_device, created_at, expires_at) VALUES (?, 'pending', ?, ?, ?, ?)",
+      body.id, meta, req.device, t, t + REQUEST_TTL_SECONDS,
+    );
+    return json(201, { status: "pending" });
+  }
+
+  // GET /api/v1/requests/{id}, device-signed.
+  async getRequest(req: Signed, id: string): Promise<Response> {
+    const auth = await this.authenticate(req, false);
+    if (auth instanceof Response) return auth;
+    this.expireDue();
+    const r = this.request(id);
+    if (!r) return fail(404, "request not found");
+    return json(200, {
+      status: r.status,
+      meta_ct: b64Encode(new Uint8Array(r.meta_ct)),
+      revision_ids: r.revision_ids ? (JSON.parse(r.revision_ids) as string[]) : [],
+    });
+  }
+
+  // GET /api/v1/requests?status=pending, device-signed; oldest first.
+  async listPendingRequests(req: Signed): Promise<Response> {
+    const auth = await this.authenticate(req, false);
+    if (auth instanceof Response) return auth;
+    this.expireDue();
+    const requests = this.sql
+      .exec<RequestRow>("SELECT id, meta_ct, created_at FROM requests WHERE status = 'pending' ORDER BY created_at, id LIMIT ?", MAX_PENDING_REQUESTS)
+      .toArray()
+      .map((r) => ({ id: r.id, meta_ct: b64Encode(new Uint8Array(r.meta_ct)), created_at: r.created_at }));
+    return json(200, { requests });
+  }
+
+  // POST /api/v1/requests/{id}/decline, device-signed. Declining twice is idempotent.
+  async declineRequest(req: Signed, id: string): Promise<Response> {
+    const auth = await this.authenticate(req, true);
+    if (auth instanceof Response) return auth;
+    this.expireDue();
+    const r = this.request(id);
+    if (!r) return fail(404, "request not found");
+    if (r.status === "declined") return json(200, { status: "declined" });
+    if (r.status !== "pending") return fail(409, `request is ${r.status}`);
+    this.sql.exec("UPDATE requests SET status = 'declined' WHERE id = ?", id);
+    return json(200, { status: "declined" });
+  }
+
+  // POST /api/v1/requests/{id}/fulfill {revisions:[{id, ct}]} (contract §7.3).
+  // Called by the Worker only after a passkey session and Hort-CSRF check
+  // (S6.2), so it takes no signature. Revisions and status change in one
+  // transaction. Revisions already stored (by ID) count as duplicates.
+  async fulfillRequest(id: string, body: Uint8Array): Promise<Response> {
+    const parsed = parseObject(body, ["revisions"]);
+    const list = parsed && Array.isArray(parsed.revisions) ? parsed.revisions : null;
+    if (!list || list.length < 1 || list.length > MAX_PUSH_REVISIONS) {
+      return fail(400, `body must be {revisions: [{id, ct}]} with 1 to ${MAX_PUSH_REVISIONS} revisions`);
+    }
+    const revisions = new Map<string, Uint8Array>();
+    for (const item of list) {
+      const o = asObject(item, ["id", "ct"]);
+      if (!o || typeof o.id !== "string" || !hexDecode(o.id, 16)) return fail(400, "revision ID must be 16 bytes of lowercase hex");
+      const ct = typeof o.ct === "string" ? b64Decode(o.ct) : null;
+      if (!ct || ct.length < MIN_CT_BYTES) return fail(400, `revision ct must be base64 of at least ${MIN_CT_BYTES} bytes`);
+      if (ct.length > MAX_ENVELOPE_BYTES) return fail(413, "revision envelope exceeds 64 KiB");
+      if (!revisions.has(o.id)) revisions.set(o.id, ct);
+    }
+
+    // No await below: state check and writes are one atomic step.
+    if (!this.account()) return fail(404, "account not found");
+    this.expireDue();
+    const r = this.request(id);
+    if (!r) return fail(404, "request not found");
+    if (r.status !== "pending") return fail(409, `request is ${r.status}`);
+    const stored = new Set(
+      this.sql.exec<{ id: string }>(`SELECT id FROM revisions WHERE id IN (${[...revisions.keys()].map(() => "?").join(",")})`, ...revisions.keys())
+        .toArray().map((row) => row.id),
+    );
+    const fresh = [...revisions].filter(([rid]) => !stored.has(rid));
+    const totals = this.sql.exec<{ n: number; bytes: number }>("SELECT count(*) AS n, coalesce(sum(length(ct)), 0) AS bytes FROM revisions").one();
+    const freshBytes = fresh.reduce((sum, [, ct]) => sum + ct.length, 0);
+    if (totals.n + fresh.length > MAX_ACCOUNT_REVISIONS || totals.bytes + freshBytes > MAX_ACCOUNT_CT_BYTES) {
+      return fail(413, "account revision storage limit reached");
+    }
+    const t = now();
+    this.ctx.storage.transactionSync(() => {
+      for (const [rid, ct] of fresh) {
+        this.sql.exec("INSERT INTO revisions (id, ct, from_device, received_at) VALUES (?, ?, NULL, ?)", rid, ct, t);
+      }
+      this.sql.exec("UPDATE requests SET status = 'fulfilled', revision_ids = ? WHERE id = ?", JSON.stringify([...revisions.keys()]), id);
+    });
+    return json(200, { accepted: fresh.map(([rid]) => rid), duplicate: [...stored] });
   }
 }

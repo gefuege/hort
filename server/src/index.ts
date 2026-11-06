@@ -150,6 +150,39 @@ async function route(request: Request, env: Bindings): Promise<Response> {
     return accountStub(env, req.accountId).putSlot(req, m[1]);
   }
 
+  if (path === "/api/v1/requests") {
+    if (method === "POST") {
+      const req = await readSigned(request, url, "device");
+      if (req instanceof Response) return req;
+      return accountStub(env, req.accountId).createRequest(req);
+    }
+    if (method === "GET") {
+      if (url.search !== "?status=pending") return fail(400, "only ?status=pending is supported");
+      const req = await readSigned(request, url, "device");
+      if (req instanceof Response) return req;
+      return accountStub(env, req.accountId).listPendingRequests(req);
+    }
+    return fail(405, "method not allowed");
+  }
+
+  if ((m = path.match(/^\/api\/v1\/requests\/([^/]+)$/))) {
+    if (method !== "GET") return fail(405, "method not allowed");
+    if (!hexDecode(m[1], 16)) return fail(404, "request not found");
+    const req = await readSigned(request, url, "device");
+    if (req instanceof Response) return req;
+    return accountStub(env, req.accountId).getRequest(req, m[1]);
+  }
+
+  if ((m = path.match(/^\/api\/v1\/requests\/([^/]+)\/(decline|fulfill)$/))) {
+    if (method !== "POST") return fail(405, "method not allowed");
+    if (!hexDecode(m[1], 16)) return fail(404, "request not found");
+    // Fulfill needs a passkey session plus Hort-CSRF (contract §6.3), which S6.2 adds.
+    if (m[2] === "fulfill") return fail(401, "fulfilling a request requires a passkey session");
+    const req = await readSigned(request, url, "device");
+    if (req instanceof Response) return req;
+    return accountStub(env, req.accountId).declineRequest(req, m[1]);
+  }
+
   return fail(404, "not found");
 }
 
