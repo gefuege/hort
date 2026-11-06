@@ -167,7 +167,8 @@ func Sync(ref VaultRef, key []byte) (SyncResult, error) {
 }
 
 // SetupSync connects this device to path and runs the first exchange. It changes
-// nothing while the folder holds a file this vault cannot read or decrypt.
+// nothing while the folder holds a file this vault cannot read or decrypt, or
+// one it could not read yet, whose key is therefore unchecked.
 func SetupSync(ref VaultRef, key []byte, path string) (SyncResult, error) {
 	dir, err := checkSyncDir(path)
 	if err != nil {
@@ -196,7 +197,7 @@ func SetupSync(ref VaultRef, key []byte, path string) (SyncResult, error) {
 		return SyncResult{}, fmt.Errorf("sync folder holds files this vault cannot read or decrypt (%s), possibly from a different vault key; nothing changed", strings.Join(folder.unreadable, ", "))
 	}
 	if len(folder.pending) > 0 {
-		return SyncResult{}, fmt.Errorf("sync folder holds files that are not downloaded yet (%s), so their key is unchecked; run again once they have arrived; nothing changed", strings.Join(folder.pending, ", "))
+		return SyncResult{}, fmt.Errorf("sync folder holds files that could not be read, probably not downloaded yet (%s), so their key is unchecked; run again once they have arrived; nothing changed", strings.Join(folder.pending, ", "))
 	}
 	err = UpdateSourceRegistry(func(reg *SourceRegistry) error {
 		reg.SyncFile = filepath.Join(dir, name)

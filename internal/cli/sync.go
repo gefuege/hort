@@ -60,10 +60,10 @@ func warnSyncFiles(result vault.SyncResult) {
 		fmt.Fprintf(os.Stderr, "warning: skipped sync file %s: cannot read or decrypt it\n", name)
 	}
 	for _, name := range result.Pending {
-		fmt.Fprintf(os.Stderr, "warning: sync file %s is not downloaded yet, the next run reads it\n", name)
+		fmt.Fprintf(os.Stderr, "warning: could not read sync file %s, it is probably not downloaded yet; the next run tries again\n", name)
 	}
 	if result.OwnPending {
-		fmt.Fprintln(os.Stderr, "warning: this device's sync file is not downloaded yet, so nothing was pushed; the next run does")
+		fmt.Fprintln(os.Stderr, "warning: could not read this device's sync file, it is probably not downloaded yet, so nothing was pushed; if this persists, remove it from the folder by hand")
 	}
 	if result.OwnUnreadable {
 		fmt.Fprintln(os.Stderr, "warning: this device's sync file cannot be read or decrypted, so nothing was pushed; remove it from the sync folder by hand and the next run writes it anew")

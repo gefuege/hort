@@ -63,7 +63,8 @@ existing folder that a third-party service replicates; Hort holds no provider
 code and never creates the folder or deletes in it. Each device writes a byte
 copy of `vault.enc` to its own `hort-<id>.enc`, stored as `sync_file` in
 `~/.hort/sources/index.json`. Every regular `hort-*` file in the folder is read,
-so conflict copies count; unreadable files are skipped with a warning. Merge is
+so conflict copies count; files that fail to decrypt are skipped as unreadable,
+files that fail to read (usually not downloaded yet) as pending, both with a warning. Merge is
 the union of revisions by identity and writes nothing when no revision is new.
 An own file that cannot be read or decrypted is never overwritten.
 

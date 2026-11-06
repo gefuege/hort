@@ -273,8 +273,12 @@ of the migrated v3 file plus `hort init --restore`. Two vaults migrated
 separately with the same key do merge, but migrated revisions have no recorded
 time, so current values can flip to the other device's.
 
+A file the sync service has not downloaded yet cannot be read for a moment. Hort
+warns and reads it on a later run; files from other devices never hold up the
+own push.
+
 If a device cannot read or decrypt its own file in the folder, it stops pushing
-and warns on every use. Remove that file from the folder by hand and the next run
+and warns on every use. If that does not clear up, remove that file from the folder by hand and the next run
 writes it anew. After a fresh `hort init` the file still holds the old vault, so
 keep a copy if you need it.
 
