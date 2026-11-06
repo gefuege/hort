@@ -3,6 +3,7 @@ package cli
 import (
 	"crypto/rand"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"runtime"
@@ -286,8 +287,24 @@ func CmdPassphrase() error {
 		return err
 	}
 	fmt.Fprintln(os.Stderr, "Passphrase changed.")
+	// The new slot applies locally whatever the server says; a push that does
+	// not arrive goes again at the next sync, which compares slot versions.
+	data, acct, err := vault.OpenAccount(ref, key)
+	if err != nil || !data.Sync.Registered {
+		return err
+	}
+	switch err := pushSlot(acct); {
+	case errors.Is(err, errSlotConflict):
+		return errors.New(slotConflict)
+	case err != nil:
+		fmt.Fprintf(os.Stderr, "warning: the server has not taken the new passphrase yet (%v); the next sync sends it\n", err)
+	}
 	return nil
 }
+
+// slotConflict explains a passphrase changed here while another device set a
+// newer one on the server.
+const slotConflict = "the server holds a passphrase set on another device that is at least as new and kept it. This device uses your new passphrase until a sync brings the other one; to make yours the account's passphrase, run `hort sync` and then `hort passphrase` again"
 
 // CmdGet retrieves one value.
 func CmdGet(name, field, env, context string) error {

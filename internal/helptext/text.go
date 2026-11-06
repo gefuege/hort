@@ -35,7 +35,8 @@ MANAGE:
                                          comes from ~/.hort/secret-key
   hort lock                              Lock the vault (clears the session key)
   hort kit                               Print the Emergency Kit again (needs an unlocked vault)
-  hort passphrase                        Set a new passphrase, keeping the Secret Key
+  hort passphrase                        Set a new passphrase, keeping the Secret Key; other
+                                         devices take it at their next sync
   hort migrate                           Convert a v3 vault (Hort 0.4.x) into a v4 vault once;
                                          read 'hort migrate --help' first
 
@@ -47,15 +48,16 @@ SYNC AND DEVICES:
                                          Add this device to an existing account. Asks for the
                                          Secret Key and the passphrase, then pulls the vault.
                                          Refuses if ~/.hort/vault.enc exists.
-  hort devices [--json]                  List the devices of this account
+  hort devices [--json]                  List the devices and passkeys of this account
   hort devices revoke <device-id>        End a device's server access; not this device.
                                          Revoking does not protect against anyone who already
                                          holds your vault key (hort help recovery).
 
   Reads sync first and writes sync afterwards, for at most 2 seconds and only
   once the account is registered. A failed sync prints one warning and never
-  changes the exit code. When devices change, a sync prints a notice once:
-  notice: new device "<name>" enrolled <time>, or notice: device "<name>" revoked.
+  changes the exit code. When devices or passkeys change, a sync prints a notice
+  once: notice: new device "<name>" enrolled <time>, or notice: device "<name>"
+  revoked, and the same for passkeys.
   The server stores only ciphertext.
 
 AGENT REQUESTS:

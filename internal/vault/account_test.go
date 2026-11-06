@@ -3,6 +3,9 @@ package vault
 import (
 	"bytes"
 	"crypto/ed25519"
+	"errors"
+	"os"
+	"path/filepath"
 	"reflect"
 	"testing"
 	"time"
@@ -68,5 +71,68 @@ func TestOpenServerSlotChecksAccountKey(t *testing.T) {
 	}
 	if _, err := OpenServerSlot(nv.AccountID, Slot{Version: 1, Bytes: []byte("x"), AKSig: forged.AKSig}, akPub, "pass", nv.SecretKey); err == nil {
 		t.Fatal("accepted malformed slot bytes")
+	}
+}
+
+func TestReplaceSlotTakesOnlyANewerSignedSlot(t *testing.T) {
+	setHomeDir(t, t.TempDir())
+	a := primaryRefOrFatal(t)
+	nv := testCreate(t, a, "old")
+	raw, err := os.ReadFile(a.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	setHomeDir(t, t.TempDir())
+	b := primaryRefOrFatal(t)
+	if err := os.MkdirAll(filepath.Dir(b.Path), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(b.Path, raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	_, old, err := OpenAccount(b, nv.VK)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := changePassphrase(a, nv.VK, []byte("new"), nv.SecretKey, fastArgon); err != nil {
+		t.Fatal(err)
+	}
+	_, acct, err := OpenAccount(a, nv.VK)
+	if err != nil {
+		t.Fatal(err)
+	}
+	akPub := acct.Keys.AK.Public().(ed25519.PublicKey)
+	stranger, strangerKey, _ := ed25519.GenerateKey(nil)
+	forged := acct.Slot
+	forged.AKSig = ed25519.Sign(strangerKey, SlotSigMessage(nv.AccountID, PassphraseSlotID, forged.Version, forged.Bytes))
+	for name, c := range map[string]struct {
+		slot  Slot
+		akPub []byte
+	}{
+		"foreign ak_pub": {acct.Slot, stranger},
+		"foreign ak_sig": {forged, akPub},
+		"equal version":  {old.Slot, akPub},
+		"older version":  {Slot{Version: 0, Bytes: old.Slot.Bytes, AKSig: old.Slot.AKSig}, akPub},
+	} {
+		if err := ReplaceSlot(b, nv.VK, c.slot, c.akPub); err == nil {
+			t.Fatalf("%s: replaced the slot", name)
+		}
+	}
+	if _, err := UnlockVault(b, []byte("old"), nv.SecretKey); err != nil {
+		t.Fatalf("a refused slot changed the vault: %v", err)
+	}
+
+	if err := ReplaceSlot(b, nv.VK, acct.Slot, akPub); err != nil {
+		t.Fatal(err)
+	}
+	backup := b
+	backup.Path = BackupPathFor(b)
+	for _, ref := range []VaultRef{b, backup} {
+		if _, err := UnlockVault(ref, []byte("old"), nv.SecretKey); !errors.Is(err, ErrWrongPassphrase) {
+			t.Fatalf("old passphrase still opens %s: %v", ref.Path, err)
+		}
+		if vk, err := UnlockVault(ref, []byte("new"), nv.SecretKey); err != nil || !bytes.Equal(vk, nv.VK) {
+			t.Fatalf("new passphrase on %s: %v", ref.Path, err)
+		}
 	}
 }

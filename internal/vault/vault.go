@@ -191,7 +191,7 @@ func CreateVault(ref VaultRef, server, deviceName string, passphrase []byte) (Ne
 }
 
 func createVault(ref VaultRef, server, deviceName string, passphrase []byte, params ArgonParams) (NewVault, error) {
-	if err := checkServerURL(server); err != nil {
+	if err := CheckServerURL(server); err != nil {
 		return NewVault{}, err
 	}
 	if err := os.MkdirAll(filepath.Dir(ref.Path), 0700); err != nil {

@@ -2,10 +2,13 @@ package cli
 
 import (
 	"crypto/ed25519"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -118,16 +121,17 @@ func register(ref vault.VaultRef, vk []byte, data *vault.VaultData, acct vault.A
 	})
 }
 
-// pullAll reads every page after cursor. An envelope that does not open or
+// pullAll reads every page after cursor and returns the last one without its
+// revisions, for its cursor and versions. An envelope that does not open or
 // fails decoding gets one warning naming its ID and is never merged (§3.4).
-func pullAll(c api.Client, acct vault.Account, cursor uint64) (pulled []vault.Pulled, next, devicesVersion uint64, skipped int, err error) {
+func pullAll(c api.Client, acct vault.Account, cursor uint64) (pulled []vault.Pulled, last api.Page, skipped int, err error) {
 	for {
 		page, err := c.Pull(cursor)
 		if err != nil {
-			return nil, 0, 0, 0, err
+			return nil, api.Page{}, 0, err
 		}
 		if page.Cursor < cursor || (page.More && len(page.Revisions) == 0) {
-			return nil, 0, 0, 0, errors.New("server answer: inconsistent revision page")
+			return nil, api.Page{}, 0, errors.New("server answer: inconsistent revision page")
 		}
 		for _, r := range page.Revisions {
 			name, rev, err := vault.OpenRevision(acct.Keys.RK, acct.ID, r.ID, r.CT)
@@ -142,40 +146,129 @@ func pullAll(c api.Client, acct vault.Account, cursor uint64) (pulled []vault.Pu
 			}
 			pulled = append(pulled, p)
 		}
-		cursor, devicesVersion = page.Cursor, page.DevicesVersion
+		cursor = page.Cursor
 		if !page.More {
-			return pulled, cursor, devicesVersion, skipped, nil
+			page.Revisions = nil
+			return pulled, page, skipped, nil
 		}
 	}
 }
 
-// applyDevices records the server's device list once its devices_version is
-// newer and returns one notice per device enrolled or revoked since (§4).
-// known_devices holds the active devices this vault has seen.
+// knownMark is how known_devices records one device or passkey of GET
+// /devices within the body's 16-byte ID rule: an active device by its ID, a
+// passkey or a revoked entry by 16 bytes of a hash. A revoked entry this vault
+// has seen thus stays apart from one it never saw.
+func knownMark(id string, revoked bool) string {
+	if b, err := hex.DecodeString(id); !revoked && err == nil && len(b) == 16 && hex.EncodeToString(b) == id {
+		return id
+	}
+	state := "active"
+	if revoked {
+		state = "revoked"
+	}
+	sum := sha256.Sum256([]byte("hort/v4/known\n" + state + "\n" + id))
+	return hex.EncodeToString(sum[:16])
+}
+
+// knownMarks records every device and passkey of a list as seen.
+func knownMarks(list api.Devices) []string {
+	marks := []string{}
+	for _, d := range list.Devices {
+		marks = append(marks, knownMark(d.ID, d.RevokedAt != nil))
+	}
+	for _, p := range list.Passkeys {
+		marks = append(marks, knownMark(p.ID, p.RevokedAt != nil))
+	}
+	return marks
+}
+
+// applyDevices records the server's list of devices and passkeys once its
+// devices_version is newer and returns one notice per change since (§4). An
+// entry enrolled and revoked between two syncs gets both notices.
 func applyDevices(data *vault.VaultData, list api.Devices) []string {
 	if list.DevicesVersion <= data.Sync.DevicesVersion {
 		return nil
 	}
 	known := make(map[string]bool)
-	for _, id := range data.Sync.KnownDevices {
-		known[id] = true
+	for _, m := range data.Sync.KnownDevices {
+		known[m] = true
 	}
 	var notices []string
-	active := []string{}
-	for _, d := range list.Devices {
+	note := func(id, what, added string, createdAt int64, revoked bool) {
+		enrolled := fmt.Sprintf("notice: new %s %s %s", what, added, time.Unix(createdAt, 0).UTC().Format(time.RFC3339))
+		gone := fmt.Sprintf("notice: %s revoked", what)
 		switch {
-		case d.RevokedAt == nil:
-			if !known[d.ID] && d.ID != data.Device.ID {
-				notices = append(notices, fmt.Sprintf("notice: new device %q enrolled %s", d.Name, time.Unix(d.CreatedAt, 0).UTC().Format(time.RFC3339)))
+		case !revoked:
+			if !known[knownMark(id, false)] && id != data.Device.ID {
+				notices = append(notices, enrolled)
 			}
-			active = append(active, d.ID)
-		case known[d.ID]:
-			notices = append(notices, fmt.Sprintf("notice: device %q revoked", d.Name))
+		case known[knownMark(id, true)]:
+		case known[knownMark(id, false)]:
+			notices = append(notices, gone)
+		default:
+			notices = append(notices, enrolled, gone)
 		}
 	}
-	data.Sync.KnownDevices = active
+	for _, d := range list.Devices {
+		note(d.ID, fmt.Sprintf("device %q", d.Name), "enrolled", d.CreatedAt, d.RevokedAt != nil)
+	}
+	for _, p := range list.Passkeys {
+		note(p.ID, fmt.Sprintf("passkey %q", shortID(p.ID)), "registered", p.CreatedAt, p.RevokedAt != nil)
+	}
+	data.Sync.KnownDevices = knownMarks(list)
 	data.Sync.DevicesVersion = list.DevicesVersion
 	return notices
+}
+
+// shortID names a passkey in notices; `hort devices` shows the full ID.
+func shortID(id string) string {
+	if len(id) > 8 {
+		return id[:8]
+	}
+	return id
+}
+
+// errSlotConflict is the server's 409 on PUT /slots: it holds a version at
+// least as high.
+var errSlotConflict = errors.New("the server holds a passphrase slot at least as new")
+
+// pushSlot sends the local passphrase slot, signed with AK.
+func pushSlot(acct vault.Account) error {
+	err := akClient(acct).PutSlot(api.Slot{Version: acct.Slot.Version, Bytes: acct.Slot.Bytes, AKSig: acct.Slot.AKSig})
+	var apiErr *api.Error
+	if errors.As(err, &apiErr) && apiErr.Status == http.StatusConflict {
+		return errSlotConflict
+	}
+	return err
+}
+
+// syncSlot brings the passphrase slot to the newer side (§2.2). The server's
+// slot_version decides; 0 means the server did not report one. A higher
+// version is fetched and replaces the local slot only once it checks out; a
+// slot that does not is ignored with a warning. A lower version means a
+// `hort passphrase` whose push did not arrive, so the local slot goes again.
+func syncSlot(ref vault.VaultRef, vk []byte, acct vault.Account, serverVersion uint64) error {
+	switch {
+	case serverVersion == 0 || serverVersion == acct.Slot.Version:
+		return nil
+	case serverVersion < acct.Slot.Version:
+		err := pushSlot(acct)
+		if errors.Is(err, errSlotConflict) {
+			fmt.Fprintf(os.Stderr, "warning: %v; the next sync takes it\n", err)
+			return nil
+		}
+		return err
+	}
+	akPub, s, err := api.FetchSlot(acct.Server, acct.ID)
+	if err != nil {
+		return fmt.Errorf("fetching the passphrase slot: %w", err)
+	}
+	if err := vault.ReplaceSlot(ref, vk, vault.Slot{Version: s.Version, Bytes: s.Bytes, AKSig: s.AKSig}, akPub); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: ignored the passphrase slot from the server: %v\n", err)
+		return nil
+	}
+	fmt.Fprintln(os.Stderr, "notice: the passphrase was changed on another device; this device now unlocks with the new one")
+	return nil
 }
 
 // pendingRevisions returns the revisions in sync.pending; an ID the vault no
@@ -248,13 +341,14 @@ func syncVault(ref vault.VaultRef, vk []byte) (SyncReport, error) {
 		}
 	}
 	c := deviceClient(acct, data.Device)
-	pulled, cursor, devicesVersion, skipped, err := pullAll(c, acct, data.Sync.Cursor)
+	pulled, last, skipped, err := pullAll(c, acct, data.Sync.Cursor)
 	if err != nil {
 		return report, err
 	}
+	cursor := last.Cursor
 	report.SkippedInvalid = skipped
 	var devices *api.Devices
-	if devicesVersion > data.Sync.DevicesVersion {
+	if last.DevicesVersion > data.Sync.DevicesVersion {
 		list, err := c.ListDevices()
 		if err != nil {
 			return report, err
@@ -315,6 +409,9 @@ func syncVault(ref vault.VaultRef, vk []byte) (SyncReport, error) {
 	if err != nil {
 		return report, err
 	}
+	if err := syncSlot(ref, vk, acct, last.SlotVersion); err != nil {
+		return report, err
+	}
 	writeLastSync(ref)
 	return report, nil
 }
@@ -371,6 +468,9 @@ func CmdEnroll(accountIDText, server, name string) error {
 	if server == "" {
 		server = vault.DefaultServer
 	}
+	if err := vault.CheckServerURL(server); err != nil {
+		return err
+	}
 	if name == "" {
 		name = defaultDeviceName()
 	}
@@ -404,7 +504,7 @@ func CmdEnroll(accountIDText, server, name string) error {
 		return fmt.Errorf("enrolling this device: %w", err)
 	}
 	c := deviceClient(acct, data.Device)
-	pulled, cursor, _, _, err := pullAll(c, acct, 0)
+	pulled, last, _, err := pullAll(c, acct, 0)
 	if err != nil {
 		return fmt.Errorf("pulling the vault: %w", err)
 	}
@@ -413,12 +513,8 @@ func CmdEnroll(accountIDText, server, name string) error {
 		return fmt.Errorf("pulling the vault: %w", err)
 	}
 	added, _ := data.MergePulled(pulled)
-	data.Sync.Registered, data.Sync.Cursor, data.Sync.DevicesVersion = true, cursor, devices.DevicesVersion
-	for _, d := range devices.Devices {
-		if d.RevokedAt == nil {
-			data.Sync.KnownDevices = append(data.Sync.KnownDevices, d.ID)
-		}
-	}
+	data.Sync.Registered, data.Sync.Cursor, data.Sync.DevicesVersion = true, last.Cursor, devices.DevicesVersion
+	data.Sync.KnownDevices = knownMarks(devices)
 	if err := vault.WriteEnrolledVault(ref, server, accountID, slot, vk, secretKey, data); err != nil {
 		return err
 	}
@@ -451,17 +547,29 @@ func CmdDevices(jsonOutput bool) error {
 		return err
 	}
 	if jsonOutput {
-		out, _ := json.MarshalIndent(list.Devices, "", "  ")
+		out, _ := json.MarshalIndent(map[string]any{"devices": list.Devices, "passkeys": list.Passkeys}, "", "  ")
 		fmt.Println(string(out))
 		return nil
 	}
+	stamp := func(t int64) string { return time.Unix(t, 0).UTC().Format(time.RFC3339) }
 	for _, d := range list.Devices {
-		line := fmt.Sprintf("%s  %-24q enrolled %s", d.ID, d.Name, time.Unix(d.CreatedAt, 0).UTC().Format(time.RFC3339))
+		line := fmt.Sprintf("%s  %-24q enrolled %s", d.ID, d.Name, stamp(d.CreatedAt))
 		if d.RevokedAt != nil {
-			line += "  revoked " + time.Unix(*d.RevokedAt, 0).UTC().Format(time.RFC3339)
+			line += "  revoked " + stamp(*d.RevokedAt)
 		}
 		if d.ID == data.Device.ID {
 			line += "  (this device)"
+		}
+		fmt.Println(line)
+	}
+	for _, p := range list.Passkeys {
+		kind := "passkey for sign-in"
+		if p.PRF {
+			kind = "passkey that unlocks"
+		}
+		line := fmt.Sprintf("%q  %s, registered %s", p.ID, kind, stamp(p.CreatedAt))
+		if p.RevokedAt != nil {
+			line += "  revoked " + stamp(*p.RevokedAt)
 		}
 		fmt.Println(line)
 	}
@@ -481,17 +589,15 @@ func CmdRevokeDevice(id string) error {
 		return err
 	}
 	// This device knows of the revocation, so its next sync prints no notice for it.
-	if err := updateIfChanged(ref, key, func(d *vault.VaultData) error {
+	active, gone := knownMark(id, false), knownMark(id, true)
+	if err := vault.UpdateVault(ref, key, func(d *vault.VaultData) error {
 		keep := []string{}
 		for _, known := range d.Sync.KnownDevices {
-			if known != id {
+			if known != active && known != gone {
 				keep = append(keep, known)
 			}
 		}
-		if len(keep) == len(d.Sync.KnownDevices) {
-			return errUnchanged
-		}
-		d.Sync.KnownDevices = keep
+		d.Sync.KnownDevices = append(keep, gone)
 		return nil
 	}); err != nil {
 		return err

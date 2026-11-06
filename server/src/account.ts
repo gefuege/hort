@@ -620,7 +620,8 @@ export class Account extends DurableObject<Env> {
 
   // GET /api/v1/revisions?after=SEQ&limit=N, device-signed or session
   // (contract §6.3, §6.6). A page ends at `limit` rows or MAX_PAGE_CT_BYTES of ct, whichever
-  // comes first, and always holds at least one row when one exists.
+  // comes first, and always holds at least one row when one exists. slot_version
+  // tells a device when to fetch a newer passphrase slot.
   async listRevisions(req: Auth, after: number, limit: number): Promise<Response> {
     const auth = await this.authenticate(req, false);
     if (auth instanceof Response) return auth;
@@ -634,7 +635,8 @@ export class Account extends DurableObject<Env> {
       cursor = row.seq;
     }
     const more = this.sql.exec<{ n: number }>("SELECT count(*) AS n FROM (SELECT 1 FROM revisions WHERE seq > ? LIMIT 1)", cursor).one().n > 0;
-    return json(200, { revisions, cursor, more, devices_version: auth.account.devices_version });
+    const slotVersion = this.sql.exec<{ version: number }>("SELECT version FROM slots WHERE id = ?", PASSPHRASE_SLOT).one().version;
+    return json(200, { revisions, cursor, more, devices_version: auth.account.devices_version, slot_version: slotVersion });
   }
 
   // POST /api/v1/requests/{id}/fulfill {revisions:[{id, ct}]} (contract §7.3),

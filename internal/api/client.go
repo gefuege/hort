@@ -19,7 +19,12 @@ import (
 )
 
 // HTTPClient sends every request. Tests replace it to trust a local TLS proxy.
-var HTTPClient = &http.Client{Timeout: 60 * time.Second}
+// It follows no redirect: a 3xx is an answer like any other non-2xx, so no
+// request leaves the server URL from the vault header.
+var HTTPClient = &http.Client{
+	Timeout:       60 * time.Second,
+	CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+}
 
 // Limits of the server (contract §6.6) that the client splits pushes by.
 const (
@@ -150,6 +155,13 @@ func FetchSlot(server string, accountID []byte) (akPub []byte, slot Slot, err er
 	return out.AKPub, out.Slot, nil
 }
 
+// PutSlot replaces the account's passphrase slot, signed with AK (§2.2); the
+// server answers 409 unless the version is higher than the stored one.
+func (c Client) PutSlot(slot Slot) error {
+	slot.ID = ""
+	return c.Do("PUT", "/slots/"+vault.PassphraseSlotID, slot, nil)
+}
+
 // EnrollDevice registers a device, signed with AK (§5.3 step 5).
 func (c Client) EnrollDevice(id string, pub []byte, name string) error {
 	return c.Do("POST", "/devices", map[string]any{"device_id": id, "pub": pub, "name": name}, nil)
@@ -164,10 +176,21 @@ type DeviceInfo struct {
 	RevokedAt  *int64 `json:"revoked_at"`
 }
 
+// PasskeyInfo is one passkey as GET /devices lists it; prf tells whether it
+// unlocks the vault. Times are Unix seconds.
+type PasskeyInfo struct {
+	ID         string `json:"id"`
+	PRF        bool   `json:"prf"`
+	CreatedAt  int64  `json:"created_at"`
+	LastUsedAt *int64 `json:"last_used_at"`
+	RevokedAt  *int64 `json:"revoked_at"`
+}
+
 // Devices is the answer of GET /devices.
 type Devices struct {
-	Devices        []DeviceInfo `json:"devices"`
-	DevicesVersion uint64       `json:"devices_version"`
+	Devices        []DeviceInfo  `json:"devices"`
+	Passkeys       []PasskeyInfo `json:"passkeys"`
+	DevicesVersion uint64        `json:"devices_version"`
 }
 
 // ListDevices lists the account's devices.
@@ -207,6 +230,7 @@ type Page struct {
 	Cursor         uint64 `json:"cursor"`
 	More           bool   `json:"more"`
 	DevicesVersion uint64 `json:"devices_version"`
+	SlotVersion    uint64 `json:"slot_version"`
 }
 
 // Pull reads the page of revisions after cursor.

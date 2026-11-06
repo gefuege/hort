@@ -107,7 +107,7 @@ func parseV4(data []byte) (v4File, error) {
 		return v4File{}, errors.New("vault file too short for its server URL")
 	}
 	f.Server = string(take(serverLen))
-	if err := checkServerURL(f.Server); err != nil {
+	if err := CheckServerURL(f.Server); err != nil {
 		return v4File{}, err
 	}
 	f.SlotVersion = binary.BigEndian.Uint64(take(8))
@@ -127,8 +127,8 @@ func parseV4(data []byte) (v4File, error) {
 	return f, nil
 }
 
-// checkServerURL enforces "UTF-8 (https only)" of §2.3 and the u16 length.
-func checkServerURL(s string) error {
+// CheckServerURL enforces "UTF-8 (https only)" of §2.3 and the u16 length.
+func CheckServerURL(s string) error {
 	if len(s) > math.MaxUint16 || !utf8.ValidString(s) {
 		return errors.New("invalid server URL")
 	}

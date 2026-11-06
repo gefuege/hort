@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -188,6 +189,50 @@ func TestServerSync(t *testing.T) {
 	use(t, c)
 	if _, err := syncVault(primary(t), session(t)); err == nil || !strings.Contains(err.Error(), "device revoked") {
 		t.Fatalf("revoked device synced: %v", err)
+	}
+
+	// A new passphrase on a reaches b at its next sync; only it unlocks b then.
+	sk, err := vault.ParseSecretKey(strings.TrimSpace(string(secretKey)))
+	must(t, err)
+	unlocksWith := func(home, pass string) bool {
+		t.Helper()
+		use(t, home)
+		_, err := vault.UnlockVault(primary(t), []byte(pass), sk)
+		if err != nil && !errors.Is(err, vault.ErrWrongPassphrase) {
+			t.Fatal(err)
+		}
+		return err == nil
+	}
+	use(t, a)
+	t.Setenv("HORT_PASSPHRASE", "synthetic-second-passphrase")
+	must(t, CmdPassphrase())
+	mark = errs.mark()
+	use(t, b)
+	syncOK(t)
+	syncOK(t)
+	if n := strings.Count(errs.since(mark), "passphrase was changed on another device"); n != 1 {
+		t.Fatalf("slot notice on b: %d times", n)
+	}
+	if unlocksWith(b, "synthetic-remote-passphrase") || !unlocksWith(b, "synthetic-second-passphrase") {
+		t.Fatal("b does not unlock with exactly the new passphrase")
+	}
+
+	// A passphrase push that does not arrive goes again with the next sync.
+	use(t, b)
+	t.Setenv("HORT_PASSPHRASE", "synthetic-third-passphrase")
+	p.fail("PUT /api/v1/slots/passphrase", "refuse")
+	must(t, CmdPassphrase())
+	use(t, a)
+	syncOK(t)
+	if !unlocksWith(a, "synthetic-second-passphrase") {
+		t.Fatal("a took a slot the server never got")
+	}
+	use(t, b)
+	syncOK(t)
+	use(t, a)
+	syncOK(t)
+	if unlocksWith(a, "synthetic-second-passphrase") || !unlocksWith(a, "synthetic-third-passphrase") {
+		t.Fatal("the resent slot did not reach a")
 	}
 
 	use(t, a)

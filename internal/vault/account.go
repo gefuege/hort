@@ -116,14 +116,68 @@ func OpenServerSlot(accountID []byte, s Slot, akPub []byte, passphrase string, s
 	if err != nil {
 		return nil, err
 	}
-	pub := keys.AK.Public().(ed25519.PublicKey)
-	if !bytes.Equal(pub, akPub) {
-		return nil, errors.New("the server's account key does not belong to this vault key")
-	}
-	if !ed25519.Verify(pub, SlotSigMessage(accountID, PassphraseSlotID, s.Version, s.Bytes), s.AKSig) {
-		return nil, errors.New("the server's passphrase slot is not signed by the account key")
+	if err := checkSlotSig(accountID, s, keys.AK, akPub); err != nil {
+		return nil, err
 	}
 	return vk, nil
+}
+
+// checkSlotSig accepts a server slot only if the server's ak_pub is the AK
+// derived from VK and that AK signs the slot (§2.2).
+func checkSlotSig(accountID []byte, s Slot, ak ed25519.PrivateKey, akPub []byte) error {
+	pub := ak.Public().(ed25519.PublicKey)
+	if !bytes.Equal(pub, akPub) {
+		return errors.New("the server's account key does not belong to this vault key")
+	}
+	if !ed25519.Verify(pub, SlotSigMessage(accountID, PassphraseSlotID, s.Version, s.Bytes), s.AKSig) {
+		return errors.New("the server's passphrase slot is not signed by the account key")
+	}
+	return nil
+}
+
+// ReplaceSlot puts a newer passphrase slot from the server into the header
+// (§2.2): only if AK signs it and its version is higher than the local one,
+// so a server can neither plant a slot of its own nor replay an old one. VK
+// and the body stay as they are. The backup is replaced too, so the old
+// passphrase opens no local copy.
+func ReplaceSlot(ref VaultRef, vk []byte, s Slot, akPub []byte) error {
+	path, err := canonicalVaultPath(ref.Path)
+	if err != nil {
+		return fmt.Errorf("resolving vault path: %w", err)
+	}
+	ref.Path = path
+	unlock, err := lockVault(ref)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = unlock() }()
+
+	data, f, keys, err := loadV4(ref, vk)
+	if err != nil {
+		return err
+	}
+	if s.Version <= f.SlotVersion {
+		return fmt.Errorf("the server's passphrase slot version %d is not higher than the local version %d", s.Version, f.SlotVersion)
+	}
+	h, err := slotHeader(f.AccountID, s)
+	if err != nil {
+		return err
+	}
+	if err := checkSlotSig(f.AccountID, s, keys.AK, akPub); err != nil {
+		return err
+	}
+	h.Server = f.Server
+	file, err := sealV4(keys.FK, h, data)
+	if err != nil {
+		return err
+	}
+	if err := writeFileAtomic(ref.Path, file, 0600); err != nil {
+		return err
+	}
+	if err := writeFileAtomic(BackupPathFor(ref), file, 0600); err != nil {
+		return fmt.Errorf("writing backup: %w", err)
+	}
+	return nil
 }
 
 // CheckNewVault refuses to create a vault where one exists or where files of
@@ -150,7 +204,7 @@ func CheckNewVault(ref VaultRef) error {
 // and the pulled body: the Secret Key file first, then vault.enc (§5.3 step 6,
 // §9.1). The caller saves the session.
 func WriteEnrolledVault(ref VaultRef, server string, accountID []byte, s Slot, vk, secretKey []byte, data *VaultData) error {
-	if err := checkServerURL(server); err != nil {
+	if err := CheckServerURL(server); err != nil {
 		return err
 	}
 	h, err := slotHeader(accountID, s)

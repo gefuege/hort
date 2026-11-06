@@ -325,6 +325,8 @@ describe("PUT /api/v1/slots/passphrase", () => {
     expect(equal.status).toBe(409);
     expect(await equal.text()).toBe("slot version 8 is not higher than the stored version 8\n");
     expect((await putSlot(f, await makeSlot(id, f.ak, 3))).status).toBe(409);
+    const pulled = (await (await call({ account: f.account, device: f.deviceId, key: f.device, method: "GET", path: "/api/v1/revisions?after=0" })).json()) as { slot_version: number };
+    expect(pulled.slot_version).toBe(8);
   });
 
   it("rejects an invalid ak_sig", async () => {
@@ -584,7 +586,7 @@ describe("requests", () => {
 });
 
 // Revisions (contract §6.3, §6.6).
-type Page = { revisions: { seq: number; id: string; ct: string }[]; cursor: number; more: boolean; devices_version: number };
+type Page = { revisions: { seq: number; id: string; ct: string }[]; cursor: number; more: boolean; devices_version: number; slot_version: number };
 const push = (f: Fixture, revisions: unknown, deviceId = f.deviceId, key = f.device) =>
   call({ account: f.account, device: deviceId, key, method: "POST", path: "/api/v1/revisions", body: JSON.stringify({ revisions }) });
 const pull = (f: Fixture, query: string, deviceId = f.deviceId, key = f.device) =>
@@ -617,6 +619,7 @@ describe("revisions", () => {
     expect(all.more).toBe(false);
     expect(all.cursor).toBe(all.revisions[2].seq);
     expect(all.devices_version).toBe(1);
+    expect(all.slot_version).toBe(1);
 
     const p1 = await page(f, "?after=0&limit=2");
     expect(p1.revisions.map((r) => r.id)).toEqual([r1.id, r2.id]);
