@@ -21,8 +21,8 @@ Revisions (contract §6.3, §6.6). The server stores each revision as an opaque 
 
 | Method and path | Auth | Body → response |
 |---|---|---|
-| `POST /revisions` | device | `{revisions: [{id, ct}]}` (1 to 500, `ct` 28 bytes to 64 KiB, body at most 4 MiB) → `{accepted: [id], duplicate: [id]}`; an ID already stored is `duplicate` whatever its `ct`, an ID repeated in the body counts once |
-| `GET /revisions?after=SEQ[&limit=N]` | device | → `{revisions: [{seq, id, ct}], cursor, more, devices_version}`, oldest first; `limit` 1 to 500 (default 500); a page also ends after 4 MiB of `ct` but holds at least one revision; `cursor` is the last `seq` returned, or `after` for an empty page; any other query → 400 |
+| `POST /revisions` | device, or session + `Hort-CSRF` | `{revisions: [{id, ct}]}` (1 to 500, `ct` 28 bytes to 64 KiB, body at most 4 MiB) → `{accepted: [id], duplicate: [id]}`; an ID already stored is `duplicate` whatever its `ct`, an ID repeated in the body counts once; a session push stores no `from_device` |
+| `GET /revisions?after=SEQ[&limit=N]` | device or session | → `{revisions: [{seq, id, ct}], cursor, more, devices_version}`, oldest first; `limit` 1 to 500 (default 500); a page also ends after 4 MiB of `ct` but holds at least one revision; `cursor` is the last `seq` returned, or `after` for an empty page; any other query → 400 |
 
 Per account at most 50,000 revisions and 64 MiB of `ct`; a push beyond that → 413 and stores nothing. A push counts against the write rate limit, a pull does not. The CLI splits larger pushes by count and size, so one max-size envelope (about 87 KiB as base64) fits a push although other endpoints cap bodies at 64 KiB.
 

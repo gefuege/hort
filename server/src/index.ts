@@ -189,15 +189,23 @@ async function route(request: Request, env: Bindings): Promise<Response> {
 
   if (path === "/api/v1/revisions") {
     if (method === "POST") {
-      const req = await readSigned(request, url, "device", MAX_PUSH_BODY_BYTES);
-      if (req instanceof Response) return req;
-      return accountStub(env, req.accountId).pushRevisions(req);
+      if (request.headers.has("Hort-Signature")) {
+        const req = await readSigned(request, url, "device", MAX_PUSH_BODY_BYTES);
+        if (req instanceof Response) return req;
+        return accountStub(env, req.accountId).pushRevisions(req, req.body);
+      }
+      const session = await readSession(request, url, true);
+      if (session instanceof Response) return session;
+      if (Number(request.headers.get("Content-Length") ?? 0) > MAX_PUSH_BODY_BYTES) return fail(413, "request body exceeds 4096 KiB");
+      const body = await readBody(request, MAX_PUSH_BODY_BYTES);
+      if (!body) return fail(413, "request body exceeds 4096 KiB");
+      return accountStub(env, session.accountId).pushRevisions(session, body);
     }
     if (method === "GET") {
       const q = url.search.match(/^\?after=(0|[1-9][0-9]{0,14})(?:&limit=([1-9][0-9]{0,2}))?$/);
       const limit = q ? Number(q[2] ?? 500) : 0;
       if (!q || limit > 500) return fail(400, "query must be ?after=SEQ with an optional &limit=1..500");
-      const req = await readSigned(request, url, "device");
+      const req = await deviceOrSession(request, url, false);
       if (req instanceof Response) return req;
       return accountStub(env, req.accountId).listRevisions(req, Number(q[1]), limit);
     }

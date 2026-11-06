@@ -601,25 +601,27 @@ export class Account extends DurableObject<Env> {
     return { accepted: fresh.map(([rid]) => rid), duplicate: ids.filter((rid) => stored.has(rid)) };
   }
 
-  // POST /api/v1/revisions {revisions:[{id, ct}]}, device-signed (contract
-  // §6.3, §6.6). An ID already stored is a duplicate whatever its ct: the
-  // server cannot tell envelopes apart, and the same ID with other content
-  // can only come from a bug, which the pulling client reports.
-  async pushRevisions(req: Signed): Promise<Response> {
+  // POST /api/v1/revisions {revisions:[{id, ct}]}, device-signed or session
+  // (the Worker checked Hort-CSRF and Origin) (contract §6.3, §6.6). An ID
+  // already stored is a duplicate whatever its ct: the server cannot tell
+  // envelopes apart, and the same ID with other content can only come from a
+  // bug, which the pulling client reports. A session push records no device.
+  async pushRevisions(req: Auth, body: Uint8Array): Promise<Response> {
     const auth = await this.authenticate(req, true);
     if (auth instanceof Response) return auth;
-    const revisions = parseRevisions(req.body);
+    const revisions = parseRevisions(body);
     if (revisions instanceof Response) return revisions;
     // No await below: limit check and inserts are one atomic step.
-    const result = this.ctx.storage.transactionSync(() => this.storeRevisions(revisions, req.device));
+    const fromDevice = "session" in req ? null : req.device;
+    const result = this.ctx.storage.transactionSync(() => this.storeRevisions(revisions, fromDevice));
     if (result instanceof Response) return result;
     return json(200, result);
   }
 
-  // GET /api/v1/revisions?after=SEQ&limit=N, device-signed (contract §6.3,
-  // §6.6). A page ends at `limit` rows or MAX_PAGE_CT_BYTES of ct, whichever
+  // GET /api/v1/revisions?after=SEQ&limit=N, device-signed or session
+  // (contract §6.3, §6.6). A page ends at `limit` rows or MAX_PAGE_CT_BYTES of ct, whichever
   // comes first, and always holds at least one row when one exists.
-  async listRevisions(req: Signed, after: number, limit: number): Promise<Response> {
+  async listRevisions(req: Auth, after: number, limit: number): Promise<Response> {
     const auth = await this.authenticate(req, false);
     if (auth instanceof Response) return auth;
     const revisions: { seq: number; id: string; ct: string }[] = [];

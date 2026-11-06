@@ -681,6 +681,30 @@ describe("revisions", () => {
     expect((await push(f, [{ id: rid(), ct: b64Encode(random(100)) }])).status).toBe(200);
   });
 
+  it("pulls and pushes with a passkey session; a session push needs Hort-CSRF and the site origin", async () => {
+    const f = await created(await randomFixture());
+    const r1 = revision();
+    await push(f, [r1]);
+    const cookie = await session(f);
+    const pulled = await sessionFetch(cookie, "GET", "/api/v1/revisions?after=0");
+    expect(pulled.status).toBe(200);
+    expect(((await pulled.json()) as Page).revisions.map((r) => [r.id, r.ct])).toEqual([[r1.id, r1.ct]]);
+
+    const r2 = revision();
+    expect((await sessionFetch(cookie, "POST", "/api/v1/revisions", { revisions: [r2] }, { "Hort-CSRF": "" })).status).toBe(403);
+    expect((await sessionFetch(cookie, "POST", "/api/v1/revisions", { revisions: [r2] }, { Origin: "https://evil.test" })).status).toBe(403);
+    expect((await sessionFetch("", "POST", "/api/v1/revisions", { revisions: [r2] })).status).toBe(401);
+    expect((await sessionFetch("", "GET", "/api/v1/revisions?after=0")).status).toBe(401);
+    expect((await page(f, "?after=0")).revisions.map((r) => r.id)).toEqual([r1.id]);
+
+    const pushed = await sessionFetch(cookie, "POST", "/api/v1/revisions", { revisions: [r2, r1] });
+    expect(pushed.status).toBe(200);
+    expect(await pushed.json()).toEqual({ accepted: [r2.id], duplicate: [r1.id] });
+    const from = await runInDurableObject(env.ACCOUNT.getByName(f.account), (_i, state) =>
+      state.storage.sql.exec<{ from_device: string | null }>("SELECT from_device FROM revisions ORDER BY seq").toArray().map((r) => r.from_device));
+    expect(from).toEqual([f.deviceId, null]);
+  });
+
   it("isolates accounts and rejects foreign, revoked and AK signatures", async () => {
     const a = await created(await randomFixture());
     const b = await created(await randomFixture());
