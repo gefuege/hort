@@ -155,7 +155,7 @@ describe("envelope.json", () => {
       const { canon } = await import("../src/wire");
       const nonce = new Uint8Array(12);
       const aad = canon("hort/v4/rev\n", keys.accountId, hex(id));
-      const ct = await crypto.subtle.encrypt({ name: "AES-GCM", iv: nonce, additionalData: aad }, keys.rk, str(json));
+      const ct = await crypto.subtle.encrypt({ name: "AES-GCM", iv: nonce, additionalData: aad as BufferSource }, keys.rk, str(json) as BufferSource);
       return new Uint8Array([...nonce, ...new Uint8Array(ct)]);
     };
     const r = (o: object) => JSON.stringify({ name: "n", revision: { id, recorded_at: "2026-01-01T00:00:00Z", op: "set", key: "*:*", value: "v", ...o } });

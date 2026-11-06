@@ -6,6 +6,7 @@ import { argon2id } from "./argon2";
 import {
   accountIdDecode,
   accountIdEncode,
+  b64urlDecode,
   canon,
   concat,
   hexDecode,
@@ -31,30 +32,30 @@ export const PASSPHRASE_SLOT = "passphrase";
 // Key derivation (§2.1, §2.2)
 
 export async function hkdf(ikm: Uint8Array, salt: Uint8Array, info: string): Promise<Uint8Array> {
-  const key = await crypto.subtle.importKey("raw", ikm, "HKDF", false, ["deriveBits"]);
-  return new Uint8Array(await crypto.subtle.deriveBits({ name: "HKDF", hash: "SHA-256", salt, info: str(info) }, key, 256));
+  const key = await crypto.subtle.importKey("raw", ikm as BufferSource, "HKDF", false, ["deriveBits"]);
+  return new Uint8Array(await crypto.subtle.deriveBits({ name: "HKDF", hash: "SHA-256", salt: salt as BufferSource, info: str(info) as BufferSource }, key, 256));
 }
 
 const PKCS8_ED25519 = hexDecode("302e020100300506032b657004220420", 16)!;
-
-function b64urlDecode(s: string): Uint8Array {
-  return Uint8Array.from(atob(s.replace(/-/g, "+").replace(/_/g, "/")), (c) => c.charCodeAt(0));
-}
 
 // Imports an Ed25519 seed as a non-extractable signing key plus its public key.
 // WebCrypto exposes the public key only through an export, so a short-lived
 // extractable copy yields it and is dropped.
 export async function ed25519FromSeed(seed: Uint8Array): Promise<{ key: CryptoKey; pub: Uint8Array }> {
   const pkcs8 = concat([PKCS8_ED25519, seed]);
-  const tmp = await crypto.subtle.importKey("pkcs8", pkcs8, { name: "Ed25519" }, true, ["sign"]);
+  const tmp = await crypto.subtle.importKey("pkcs8", pkcs8 as BufferSource, { name: "Ed25519" }, true, ["sign"]);
   const jwk = (await crypto.subtle.exportKey("jwk", tmp)) as JsonWebKey;
-  const key = await crypto.subtle.importKey("pkcs8", pkcs8, { name: "Ed25519" }, false, ["sign"]);
+  const key = await crypto.subtle.importKey("pkcs8", pkcs8 as BufferSource, { name: "Ed25519" }, false, ["sign"]);
   pkcs8.fill(0);
-  return { key, pub: b64urlDecode(jwk.x!) };
+  return { key, pub: b64urlDecode(jwk.x!)! };
 }
 
+// TypeScript's DOM lib types BufferSource as ArrayBuffer-backed only; the byte
+// helpers return plain Uint8Array, so WebCrypto arguments carry a cast.
+const gcm = (iv: Uint8Array, aad: Uint8Array): AesGcmParams => ({ name: "AES-GCM", iv: iv as BufferSource, additionalData: aad as BufferSource });
+
 async function aesKey(raw: Uint8Array): Promise<CryptoKey> {
-  return crypto.subtle.importKey("raw", raw, { name: "AES-GCM" }, false, ["encrypt", "decrypt"]);
+  return crypto.subtle.importKey("raw", raw as BufferSource, { name: "AES-GCM" }, false, ["encrypt", "decrypt"]);
 }
 
 export type AccountKeys = {
@@ -133,7 +134,7 @@ export async function wrapSlot(
 ): Promise<SlotRecord> {
   const aad = slotAAD(keys.accountId, slotId, version, params);
   const wrapped = new Uint8Array(
-    await crypto.subtle.encrypt({ name: "AES-GCM", iv: nonce, additionalData: aad }, await aesKey(kek), vk),
+    await crypto.subtle.encrypt(gcm(nonce, aad), await aesKey(kek), vk as BufferSource),
   );
   const bytes = canon("hort/v4/slot-bytes\n", params, nonce, wrapped);
   const akSig = await signAK(keys, slotSigMessage(keys.accountId, slotId, version, bytes));
@@ -163,7 +164,7 @@ export async function unwrapSlot(kek: Uint8Array, accountId: Uint8Array, slotId:
   try {
     const aad = slotAAD(accountId, slotId, version, slot.params);
     const vk = new Uint8Array(
-      await crypto.subtle.decrypt({ name: "AES-GCM", iv: slot.nonce, additionalData: aad }, await aesKey(kek), slot.wrapped),
+      await crypto.subtle.decrypt(gcm(slot.nonce, aad), await aesKey(kek), slot.wrapped as BufferSource),
     );
     if (vk.length !== 32) throw new Error();
     return vk;
@@ -176,12 +177,12 @@ export async function unwrapSlot(kek: Uint8Array, accountId: Uint8Array, slotId:
 // the slot (§5.3 step 4); a server cannot hand out a slot of its own making.
 export async function verifySlotAuthority(keys: AccountKeys, akPub: Uint8Array, slotId: string, slot: SlotRecord): Promise<boolean> {
   if (hexEncode(keys.akPub) !== hexEncode(akPub)) return false;
-  const pub = await crypto.subtle.importKey("raw", akPub, { name: "Ed25519" }, false, ["verify"]);
-  return crypto.subtle.verify({ name: "Ed25519" }, pub, slot.akSig, slotSigMessage(keys.accountId, slotId, slot.version, slot.bytes));
+  const pub = await crypto.subtle.importKey("raw", akPub as BufferSource, { name: "Ed25519" }, false, ["verify"]);
+  return crypto.subtle.verify({ name: "Ed25519" }, pub, slot.akSig as BufferSource, slotSigMessage(keys.accountId, slotId, slot.version, slot.bytes) as BufferSource);
 }
 
 export async function signAK(keys: AccountKeys, msg: Uint8Array): Promise<Uint8Array> {
-  return new Uint8Array(await crypto.subtle.sign({ name: "Ed25519" }, keys.ak, msg));
+  return new Uint8Array(await crypto.subtle.sign({ name: "Ed25519" }, keys.ak, msg as BufferSource));
 }
 
 // Hort-* headers of an AK-signed request (§6.2).
@@ -336,13 +337,13 @@ function decodeRevision(o: unknown): Revision | string {
 }
 
 async function seal(key: CryptoKey, plaintext: Uint8Array, aad: Uint8Array, nonce: Uint8Array): Promise<Uint8Array> {
-  const ct = await crypto.subtle.encrypt({ name: "AES-GCM", iv: nonce, additionalData: aad }, key, plaintext);
+  const ct = await crypto.subtle.encrypt(gcm(nonce, aad), key, plaintext as BufferSource);
   return concat([nonce, new Uint8Array(ct)]);
 }
 
 async function open(key: CryptoKey, envelope: Uint8Array, aad: Uint8Array): Promise<Uint8Array> {
   if (envelope.length < NONCE + TAG) throw new Error("envelope too short");
-  const pt = await crypto.subtle.decrypt({ name: "AES-GCM", iv: envelope.subarray(0, NONCE), additionalData: aad }, key, envelope.subarray(NONCE));
+  const pt = await crypto.subtle.decrypt(gcm(envelope.subarray(0, NONCE), aad), key, envelope.subarray(NONCE) as BufferSource);
   return new Uint8Array(pt);
 }
 

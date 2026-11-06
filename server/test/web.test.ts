@@ -21,14 +21,17 @@ describe("security headers (contract §8.3)", () => {
 });
 
 describe("assets", () => {
-  it("load nothing from another origin", () => {
+  it("load nothing from another origin and no inline script", () => {
     const files = Object.entries(pages);
     expect(files.length).toBeGreaterThan(5);
     // Outbound links (<a href>) are fine; every other reference must be same-origin.
     const loaded = /(?:<(?:link|script|img|iframe|source)\b[^>]*?\s(?:src|href)=|url\(|@import\s+)["']?(?:https?:)?\/\/([^/"')\s]+)/gi;
     for (const [file, text] of files) {
       for (const m of text.matchAll(loaded)) expect(m[1], `${file}: ${m[0]}`).toBe("hort.pm");
-      expect(text, file).not.toMatch(/<script\b/i);
+      // The only script is the app bundle from this origin; nothing inline.
+      for (const tag of text.match(/<script\b[^>]*>[^<]*<\/script>|<script\b/gi) ?? []) {
+        expect(tag, file).toBe('<script type="module" src="/js/app.js"></script>');
+      }
     }
   });
 });

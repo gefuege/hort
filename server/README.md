@@ -13,8 +13,8 @@ All paths start with `/api/v1`. Signed requests carry `Hort-Account` (lowercase 
 | `POST /accounts` | AK, plus `Hort-Registration-Token` while `REGISTRATION_TOKEN` is set | `{account_id, ak_pub, slot: {id: "passphrase", version, bytes, ak_sig}, device: {id, pub, name}}` → 201 `{devices_version}`; a replay with the same AK → 200 |
 | `GET /accounts/{id}/slot` | none | → `{ak_pub, slot: {id, version, bytes, ak_sig}}` |
 | `POST /devices` | AK | `{device_id, pub, name}` → 201 `{devices_version}`; a replay → 200; a revoked ID → 409 |
-| `GET /devices` | device | → `{devices: [{id, name, created_at, last_seen_at, revoked_at}], devices_version}`; passkeys follow with S6.2 |
-| `DELETE /devices/{id}` | device | → `{devices_version}` |
+| `GET /devices` | device or session | → `{devices: [{id, name, created_at, last_seen_at, revoked_at}], passkeys: [{id, prf, created_at, last_used_at, revoked_at}], devices_version}`; a session also gets `last_visit_at` (its previous call, `null` the first time) and moves it to now |
+| `DELETE /devices/{id}` | device, or session + CSRF | `id` is a device ID (16 bytes hex) or a passkey ID (64 hex) → `{devices_version}`; revoking a passkey deletes its slot and ends its sessions |
 | `PUT /slots/passphrase` | AK | `{version, bytes, ak_sig}` → `{version}`; the version must be higher than the stored one |
 
 Agent requests (contract §6.3, §7). The server holds only `meta_ct` and revision envelopes, never a name, description or value. `meta_ct` and `ct` are standard base64 of at least 28 bytes (nonce plus GCM tag); `meta_ct` is at most 16 KiB, an envelope at most 64 KiB.
@@ -22,26 +22,47 @@ Agent requests (contract §6.3, §7). The server holds only `meta_ct` and revisi
 | Method and path | Auth | Body → response |
 |---|---|---|
 | `POST /requests` | device | `{id, meta_ct}` (`id`: 16 bytes lowercase hex, chosen by the client) → 201 `{status: "pending"}`; the request expires 24 h after creation. A replay with the same `meta_ct` → 200 `{status}` (the current state); the same `id` with a different `meta_ct` → 409; more than 50 pending → 429 |
-| `GET /requests/{id}` | device | → `{status, meta_ct, revision_ids}`; `revision_ids` is `[]` unless `fulfilled`; unknown ID or ID of another account → 404 |
-| `GET /requests?status=pending` | device | → `{requests: [{id, meta_ct, created_at}]}`, at most 50, oldest first; any other query → 400 |
-| `POST /requests/{id}/decline` | device | → `{status: "declined"}`; repeating it → 200; `fulfilled` or `expired` → 409 |
-| `POST /requests/{id}/fulfill` | passkey session + `Hort-CSRF` | `{revisions: [{id, ct}]}` (1 to 500) → `{accepted: [id], duplicate: [id]}` |
+| `GET /requests/{id}` | device or session | → `{status, meta_ct, revision_ids}`; `revision_ids` is `[]` unless `fulfilled`; unknown ID or ID of another account → 404 |
+| `GET /requests?status=pending` | device or session | → `{requests: [{id, meta_ct, created_at}]}`, at most 50, oldest first; any other query → 400 |
+| `POST /requests/{id}/decline` | device, or session + CSRF | → `{status: "declined"}`; repeating it → 200; `fulfilled` or `expired` → 409 |
+| `POST /requests/{id}/fulfill` | session + CSRF only | `{revisions: [{id, ct}]}` (1 to 500, body at most 256 KiB) → `{accepted: [id], duplicate: [id]}` |
 
 `status` is `pending`, `fulfilled`, `declined` or `expired`. Expiry is lazy: every request operation first marks pending requests past `expires_at` as `expired`, so an expired request frees its pending slot and is never listed. Create and decline count against the write rate limit; reads do not.
 
-Fulfill is implemented as the Durable Object method `Account.fulfillRequest(id, body)` and tested there, but the HTTP route answers 401 until S6.2 adds the passkey session and the `Hort-CSRF` check; the method takes no signature, so only a Worker route that has authenticated the session may call it, and that route also applies the write rate limit. The method inserts the revisions (an ID already stored is `duplicate`; an ID repeated in the body counts once), sets `fulfilled` and `revision_ids` (each body ID once, in order, stored duplicates included) in one transaction, and works only on a `pending` request (else 409). The session branches of `GET` and `decline` follow with S6.2 as well.
+Fulfill inserts the revisions (an ID already stored is `duplicate`; an ID repeated in the body counts once), sets `fulfilled` and `revision_ids` (each body ID once, in order, stored duplicates included) in one transaction, and works only on a `pending` request (else 409). It counts against the write rate limit of the session.
+
+Passkeys and sessions (contract §5.4, §5.5):
+
+| Method and path | Auth | Body → response |
+|---|---|---|
+| `POST /webauthn/register/options` | AK, empty body | → WebAuthn creation options (`challenge`, `rp`, `user` with the account ID as user handle, `residentKey` and `userVerification` required, attestation `none`, `excludeCredentials`). The browser adds the PRF extension itself. More than 10 active passkeys → 429 |
+| `POST /webauthn/register/verify` | AK | `{response, slot}`: `response` is the registration response JSON, `slot` is `null` (no PRF) or `{version, bytes, ak_sig}` of slot `passkey:<cred-hash>` → 201 `{id, prf, devices_version}`; the same credential again → 409 |
+| `POST /webauthn/login/options` | none, rate-limited | → `{challenge, rpId, userVerification, timeout}` for a discoverable-credential `get()` |
+| `POST /webauthn/login/verify` | none, rate-limited | authentication response JSON → `{account_id, ak_pub, credential_id, slot}` (`slot` is `null` without PRF) and `Set-Cookie: __Host-hort` |
+| `DELETE /session` | session + CSRF | → 204; ends the session and clears the cookie |
+
+- A challenge lives in its own `Challenge` Durable Object for five minutes and is consumed by its first use. Its binding is `login`, or `register:<account ID>` for the account whose AK signed the options call, so a challenge works only for the ceremony and account it was issued for. A discoverable login starts before the account is known, which is why challenges do not live in the account DO.
+- Verification uses `@simplewebauthn/server` with origin and rpId from the request URL (`https://hort.pm` and `hort.pm` in production), user verification required and a strictly increasing `sign_count` once the authenticator reports one. The passkey slot must carry `slot_params` = canon(`"hort/v4/passkey\n"`, SHA-256(credential ID)) and an `ak_sig` over `passkey:<hex of that hash>` and its version (`../spec/vectors/passkey-slot.json`).
+- The session cookie is `__Host-hort=<account ID>.<32 random bytes, base64url>; Max-Age=43200; Path=/; Secure; HttpOnly; SameSite=Strict`. The account DO stores only SHA-256 of the token. "CSRF" above means the request carries `Hort-CSRF: 1` and an `Origin` equal to the site origin. A request with `Hort-Signature` is always treated as signed, never as a session.
 
 `slot.bytes` is `slot_bytes` from the vectors: `canon("hort/v4/slot-bytes\n", slot_params, wrap_nonce, wrapped_vk)`. The server stores a slot only if `ak_sig` verifies against the account's `ak_pub`.
 
-Errors are an HTTP status and one plain-text line. Rate limits (fixed windows, per Durable Object `RateLimiter`): 5 account creations per hour per IP, 10 slot fetches per minute per IP and account, 60 writes per minute per device. They answer 429 with `Retry-After`.
+Errors are an HTTP status and one plain-text line. Rate limits (fixed windows, per Durable Object `RateLimiter`): 5 account creations per hour per IP, 10 slot fetches per minute per IP and account, 60 writes per minute per device (AK and sessions count as one device each), 30 passkey login calls per minute per IP. They answer 429 with `Retry-After`.
+
+### Schema
+
+The account DO schema is contract §6.5 plus three additions from S6.2: `passkeys.id` (hex SHA-256 of the credential ID, the passkey ID in `/devices`), `account.devices_seen_at` (for `last_visit_at`) and the table `sessions (token_hash, credential_id, created_at, expires_at)`. No account DO existed in production when they were added, so there is no migration. Once accounts exist, a schema change needs one. Wrangler migration `v2` adds the `Challenge` class.
 
 ## Develop
 
 ```bash
 npm ci
-npm test            # Vitest inside workerd (@cloudflare/vitest-plugin)
-npm run typecheck   # generates worker-configuration.d.ts, then tsc --noEmit
+npm test            # Worker tests inside workerd, browser code (test-web/) under Node
+npm run typecheck   # worker-configuration.d.ts, tsc for the Worker and for web/
+npm run build       # web/ → public/js/app.js; wrangler dev and deploy run it themselves
 ```
+
+The Worker tests drive registration and login with a software authenticator (`test/passkey.ts`, ES256, attestation `none`). The browser tests run every vector and reduction fixture of `../spec/vectors/` against `web/vault-core.ts`. They run under Node, because workerd refuses to compile WebAssembly at runtime.
 
 Local workerd does not implement Durable Object jurisdictions and throws on `jurisdiction("eu")`. The tests record those calls instead (`test/setup.ts`), so the EU placement itself is only effective on Cloudflare. The same limit applies to `wrangler dev` without `--remote`.
 
@@ -50,8 +71,16 @@ Local workerd does not implement Durable Object jurisdictions and throws on `jur
 The same Worker serves hort.pm. `wrangler.jsonc` sets `run_worker_first: ["/api/*"]`; every other path is a static asset from `public/`:
 
 - `index.html`, `impressum.html`, `privacy.html`, `style.css`, `fonts/`, `img/`: the landing page and legal pages (design B · Phosphor, self-hosted fonts under OFL, no third-party requests).
-- `login.html`, `vault.html`, `recover.html`, `devices.html` and `r.html` (served for `/r/<id>` through `_redirects`): the web app shell with layout, navigation and a one-sentence placeholder per page. The functions follow with S6.2 to S6.4.
+- `login.html`, `recover.html` and `devices.html` load `js/app.js`, the bundle of `web/` (see below). `vault.html` and `r.html` (served for `/r/<id>` through `_redirects`) are still placeholders for S6.3 and S6.4.
 - `_headers` carries the security headers for assets. Cloudflare does not apply that file to Worker responses, so `src/entry.ts` sets the same list on `/api/*`; `test/web.test.ts` keeps both identical. The CSP allows `script-src 'self' 'wasm-unsafe-eval'` for the Argon2id WASM and loads nothing from another origin.
+
+### Browser code (`web/`)
+
+- `vault-core.ts`: key derivation, 2SKD with NFC and Argon2id, passkey KEK, slot wrap and unwrap with `ak_sig`, revision and request-meta envelopes, AK request signing, Secret Key and account ID parsing, reduction with nanosecond times, the Append rule and the write rules of contract §3.4. Byte encodings come from `src/wire.ts`, which the Worker uses too. `/vault` and `/r/<id>` build on this module.
+- `app.ts`: `/login`, `/recover` and `/devices` as one app. Links between them swap the view without a page load, so an unlocked vault stays unlocked; the vault key exists only in memory and nothing is written to localStorage, sessionStorage or IndexedDB. Derived keys are non-extractable `CryptoKey`s.
+- PRF login: the PRF eval salt depends on the account ID, which a discoverable `get()` reveals only afterwards. When the tab does not know the account yet (a fresh visit), `/login` asks for the passkey a second time to evaluate the PRF. After `/recover` in the same tab, one prompt does both.
+- `esbuild` (pinned) bundles `web/app.ts` to `public/js/app.js` (ignored by git). No framework, no runtime dependency.
+- Argon2id: `web/vendor/hash-wasm/argon2.umd.min.cjs` is `dist/argon2.umd.min.js` of [hash-wasm](https://github.com/Daninet/hash-wasm) 4.12.0 (MIT, Dani Biró, `LICENSE` next to it), taken from the npm tarball (integrity `sha512-+/2B2rYLb48I/evdOIhP+K/DD2ca2fgBjp6O+GBEnCDk2e4rpeXIK8GvIyRPjTezgmWn9gmKwkQjjx6BtqDHVQ==`) and renamed to `.cjs` so the bundler treats the UMD as CommonJS. The WASM is embedded in that file. `scripts/build-web.mjs` refuses to build unless its SHA-256 is `dcec617a2e1b700fa132d1583a186cb70611113395e869f2dd6cc82b415d3094`. To update it, take the file from a new tarball, check its integrity, and change both the file and the pinned hash in one commit.
 
 `npm run check:web [base-url]` requests the pages and `/api/v1/nope` of a running Worker (default `http://localhost:8787` from `npx wrangler dev`) and checks status and headers.
 

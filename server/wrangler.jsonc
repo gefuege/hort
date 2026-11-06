@@ -2,6 +2,7 @@
   "name": "hort-api",
   "main": "src/entry.ts",
   "compatibility_date": "2026-08-01",
+  "build": { "command": "npm run build" },
   "assets": { "directory": "./public", "run_worker_first": ["/api/*"] },
   "routes": [{ "pattern": "hort.pm", "custom_domain": true }],
   "durable_objects": {

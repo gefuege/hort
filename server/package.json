@@ -4,9 +4,10 @@
   "type": "module",
   "scripts": {
     "dev": "wrangler dev",
+    "build": "node scripts/build-web.mjs",
     "test": "vitest run",
     "check:web": "node scripts/check-web.mjs",
-    "typecheck": "wrangler types && tsc --noEmit"
+    "typecheck": "wrangler types && tsc --noEmit && tsc --noEmit -p web"
   },
   "devDependencies": {
     "@cloudflare/vitest-plugin": "1.4.6",

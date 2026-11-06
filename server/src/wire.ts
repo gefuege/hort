@@ -133,15 +133,15 @@ export function accountIdDecode(s: string): Uint8Array | null {
 }
 
 export async function sha256(b: Uint8Array): Promise<Uint8Array> {
-  return new Uint8Array(await crypto.subtle.digest("SHA-256", b));
+  return new Uint8Array(await crypto.subtle.digest("SHA-256", b as BufferSource));
 }
 
 // Ed25519 verification; a malformed key or signature counts as invalid.
 export async function ed25519Verify(pub: Uint8Array, sig: Uint8Array, msg: Uint8Array): Promise<boolean> {
   if (pub.length !== 32 || sig.length !== 64) return false;
   try {
-    const key = await crypto.subtle.importKey("raw", pub, { name: "Ed25519" }, false, ["verify"]);
-    return await crypto.subtle.verify({ name: "Ed25519" }, key, sig, msg);
+    const key = await crypto.subtle.importKey("raw", pub as BufferSource, { name: "Ed25519" }, false, ["verify"]);
+    return await crypto.subtle.verify({ name: "Ed25519" }, key, sig as BufferSource, msg as BufferSource);
   } catch {
     return false;
   }
@@ -150,7 +150,7 @@ export async function ed25519Verify(pub: Uint8Array, sig: Uint8Array, msg: Uint8
 export async function isEd25519PublicKey(pub: Uint8Array): Promise<boolean> {
   if (pub.length !== 32) return false;
   try {
-    await crypto.subtle.importKey("raw", pub, { name: "Ed25519" }, false, ["verify"]);
+    await crypto.subtle.importKey("raw", pub as BufferSource, { name: "Ed25519" }, false, ["verify"]);
     return true;
   } catch {
     return false;
