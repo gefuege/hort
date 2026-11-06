@@ -1,0 +1,12 @@
+{
+  "name": "hort-api",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-08-01",
+  "durable_objects": {
+    "bindings": [
+      { "name": "ACCOUNT", "class_name": "Account" },
+      { "name": "RATE_LIMITER", "class_name": "RateLimiter" }
+    ]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Account", "RateLimiter"] }]
+}
