@@ -514,12 +514,14 @@ async function devicesView(main: HTMLElement): Promise<void> {
     }
   }
 
-  const revoke = (label: string, id: string) => {
+  // Marks the row revoked in place: a reload would reset the server-side visit time and drop the notices above.
+  const revoke = (label: string, item: { id: string; revoked_at: number | null }) => {
     const b = h("button", { class: "btn btn-ghost btn-small", type: "button" }, "Revoke");
     action(b, out, async () => {
       if (!confirm(`Revoke ${label}? It loses access to this account's server.`)) return;
-      await ok(await api("DELETE", `/api/v1/devices/${id}`));
-      render("/devices");
+      await ok(await api("DELETE", `/api/v1/devices/${item.id}`));
+      item.revoked_at = Math.floor(Date.now() / 1000);
+      b.replaceWith(state(item.revoked_at, b));
     });
     return b;
   };
@@ -537,7 +539,7 @@ async function devicesView(main: HTMLElement): Promise<void> {
       "table",
       { class: "list" },
       h("thead", {}, h("tr", {}, h("th", {}, "Name"), h("th", {}, "Added"), h("th", {}, "Last seen"), h("th", {}, ""))),
-      h("tbody", {}, ...list.devices.map((d) => h("tr", {}, h("td", {}, d.name), h("td", { "data-label": "Added" }, time(d.created_at)), h("td", { "data-label": "Last seen" }, time(d.last_seen_at)), h("td", {}, state(d.revoked_at, revoke(`device “${d.name}”`, d.id)))))),
+      h("tbody", {}, ...list.devices.map((d) => h("tr", {}, h("td", {}, d.name), h("td", { "data-label": "Added" }, time(d.created_at)), h("td", { "data-label": "Last seen" }, time(d.last_seen_at)), h("td", {}, state(d.revoked_at, revoke(`device “${d.name}”`, d)))))),
     ),
     h("h2", { class: "sub-h" }, "Passkeys"),
     list.passkeys.length
@@ -545,7 +547,7 @@ async function devicesView(main: HTMLElement): Promise<void> {
           "table",
           { class: "list" },
           h("thead", {}, h("tr", {}, h("th", {}, "Passkey"), h("th", {}, "Unlocks vault"), h("th", {}, "Added"), h("th", {}, "Last used"), h("th", {}, ""))),
-          h("tbody", {}, ...list.passkeys.map((p) => h("tr", {}, h("td", {}, h("code", {}, p.id.slice(0, 8))), h("td", { "data-label": "Unlocks vault" }, p.prf ? "yes" : "no"), h("td", { "data-label": "Added" }, time(p.created_at)), h("td", { "data-label": "Last used" }, time(p.last_used_at)), h("td", {}, state(p.revoked_at, revoke(`passkey ${p.id.slice(0, 8)}`, p.id)))))),
+          h("tbody", {}, ...list.passkeys.map((p) => h("tr", {}, h("td", {}, h("code", {}, p.id.slice(0, 8))), h("td", { "data-label": "Unlocks vault" }, p.prf ? "yes" : "no"), h("td", { "data-label": "Added" }, time(p.created_at)), h("td", { "data-label": "Last used" }, time(p.last_used_at)), h("td", {}, state(p.revoked_at, revoke(`passkey ${p.id.slice(0, 8)}`, p)))))),
         )
       : h("p", { class: "muted" }, "No passkeys. ", h("a", { href: "/recover" }, "Register one"), " after unlocking with your Emergency Kit."),
     h(

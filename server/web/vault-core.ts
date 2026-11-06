@@ -455,7 +455,7 @@ export function appendStamp(existing: Revision[], now: bigint): bigint {
 
 export const MAX_ENVELOPE_BYTES = 64 * 1024;
 const MAX_PLAINTEXT_BYTES = MAX_ENVELOPE_BYTES - NONCE - TAG;
-const CONTROL_OR_SPACE = /[\s\u0000-\u001f\u007f]/u;
+const CONTROL_OR_SPACE = /[\s\p{Cc}]/u;
 
 function validKeyPart(part: string): boolean {
   return part !== "" && (part === "*" || (!part.includes("*") && !part.includes(":") && !CONTROL_OR_SPACE.test(part)));
@@ -480,6 +480,8 @@ export function validateWrite(name: string, r: Revision): string | null {
       }
     }
   }
+  const malformed = decodeRevision(revisionJSON(r));
+  if (typeof malformed === "string") return malformed;
   if (envelopePlaintext(name, r).length > MAX_PLAINTEXT_BYTES) return "value is too large for one revision (64 KiB envelope limit)";
   return null;
 }

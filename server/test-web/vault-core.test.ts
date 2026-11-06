@@ -253,6 +253,14 @@ describe("write validation (§3.4)", () => {
     expect(validateWrite("ok", r({ key: "prod :*" }))).not.toBeNull();
     expect(validateWrite("ok", r({ value: "x".repeat(64 * 1024) }))).toMatch(/too large/);
   });
+  it("rejects C1 control characters in names and key parts", () => {
+    expect(validateWrite("na\u0085me", r({}))).not.toBeNull();
+    expect(validateWrite("ok", r({ key: "pr\u009fod:*" }))).not.toBeNull();
+  });
+  it("rejects a revision shape no decoder accepts", () => {
+    expect(validateWrite("ok", r({ op: "delete", key: "*:*", value: "v" }))).toBe("invalid delete");
+    expect(validateWrite("ok", r({ op: "delete-entry", key: "*:*", value: "" }))).toBe("invalid entry deletion");
+  });
   it("allows delete and delete-entry on legacy names and keys", () => {
     expect(validateWrite("legacy name", r({ op: "delete-entry", key: "", value: "" }))).toBeNull();
     expect(validateWrite("legacy name", r({ op: "delete", key: "a b:*", value: "" }))).toBeNull();
