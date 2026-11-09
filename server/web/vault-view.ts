@@ -111,6 +111,9 @@ export async function write(host: Api, u: Unlocked, name: string, changes: Chang
 
 const CLIPBOARD_S = 30;
 const REVEAL_S = 30;
+
+// Whole seconds until a deadline, so sleep or timer throttling cannot stretch it.
+export const secondsLeft = (deadline: number, now = Date.now()): number => Math.max(0, Math.ceil((deadline - now) / 1000));
 let clearTimer: number | undefined;
 let onCleared: ((done: boolean) => void) | undefined;
 const RETRY_EVENTS = ["pointerdown", "keydown"] as const;
@@ -246,12 +249,13 @@ export async function vaultView(main: HTMLElement, host: Host): Promise<void> {
   if (!loaded) return;
   const v = loaded;
 
-  // State. Values stay in `shown` rows and in the DOM only while revealed.
+  // State. `shown` rows hold values, but the DOM holds one only while it is revealed.
   let shown: Row[] = [];
   let selected: string | null = null;
   let confirming: string | null = null;
   let editing: { name: string | null; el: HTMLElement } | null = null;
-  const revealed = new Map<string, { left: number; timer: number; ttl?: HTMLElement }>();
+  const revealed = new Map<string, { deadline: number; timer: number; ttl?: HTMLElement }>();
+  let deleting = false;
 
   const filter = h("input", { id: "vault-filter", type: "search", placeholder: "filter by name, field, env, context …", autocomplete: "off", spellcheck: false, "aria-label": "Filter secrets" });
   const refreshButton = h("button", { class: "tbtn", type: "button", title: "Refresh (r)" }, h("kbd", {}, "r"), h("span", { class: "lbl" }, "refresh"), h("span", { class: "ico", "aria-hidden": "true" }, "↻"));
@@ -346,7 +350,7 @@ export async function vaultView(main: HTMLElement, host: Host): Promise<void> {
       const value = h("span", { class: `c-val${rev ? " shown" : ""}${r.value === null ? " none" : ""}` });
       if (r.value === null) value.textContent = "no value yet";
       else if (rev) {
-        rev.ttl = h("span", { class: "ttl" }, `hides in ${rev.left} s`);
+        rev.ttl = h("span", { class: "ttl" }, `hides in ${secondsLeft(rev.deadline)} s`);
         value.append(r.value === "" ? "(empty)" : r.value, rev.ttl);
       } else value.textContent = "••••••••••";
       const button = (key: string, label: string, run: () => void, cls?: string) =>
@@ -405,15 +409,17 @@ export async function vaultView(main: HTMLElement, host: Host): Promise<void> {
       window.clearInterval(rec.timer);
       revealed.delete(r.id);
     } else {
-      const next = { left: REVEAL_S, timer: 0 } as { left: number; timer: number; ttl?: HTMLElement };
+      const next = { deadline: Date.now() + REVEAL_S * 1000, timer: 0 } as { deadline: number; timer: number; ttl?: HTMLElement };
       next.timer = window.setInterval(() => {
-        if (!active() || --next.left <= 0) {
+        const left = secondsLeft(next.deadline);
+        if (!active() || left <= 0) {
           window.clearInterval(next.timer);
           revealed.delete(r.id);
-          if (active()) redrawRow(r);
+          const now = rowById(r.id);
+          if (active() && now) redrawRow(now);
           return;
         }
-        if (next.ttl) next.ttl.textContent = `hides in ${next.left} s`;
+        if (next.ttl) next.ttl.textContent = `hides in ${left} s`;
       }, 1000);
       revealed.set(r.id, next);
     }
@@ -432,12 +438,12 @@ export async function vaultView(main: HTMLElement, host: Host): Promise<void> {
       say(messageOf(err), "error");
       return;
     }
-    let left = CLIPBOARD_S;
-    const tick = () => show(`copied ${rowLabel(r)} · clipboard clears in ${left} s`, "ok");
+    const deadline = Date.now() + CLIPBOARD_S * 1000;
+    const tick = () => show(`copied ${rowLabel(r)} · clipboard clears in ${secondsLeft(deadline)} s`, "ok");
     say("");
     tick();
     countdown = window.setInterval(() => {
-      if (--left > 0 && active()) tick();
+      if (secondsLeft(deadline) > 0 && active()) tick();
       else window.clearInterval(countdown);
     }, 1000);
   }
@@ -456,6 +462,18 @@ export async function vaultView(main: HTMLElement, host: Host): Promise<void> {
   }
 
   async function deleteValue(r: Row): Promise<void> {
+    if (deleting) return;
+    deleting = true;
+    for (const b of list.querySelectorAll<HTMLButtonElement>(".confirm .yes")) b.disabled = true;
+    try {
+      await removeValue(r);
+    } finally {
+      deleting = false;
+      for (const b of list.querySelectorAll<HTMLButtonElement>(".confirm .yes")) b.disabled = false;
+    }
+  }
+
+  async function removeValue(r: Row): Promise<void> {
     const index = shown.findIndex((x) => x.id === r.id);
     try {
       if (!(await run(() => write(host, u, r.name, [{ op: "delete", field: r.field, key: r.key, value: "" }]).then(() => true)))) return;

@@ -3,7 +3,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { b64Decode } from "../src/wire";
 import { current, deriveAccountKeys, resolve, type Op, type Revision } from "../web/vault-core";
-import { command, forgetVault, pull, rowLabel, rows, SignInRequired, write, type Host } from "../web/vault-view";
+import { command, forgetVault, pull, rowLabel, rows, secondsLeft, SignInRequired, write, type Host } from "../web/vault-view";
 
 async function unlockedVault() {
   const accountId = crypto.getRandomValues(new Uint8Array(16));
@@ -119,5 +119,14 @@ describe("vault keys", () => {
     expect(command("c", "button", false)).toBe("copy");
     expect([command("y", "list", true), command("n", "list", true), command("c", "list", true)]).toEqual(["yes", "no", null]);
     for (const focus of ["list", "filter", "editor", "button"] as const) expect(command("Escape", focus, true)).toBe("close");
+  });
+});
+
+describe("secondsLeft", () => {
+  it("counts down to a deadline from the clock, not from ticks", () => {
+    expect(secondsLeft(30_000, 0)).toBe(30);
+    expect(secondsLeft(30_000, 29_001)).toBe(1);
+    expect(secondsLeft(30_000, 30_000)).toBe(0);
+    expect(secondsLeft(30_000, 95_000)).toBe(0);
   });
 });

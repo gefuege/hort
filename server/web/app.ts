@@ -157,7 +157,12 @@ type Child = Node | string | null | false | undefined;
 function h<K extends keyof HTMLElementTagNameMap>(tag: K, props: Record<string, unknown> = {}, ...children: Child[]): HTMLElementTagNameMap[K] {
   const el = document.createElement(tag);
   for (const [k, v] of Object.entries(props)) {
-    if (v === undefined || v === false) continue;
+    if (v === undefined) continue;
+    if (v === false) {
+      // A false flag still applies to a real property (spellcheck: false).
+      if (k in el && k !== "class" && !k.startsWith("on")) (el as unknown as Record<string, unknown>)[k] = false;
+      continue;
+    }
     if (k === "class") el.className = String(v);
     else if (k.startsWith("on")) el.addEventListener(k.slice(2), v as EventListener);
     else if (k in el && !k.includes("-")) (el as unknown as Record<string, unknown>)[k] = v;
