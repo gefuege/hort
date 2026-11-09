@@ -447,6 +447,8 @@ const viewOf = (path: string): View | null =>
 const typing = (t: EventTarget | null) => t instanceof HTMLElement && t.matches("input, textarea, select");
 // Devices needs only a session, so a user whose passkey cannot unlock the vault can still revoke a lost device.
 const sessionOnly = (view: View) => !unlocked && signedIn && view === "devices";
+// Unlocked with the Emergency Kit alone: this browser has no session, so vault and devices stay shut until a passkey is used.
+const kitLocked = (view: View) => !!unlocked && !signedIn && (view === "vault" || view === "devices");
 
 // A document key listener that ends with its view: it detaches on the first key after the view is gone.
 function keys(root: HTMLElement, handle: (e: KeyboardEvent) => boolean | void): void {
@@ -563,8 +565,9 @@ function windowBar(view: View): void {
       ? views.map((v) =>
           h(
             "button",
-            { class: "tab", role: "tab", type: "button", "aria-selected": String(v === view && !help), onclick: () => go(v) },
+            { class: `tab${kitLocked(v) ? " locked" : ""}`, role: "tab", type: "button", "aria-selected": String(v === view && !help), onclick: () => go(v) },
             v === "request" ? h("span", { class: "new", "aria-hidden": "true" }) : null,
+            kitLocked(v) ? h("span", { class: "lock", "aria-hidden": "true" }, "🔒\uFE0E") : null,
             v,
             h("kbd", {}, `g ${v[0]}`),
           ),
@@ -593,6 +596,31 @@ function passkeyButton(label: string, out: ReturnType<typeof status>, done: () =
     render();
   });
   return button;
+}
+
+// Vault and devices after a kit unlock without a session: say why and the way forward.
+function kitLockedView(body: HTMLElement, view: View): void {
+  const out = status(true);
+  const register = h("button", { class: "tbtn tbtn-primary tbtn-big", type: "button", onclick: () => go("access") }, h("kbd", {}, "p"), "register a passkey");
+  const root = h(
+    "div",
+    { class: "console-view" },
+    promptLine(`hort ${view}`),
+    h(
+      "section",
+      { class: "block" },
+      h("h3", {}, `> ${view} locked`),
+      h("p", { class: "ink" }, "Your vault is unlocked with your Emergency Kit, but this browser has no session yet. Use a passkey to open the vault here."),
+      h("div", { class: "row-actions" }, register, passkeyButton("sign in with passkey", out, () => render())),
+    ),
+    foot(out, [["p", "register passkey"], ...NAV_HINTS]),
+  );
+  body.append(root);
+  keys(root, (e) => {
+    if (e.key !== "p") return;
+    register.click();
+    return true;
+  });
 }
 
 // Passkey sign-in inside a view whose session the server refused.
@@ -722,6 +750,16 @@ function accessView(body: HTMLElement, first: typeof notice): void {
     if (!window.PublicKeyCredential) throw new Error("This browser does not support passkeys.");
     out.set("Waiting for your passkey …");
     const unlocks = await registerPasskey(u, (t) => out.set(t));
+    if (!signedIn) {
+      // Registering opens no session: sign in with the passkey just registered.
+      out.set("Passkey registered. Sign in with it to open your vault and devices.", "ok");
+      const next = h("div", {});
+      document.getElementById("kit-next")?.remove();
+      next.id = "kit-next";
+      registerButton.closest(".block")!.after(next);
+      signInBlock(next, () => render());
+      return;
+    }
     out.set(
       unlocks
         ? "Passkey registered. It signs you in and unlocks your vault."
@@ -883,6 +921,7 @@ function render(path = location.pathname): void {
   notice = null;
   let run: void | Promise<void>;
   if (!unlocked && !sessionOnly(view)) run = unlockView(body, view);
+  else if (kitLocked(view) && !help) run = kitLockedView(body, view);
   else if (help && unlocked) run = helpView(body);
   else if (view === "access") run = accessView(body, first);
   else if (view === "devices") run = devicesView(body, { h, messageOf, api, ok, login: (into) => (sessionEnded(), signInBlock(into, () => render(), "Sign in with your passkey to see the devices and passkeys of this account.")) });
