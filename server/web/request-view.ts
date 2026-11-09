@@ -4,6 +4,7 @@
 // value the user types through POST /requests/{id}/fulfill. The vault key and
 // everything decrypted here stay in memory; no innerHTML (Trusted Types).
 import { b64Decode, b64Encode } from "../src/wire";
+import { notALogin } from "./not-a-login";
 import {
   appendStamp,
   current,
@@ -185,8 +186,9 @@ async function load(body: HTMLElement, host: Host, id: string, retry: () => Prom
   const now = current(entry);
   const exists = [...now.values.values()].some((v) => v.field === meta.field && v.key === key);
 
-  const single = h("input", { id: "f-value", type: "password", autocomplete: "off", spellcheck: false });
-  const multi = h("textarea", { id: "f-value-multi", rows: 6, autocomplete: "off", spellcheck: false, autocapitalize: "off", hidden: true });
+  // A secret value is not a login: keep password managers from filling it or offering to save it.
+  const single = h("input", { id: "f-value", type: "password", autocomplete: "off", spellcheck: false, ...notALogin });
+  const multi = h("textarea", { id: "f-value-multi", rows: 6, autocomplete: "off", spellcheck: false, autocapitalize: "off", hidden: true, ...notALogin });
   const multiToggle = h("input", { id: "f-multiline", type: "checkbox" });
   multiToggle.addEventListener("change", () => {
     const [from, to] = multiToggle.checked ? [single, multi] : [multi, single];
@@ -201,7 +203,7 @@ async function load(body: HTMLElement, host: Host, id: string, retry: () => Prom
   const decline = h("button", { class: "tbtn", type: "button" }, "decline");
   const form = h(
     "form",
-    {},
+    notALogin,
     h(
       "div",
       { class: "f" },

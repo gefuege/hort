@@ -5,6 +5,7 @@
 // POST /revisions. Values reach the DOM only on an explicit "Show".
 import { b64Decode, b64Encode } from "../src/wire";
 import { formatTime } from "./format-time";
+import { notALogin } from "./not-a-login";
 import { accountIdEncode, appendStamp, current, lookupKey, newId, nowNs, openRevision, sealRevision, validateWrite, type AccountKeys, type Op, type Revision } from "./vault-core";
 
 type Child = Node | string | null | false | undefined;
@@ -546,7 +547,7 @@ export async function vaultView(main: HTMLElement, host: Host): Promise<void> {
     const field = text(r?.field, "default");
     const env = text(r?.env, "any");
     const ctx = text(r?.context, "any");
-    const value = h("textarea", { autocomplete: "off", spellcheck: false, rows: 1, placeholder: r ? "unchanged" : "" });
+    const value = h("textarea", { autocomplete: "off", spellcheck: false, rows: 1, placeholder: r ? "unchanged" : "", ...notALogin });
     const desc = text(r?.description);
     const err = h("span", { class: "err", role: "status" });
     const saveButton = h("button", { class: "tbtn tbtn-primary", type: "submit" }, "save");
