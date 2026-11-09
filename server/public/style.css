@@ -226,6 +226,7 @@ main:has(.console)>.sec-h{position:absolute;width:1px;height:1px;overflow:hidden
 .act button.danger{color:var(--danger)}
 .act u,.confirm u{text-decoration:none;color:var(--accent-ink)}
 .confirm{grid-column:5 / -1;display:flex;flex-wrap:wrap;gap:4px 10px;align-items:baseline;color:var(--danger);font-size:13px}
+.confirm .q{flex-basis:100%}
 .confirm button{font:700 12px/1 var(--f-mono);padding:5px 8px;border-radius:var(--r);border:1px solid var(--danger);background:transparent;color:var(--danger);cursor:pointer}
 .confirm button.no{border-color:var(--line-strong);color:var(--ink)}
 .confirm button.yes{background:var(--danger);color:var(--bg)}

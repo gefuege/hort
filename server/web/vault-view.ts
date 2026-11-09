@@ -346,11 +346,11 @@ export async function vaultView(main: HTMLElement, host: Host): Promise<void> {
       const no = h("button", { class: "no", type: "button", onclick: () => closeConfirm() }, h("u", {}, "n"), " keep");
       if (r.value === null) {
         const yes = h("button", { class: "yes", type: "button", onclick: () => void deleteGuarded(() => removeEntry(r)) }, h("u", {}, "y"), " delete");
-        li.append(h("span", { class: "confirm" }, `delete secret ${r.name}? `, yes, no));
+        li.append(h("span", { class: "confirm" }, h("span", { class: "q" }, `delete secret ${r.name}?`), no, yes));
       } else {
         const yes = h("button", { class: "yes", type: "button", onclick: () => void deleteGuarded(() => removeValue(r)) }, h("u", {}, "y"), " value");
         const all = h("button", { class: "all", type: "button", onclick: () => void deleteGuarded(() => removeEntry(r)) }, h("u", {}, "a"), " whole secret");
-        li.append(h("span", { class: "confirm" }, `delete ${rowLabel(r)}? `, yes, all, no));
+        li.append(h("span", { class: "confirm" }, h("span", { class: "q" }, `delete ${rowLabel(r)}?`), no, all, yes));
       }
     } else {
       const value = h("span", { class: `c-val${rev ? " shown" : ""}${r.value === null ? " none" : ""}` });
