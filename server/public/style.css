@@ -194,7 +194,10 @@ main.console{padding:40px clamp(16px,4vw,48px) 64px}
 .meta{display:flex;justify-content:space-between;gap:12px;font-size:12px;color:var(--muted);margin:10px 0 6px}
 .v-list{list-style:none;margin:0;padding:0;border-top:1px solid var(--line-strong);font-size:14px}
 .v-cols,.v-row{display:grid;grid-template-columns:15ch 15ch 8ch 10ch minmax(0,1fr) minmax(0,1.3fr);gap:0 16px;align-items:baseline;padding:5px 10px}
-.s-cols,.s-list .v-row{grid-template-columns:minmax(0,2.4fr) 12ch 18ch minmax(0,1.6fr);align-items:start}
+.s-grid{display:grid;grid-template-columns:fit-content(56ch) max-content max-content minmax(0,1fr);column-gap:16px}
+.s-cols,.s-list{display:grid;grid-template-columns:subgrid;grid-column:1 / -1}
+.s-list>*{grid-column:1 / -1}
+.s-list .v-row{grid-template-columns:subgrid;align-items:baseline;padding:3px 10px}
 .d-cols,.d-list .v-row{grid-template-columns:minmax(0,1.4fr) 18ch 18ch minmax(0,1fr)}
 .p-cols,.p-list .v-row{grid-template-columns:minmax(0,1.4fr) 13ch 18ch 18ch minmax(0,1fr)}
 .d-cols span:last-child,.p-cols span:last-child{text-align:right}
@@ -209,7 +212,11 @@ main.console{padding:40px clamp(16px,4vw,48px) 64px}
 .key{display:contents}
 .c-name{font-weight:500;overflow-wrap:anywhere}
 .v-row.cont .c-name{color:transparent;max-height:1.5em;overflow:hidden}
-.c-field,.c-env{overflow-wrap:anywhere}
+.c-field{overflow-wrap:anywhere}
+.c-env{white-space:nowrap}
+.c-env .tag{font:11px/1.25 var(--f-mono);padding:0 5px;margin-right:6px;border:1px solid var(--line-strong);border-radius:var(--r);color:var(--muted)}
+.c-name .dim{color:var(--muted);font-weight:400}
+.v-row.cont .c-name .dim{color:transparent}
 .c-field,.c-env,.c-m{color:var(--muted)}
 .c-m{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .c-field{color:var(--ink)}
@@ -217,7 +224,8 @@ main.console{padding:40px clamp(16px,4vw,48px) 64px}
 .c-field .any{color:var(--muted)}
 .c-val{grid-column:1 / -1;font:13px/1.5 var(--f-mono);color:var(--accent2);white-space:pre-wrap;overflow-wrap:anywhere;user-select:text;padding:2px 0 3px}
 .c-val .ttl{color:var(--muted);font-size:11px;margin-left:8px;white-space:nowrap;user-select:none}
-.c-desc{font:14px/1.5 var(--f-sans);color:var(--muted);overflow-wrap:anywhere}
+.c-desc{font:14px/1.5 var(--f-sans);color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.s-list .v-row.sel .c-desc:not(:empty){grid-column:1 / -1;grid-row:2;white-space:normal;padding:2px 0}
 .c-state{text-align:right;color:var(--muted);white-space:nowrap}
 .c-state.revoked{color:var(--danger)}
 .act{position:absolute;right:6px;top:50%;transform:translateY(-50%);display:none;gap:2px;background:var(--surface);padding-left:12px}
@@ -307,6 +315,7 @@ main.console{padding:40px clamp(16px,4vw,48px) 64px}
   .win-body{padding:10px 10px 8px}
   .hints,.v-cols{display:none}
   .v-row,.d-list .v-row,.p-list .v-row{grid-template-columns:minmax(0,1fr) auto;grid-template-areas:"key val" "desc desc" "act act";gap:0 12px;padding:8px 10px}
+  .s-grid{grid-template-columns:minmax(0,1fr)}
   .s-list .v-row{grid-template-columns:minmax(0,1fr);grid-template-areas:"key" "desc" "val" "act"}
   .key{display:flex;flex-wrap:wrap;gap:0 8px;grid-area:key;align-items:baseline}
   .v-row.cont .c-name{color:var(--muted);font-weight:400}

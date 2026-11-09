@@ -3,7 +3,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { b64Decode } from "../src/wire";
 import { current, deriveAccountKeys, resolve, type Op, type Revision } from "../web/vault-core";
-import { command, envContext, forgetVault, pull, rowLabel, rows, secondsLeft, SignInRequired, write, type Host } from "../web/vault-view";
+import { command, envContext, sharedPrefix, forgetVault, pull, rowLabel, rows, secondsLeft, SignInRequired, write, type Host } from "../web/vault-view";
 
 async function unlockedVault() {
   const accountId = crypto.getRandomValues(new Uint8Array(16));
@@ -86,6 +86,24 @@ describe("vault rows", () => {
     ["notes", [rev("describe", "", "", "only a description")]],
     ["gone", [rev("set", "", "*:*", "x"), rev("delete-entry")]],
   ]);
+
+  it("finds the prefix a name shares with the name above, cut at a separator and never the whole name", () => {
+    expect(sharedPrefix("aaas-cert.api-key", "aaas-cert.auth-flow")).toBe(10);
+    expect(sharedPrefix("delife.mssql2019.snapshot.password", "delife.mssql2019.snapshot.user")).toBe(26);
+    expect(sharedPrefix("APP_BASE_URL", "MAIL_FROM")).toBe(0);
+    expect(sharedPrefix("stripe", "stripe_key")).toBe(0);
+    expect(sharedPrefix("stripe.key", "stripe")).toBe(0);
+    expect(sharedPrefix("", "npm")).toBe(0);
+  });
+
+  it("marks the shared prefix on the first row of a secret, per visible row", () => {
+    const e = new Map<string, Revision[]>([
+      ["aaas-cert.api-key", [rev("set", "", "*:*", "a")]],
+      ["aaas-cert.auth-flow", [rev("set", "", "*:*", "b"), rev("set", "x", "*:*", "c")]],
+    ]);
+    expect(rows(e, "").rows.map((x) => x.prefix)).toEqual([0, 10, 0]);
+    expect(rows(e, "auth").rows.map((x) => x.prefix)).toEqual([0, 0]);
+  });
 
   it("combines env and context in one label, an empty env staying empty", () => {
     expect(envContext({ env: "prod", context: "delife" })).toBe("prod · delife");

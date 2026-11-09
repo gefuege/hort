@@ -157,7 +157,7 @@ async function copy(value: string, cleared: (done: boolean) => void): Promise<vo
 // ("default" when empty), env or context. `first` marks the first shown row of
 // its entry, which alone carries name and description.
 
-export type Row = { id: string; name: string; description: string; first: boolean; field: string; key: string; env: string; context: string; value: string | null };
+export type Row = { id: string; name: string; description: string; first: boolean; field: string; key: string; env: string; context: string; value: string | null; prefix: number };
 
 const part = (s: string) => (s === "*" ? "" : s);
 const splitKey = (key: string) => {
@@ -182,11 +182,24 @@ export function rows(entries: Map<string, Revision[]>, filter: string): { rows: 
       const { env, context } = splitKey(x.key);
       const hay = [name, cur.description, x.value === null ? "" : x.field || "default", env, context].join(" ").toLowerCase();
       if (!terms.every((t) => hay.includes(t))) continue;
-      out.push({ id: JSON.stringify([name, x.field, x.key]), name, description: cur.description, first, field: x.field, key: x.key, env, context, value: x.value });
+      out.push({ id: JSON.stringify([name, x.field, x.key]), name, description: cur.description, first, field: x.field, key: x.key, env, context, value: x.value, prefix: 0 });
       first = false;
     }
   }
+  let before = "";
+  for (const r of out) {
+    if (r.name !== before) r.prefix = sharedPrefix(before, r.name);
+    before = r.name;
+  }
   return { rows: out, secrets, values };
+}
+
+// How many leading characters of `name` repeat the name above, cut back to the last ".", "-" or "_"; never the whole name.
+export function sharedPrefix(above: string, name: string): number {
+  let n = 0;
+  while (n < above.length && n < name.length && above[n] === name[n]) n++;
+  const cut = Math.max(...[...name.slice(0, n)].map((c, i) => (/[._-]/.test(c) ? i + 1 : 0)), 0);
+  return cut < name.length ? cut : 0;
 }
 
 export const rowLabel = (r: Pick<Row, "name" | "field" | "env" | "context">) =>
@@ -198,6 +211,13 @@ export const envContext = (r: Pick<Row, "env" | "context">) => (r.context ? `${r
 // A name as text with a line-break opportunity after each ".", "-" and "_".
 const breakable = (s: string): Array<string | HTMLElement> =>
   s.split(/(?<=[._-])/).flatMap((t, i) => (i ? [document.createElement("wbr"), t] : [t]));
+function nameNodes(name: string, prefix: number): Array<string | HTMLElement> {
+  if (!prefix) return breakable(name);
+  const dim = document.createElement("span");
+  dim.className = "dim";
+  dim.append(...breakable(name.slice(0, prefix)));
+  return [dim, ...breakable(name.slice(prefix))];
+}
 
 // ---------------------------------------------------------------------------
 // Keyboard: what a key does where the focus is. "list" is the console outside
@@ -280,8 +300,7 @@ export async function vaultView(main: HTMLElement, host: Host): Promise<void> {
     { class: "console-view" },
     h("div", { class: "prompt" }, h("label", { class: "ps1", htmlFor: filter.id }, "> ", h("span", { class: "cmd" }, "hort list")), filter, refreshButton, newButton),
     h("div", { class: "meta" }, count, synced),
-    h("div", { class: "v-cols s-cols", "aria-hidden": "true" }, ...["name", "field", "env / context", "description"].map((c) => h("span", {}, c))),
-    list,
+    h("div", { class: "s-grid" }, h("div", { class: "v-cols s-cols", "aria-hidden": "true" }, ...["name", "field", "env / context", "description"].map((c) => h("span", {}, c))), list),
     h(
       "div",
       { class: "foot" },
@@ -351,9 +370,9 @@ export async function vaultView(main: HTMLElement, host: Host): Promise<void> {
       h(
         "span",
         { class: "key" },
-        h("span", { class: "c-name", title: r.name }, ...breakable(r.name)),
-        h("span", { class: "c-field" }, r.value === null ? any("no value yet") : r.field || any("default")),
-        h("span", { class: "c-env" }, envContext(r) || any()),
+        h("span", { class: "c-name", title: r.name }, ...nameNodes(r.name, r.prefix)),
+        h("span", { class: "c-field" }, r.value === null ? any("no value yet") : r.field),
+        h("span", { class: "c-env", title: envContext(r) || undefined }, r.env ? h("span", { class: "tag" }, r.env) : null, r.context, r.env || r.context ? null : any()),
       ),
     );
     if (confirming === r.id) {
@@ -373,7 +392,7 @@ export async function vaultView(main: HTMLElement, host: Host): Promise<void> {
       const button = (key: string, label: string, run: () => void, cls?: string) =>
         h("button", { type: "button", class: cls, onclick: () => ((selected = r.id), run()) }, h("u", {}, key), ` ${label}`);
       li.append(
-        h("span", { class: "c-desc" }, r.first ? r.description : ""),
+        h("span", { class: "c-desc", title: r.first && r.description ? r.description : undefined }, r.first ? r.description : ""),
         ...(value ? [value] : []),
         h(
           "span",
