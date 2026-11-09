@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -346,6 +347,9 @@ func TestRequestSecret(t *testing.T) {
 // and an empty home answers as a locked vault (no network involved).
 func TestStdioBinary(t *testing.T) {
 	bin := filepath.Join(t.TempDir(), "hort")
+	if runtime.GOOS == "windows" {
+		bin += ".exe"
+	}
 	build := exec.Command("go", "build", "-o", bin, "github.com/gefuege/hort/cmd/hort")
 	if out, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("build: %v\n%s", err, out)

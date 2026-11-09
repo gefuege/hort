@@ -43,7 +43,7 @@ func checkV3(raw []byte) error {
 
 // ReadV3 returns the primary vault file if it is v3 (§9.1 step 1).
 func ReadV3(ref VaultRef) ([]byte, error) {
-	raw, err := os.ReadFile(ref.Path)
+	raw, err := readFile(ref.Path)
 	if os.IsNotExist(err) {
 		return nil, fmt.Errorf("no vault found at %s", ref.Path)
 	}
