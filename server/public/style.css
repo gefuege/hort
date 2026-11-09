@@ -225,6 +225,8 @@ main.console{padding:40px clamp(16px,4vw,48px) 64px}
 .act button{font:500 12px/1 var(--f-mono);padding:5px 7px;border:1px solid transparent;border-radius:var(--r);background:transparent;color:var(--muted);cursor:pointer}
 .act button:hover,.act button:focus-visible{color:var(--ink);border-color:var(--line-strong)}
 .act button.danger{color:var(--danger)}
+.s-list .v-row .act{display:none;position:static;transform:none;grid-column:1 / -1;padding:6px 0 2px;background:transparent}
+.s-list .v-row.sel .act{display:flex}
 .act u,.confirm u{text-decoration:none;color:var(--accent-ink)}
 .confirm{grid-column:5 / -1;display:flex;flex-wrap:wrap;gap:4px 10px;align-items:baseline;color:var(--danger);font-size:13px}
 .s-list .confirm,.d-list .confirm,.p-list .confirm{grid-column:1 / -1;padding:4px 0 2px}
