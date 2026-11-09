@@ -90,8 +90,8 @@ async function keepUnlocked(): Promise<void> {
       dropUnlock();
       return;
     }
-    const { key, expires_at } = (await res.json()) as { key: string; expires_at: number };
-    const wrapped = await wrapVaultKey(b64Decode(key)!, u.accountId, u.vk, expires_at);
+    const { key } = (await res.json()) as { key: string };
+    const wrapped = await wrapVaultKey(b64Decode(key)!, u.accountId, u.vk);
     // Stored only if nothing changed meanwhile, so a quick switch to "immediately" wins.
     if (unlocked === u && lockSetting() === choice) storeUnlock(wrapped);
   } catch {
@@ -100,13 +100,13 @@ async function keepUnlocked(): Promise<void> {
 }
 
 // On page start: reopens the vault this browser keeps unlocked, while the
-// server still hands out the session's unlock key.
+// server still hands out the session's unlock key. Fetching it counts as use.
 async function restoreUnlocked(): Promise<void> {
   const w = storedUnlock();
   if (!w || unlocked) return;
   const accountId = parseAccountId(w.account);
   const remembered = rememberedAccount();
-  if (!accountId || !remembered || accountIdEncode(remembered) !== w.account || w.expires_at <= Date.now() / 1000) {
+  if (!accountId || !remembered || accountIdEncode(remembered) !== w.account) {
     dropUnlock();
     return;
   }

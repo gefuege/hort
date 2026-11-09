@@ -127,6 +127,8 @@ describe("passkey registration", () => {
   });
 });
 
+const DAY = 24 * 60 * 60 * 1000;
+
 describe("passkey login", () => {
   it("sets the __Host-hort session cookie with the contract attributes", async () => {
     const f = await created(await randomFixture());
@@ -134,7 +136,7 @@ describe("passkey login", () => {
     await registerPasskey(f, a);
     const res = await login(f, a);
     const cookie = res.headers.get("Set-Cookie")!;
-    expect(cookie).toMatch(new RegExp(`^__Host-hort=${f.account}\\.[A-Za-z0-9_-]{43}; Max-Age=43200; Path=/; Secure; HttpOnly; SameSite=Strict$`));
+    expect(cookie).toMatch(new RegExp(`^__Host-hort=${f.account}\\.[A-Za-z0-9_-]{43}; Max-Age=2592000; Path=/; Secure; HttpOnly; SameSite=Strict$`));
     const listing = (await (await sessionFetch(cookieOf(res), "GET", "/api/v1/devices")).json()) as Listing;
     expect(listing.passkeys[0].last_used_at).toBeTypeOf("number");
     // The DO keeps only the token hash.
@@ -201,7 +203,23 @@ describe("passkey login", () => {
     const cookie = await session(f);
     const forged = cookie.replace(f.account, g.account);
     expect((await sessionFetch(forged, "GET", "/api/v1/devices")).status).toBe(401);
-    vi.useFakeTimers({ now: Date.now() + 12 * 60 * 60 * 1000 + 1000, toFake: ["Date"] });
+    vi.useFakeTimers({ now: Date.now() + 7 * DAY + 1000, toFake: ["Date"] });
+    expect((await sessionFetch(cookie, "GET", "/api/v1/devices")).status).toBe(401);
+  });
+
+  it("slides the session 7 days from each use, at most 30 days after sign-in", async () => {
+    const f = await created(await randomFixture());
+    const cookie = await session(f);
+    const start = Date.now();
+    // Used every 6 days: still valid on day 24, well past the first 7 days.
+    for (const day of [6, 12, 18, 24]) {
+      vi.useFakeTimers({ now: start + day * DAY, toFake: ["Date"] });
+      expect((await sessionFetch(cookie, "GET", "/api/v1/devices")).status, `day ${day}`).toBe(200);
+    }
+    vi.useFakeTimers({ now: start + 30 * DAY - 5000, toFake: ["Date"] });
+    expect((await sessionFetch(cookie, "GET", "/api/v1/devices")).status).toBe(200);
+    // Continuous use does not pass the 30-day cap.
+    vi.useFakeTimers({ now: start + 30 * DAY + 1000, toFake: ["Date"] });
     expect((await sessionFetch(cookie, "GET", "/api/v1/devices")).status).toBe(401);
   });
 });

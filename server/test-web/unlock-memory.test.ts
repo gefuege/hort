@@ -2,7 +2,7 @@
 import { describe, expect, it } from "vitest";
 import { b64Decode, b64Encode } from "../src/wire";
 import { accountIdEncode } from "../web/vault-core";
-import { dropUnlock, LOCK_KEY, lockSetting, setLockSetting, storedUnlock, storeUnlock, UNLOCK_KEY, unwrapVaultKey, wrapVaultKey } from "../web/unlock-memory";
+import { dropUnlock, LOCK_KEY, LOCK_TTL, lockSetting, setLockSetting, storedUnlock, storeUnlock, UNLOCK_KEY, unwrapVaultKey, wrapVaultKey } from "../web/unlock-memory";
 
 const memory = () => {
   const m = new Map<string, string>();
@@ -16,10 +16,9 @@ describe("unlock memory", () => {
     const vk = random(32);
     const k = random(32);
     const kCopy = k.slice();
-    const w = await wrapVaultKey(k, account, vk, 1234);
+    const w = await wrapVaultKey(k, account, vk);
     expect(k.every((b) => b === 0)).toBe(true);
     expect(w.account).toBe(accountIdEncode(account));
-    expect(w.expires_at).toBe(1234);
     expect(JSON.stringify(w)).not.toContain(b64Encode(vk));
     expect(await unwrapVaultKey(kCopy.slice(), account, w)).toEqual(vk);
   });
@@ -28,7 +27,7 @@ describe("unlock memory", () => {
     const account = random(16);
     const vk = random(32);
     const k = random(32);
-    const w = await wrapVaultKey(k.slice(), account, vk, 1);
+    const w = await wrapVaultKey(k.slice(), account, vk);
     await expect(unwrapVaultKey(k.slice(), random(16), w)).rejects.toThrow();
     await expect(unwrapVaultKey(random(32), account, w)).rejects.toThrow();
     const ct = b64Decode(w.ct)!;
@@ -41,12 +40,18 @@ describe("unlock memory", () => {
     expect(lockSetting(store)).toBe("1h");
     setLockSetting("immediately", store);
     expect(lockSetting(store)).toBe("immediately");
+    setLockSetting("1w", store);
+    expect(lockSetting(store)).toBe("1w");
+    expect(LOCK_TTL["1w"]).toBe(604800);
     store.set(LOCK_KEY, "forever");
     expect(lockSetting(store)).toBe("1h");
 
     expect(storedUnlock(store)).toBeNull();
-    const w = await wrapVaultKey(random(32), random(16), random(32), 99);
+    const w = await wrapVaultKey(random(32), random(16), random(32));
     storeUnlock(w, store);
+    expect(storedUnlock(store)).toEqual(w);
+    // A blob stored before the lock time slid still opens; its expires_at is ignored.
+    store.set(UNLOCK_KEY, JSON.stringify({ ...w, expires_at: 1 }));
     expect(storedUnlock(store)).toEqual(w);
     store.set(UNLOCK_KEY, "{not json");
     expect(storedUnlock(store)).toBeNull();

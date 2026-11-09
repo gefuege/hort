@@ -11,6 +11,7 @@ afterEach(() => vi.useRealTimers());
 const PATH = "/api/v1/session/unlock-key";
 type Key = { key: string; expires_at: number };
 const nowS = () => Math.floor(Date.now() / 1000);
+const DAY = 24 * 60 * 60 * 1000;
 const kvKeys = (account: string) =>
   runInDurableObject(env.ACCOUNT.getByName(account), (_i, state) => [...state.storage.kv.list({ prefix: "unlock:" })].map(([k]) => k));
 const tables = (account: string) =>
@@ -65,21 +66,77 @@ describe("unlock key", () => {
     expect(await tables(f.account)).toEqual(["account", "devices", "passkeys", "requests", "revisions", "sessions", "slots"]);
   });
 
-  it("expires after the ttl and never outlives the session", async () => {
+  it("slides with each session request and expires after the ttl without use", async () => {
     const f = await created(await randomFixture());
     const cookie = await session(f);
+    const start = Date.now();
     await sessionFetch(cookie, "PUT", PATH, { ttl: 900 });
-    vi.useFakeTimers({ now: Date.now() + 901 * 1000, toFake: ["Date"] });
+    // A session request 10 min later moves the key's end to 15 min from then.
+    vi.useFakeTimers({ now: start + 600 * 1000, toFake: ["Date"] });
+    expect((await sessionFetch(cookie, "GET", "/api/v1/devices")).status).toBe(200);
+    vi.useFakeTimers({ now: start + 1200 * 1000, toFake: ["Date"] });
+    const got = (await (await sessionFetch(cookie, "GET", PATH)).json()) as Key;
+    expect(got.expires_at).toBe(nowS() + 900);
+    // 15 min without use: gone.
+    vi.useFakeTimers({ now: start + 2101 * 1000, toFake: ["Date"] });
     expect((await sessionFetch(cookie, "GET", PATH)).status).toBe(404);
     expect(await kvKeys(f.account)).toEqual([]);
-    vi.useRealTimers();
+  });
 
-    // 8 h asked 11.5 h into the 12 h session: it ends with the session.
-    vi.useFakeTimers({ now: Date.now() + 11.5 * 3600 * 1000, toFake: ["Date"] });
-    const late = (await (await sessionFetch(cookie, "PUT", PATH, { ttl: 28800 })).json()) as Key;
-    expect(late.expires_at - nowS()).toBeLessThanOrEqual(1800);
-    vi.useFakeTimers({ now: Date.now() + 1801 * 1000, toFake: ["Date"] });
+  it("does not come back once expired", async () => {
+    const f = await created(await randomFixture());
+    const cookie = await session(f);
+    const start = Date.now();
+    await sessionFetch(cookie, "PUT", PATH, { ttl: 900 });
+    vi.useFakeTimers({ now: start + 901 * 1000, toFake: ["Date"] });
+    expect((await sessionFetch(cookie, "GET", "/api/v1/devices")).status).toBe(200);
+    expect((await sessionFetch(cookie, "GET", PATH)).status).toBe(404);
+  });
+
+  it("offers 1 week and never outlives the session, which ends 30 days after sign-in", async () => {
+    const f = await created(await randomFixture());
+    const cookie = await session(f);
+    const start = Date.now();
+    const week = (await (await sessionFetch(cookie, "PUT", PATH, { ttl: 604800 })).json()) as Key;
+    expect(week.expires_at).toBe(nowS() + 604800);
+    // Used every 6 days the key lives on, but ends with the session on day 30.
+    for (const day of [6, 12, 18]) {
+      vi.useFakeTimers({ now: start + day * DAY, toFake: ["Date"] });
+      const got = (await (await sessionFetch(cookie, "GET", PATH)).json()) as Key;
+      expect(got.expires_at, `day ${day}`).toBe(nowS() + 604800);
+    }
+    // On day 24 a week would pass the session's end on day 30.
+    vi.useFakeTimers({ now: start + 24 * DAY, toFake: ["Date"] });
+    const capped = (await (await sessionFetch(cookie, "GET", PATH)).json()) as Key;
+    expect(capped.expires_at).toBeLessThanOrEqual(Math.floor(start / 1000) + 30 * 86400);
+    expect(capped.expires_at).toBeGreaterThan(Math.floor(start / 1000) + 30 * 86400 - 5);
+    vi.useFakeTimers({ now: start + 30 * DAY + 1000, toFake: ["Date"] });
     expect((await sessionFetch(cookie, "GET", PATH)).status).toBe(401);
+  });
+
+  it("ends with a session left idle for 7 days", async () => {
+    const f = await created(await randomFixture());
+    const cookie = await session(f);
+    const start = Date.now();
+    await sessionFetch(cookie, "PUT", PATH, { ttl: 604800 });
+    vi.useFakeTimers({ now: start + 7 * DAY + 1000, toFake: ["Date"] });
+    expect((await sessionFetch(cookie, "GET", PATH)).status).toBe(401);
+  });
+
+  it("leaves a key stored without ttl unextended", async () => {
+    const f = await created(await randomFixture());
+    const cookie = await session(f);
+    const start = Date.now();
+    await sessionFetch(cookie, "PUT", PATH, { ttl: 3600 });
+    const end = nowS() + 3600;
+    await runInDurableObject(env.ACCOUNT.getByName(f.account), (_i, state) => {
+      const [[name, entry]] = [...state.storage.kv.list<{ key: string; ttl: number; expires_at: number }>({ prefix: "unlock:" })];
+      state.storage.kv.put(name, { key: entry.key, expires_at: end });
+    });
+    vi.useFakeTimers({ now: start + 1800 * 1000, toFake: ["Date"] });
+    expect(((await (await sessionFetch(cookie, "GET", PATH)).json()) as Key).expires_at).toBe(end);
+    vi.useFakeTimers({ now: start + 3601 * 1000, toFake: ["Date"] });
+    expect((await sessionFetch(cookie, "GET", PATH)).status).toBe(404);
   });
 
   it("is gone after sign-out, and keys of ended sessions are dropped on the next PUT", async () => {
@@ -118,7 +175,7 @@ describe("unlock key", () => {
   it("accepts only the offered lock times", async () => {
     const f = await created(await randomFixture());
     const cookie = await session(f);
-    for (const body of [{ ttl: 60 }, { ttl: 86400 }, { ttl: "900" }, { ttl: 900, extra: 1 }, {}]) {
+    for (const body of [{ ttl: 60 }, { ttl: 86400 }, { ttl: 2592000 }, { ttl: "900" }, { ttl: 900, extra: 1 }, {}]) {
       expect((await sessionFetch(cookie, "PUT", PATH, body)).status, JSON.stringify(body)).toBe(400);
     }
     expect((await sessionFetch(cookie, "GET", PATH)).status).toBe(404);

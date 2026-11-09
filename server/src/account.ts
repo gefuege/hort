@@ -52,7 +52,9 @@ CREATE TABLE sessions  (token_hash TEXT PRIMARY KEY, credential_id BLOB NOT NULL
 const MAX_ACTIVE_DEVICES = 20;
 const MAX_ACTIVE_PASSKEYS = 10;
 const PASSKEY_LIMIT = `passkey limit reached (${MAX_ACTIVE_PASSKEYS} active passkeys); revoke one first`;
-const SESSION_SECONDS = 12 * 60 * 60;
+// A session ends 7 days after its last use, at the latest 30 days after sign-in.
+const SESSION_IDLE_SECONDS = 7 * 24 * 60 * 60;
+const SESSION_MAX_SECONDS = 30 * 24 * 60 * 60;
 export const SESSION_COOKIE = "__Host-hort";
 const SESSION_EXPIRED = "session expired or signed out; sign in with your passkey again";
 const PASSPHRASE_SLOT = "passphrase";
@@ -65,8 +67,8 @@ const MAX_PAGE_CT_BYTES = 4 * 1024 * 1024; // keeps a pull page response near 5.
 const MAX_ACCOUNT_REVISIONS = 50_000;
 const MAX_ACCOUNT_CT_BYTES = 64 * 1024 * 1024;
 const REQUEST_TTL_SECONDS = 24 * 60 * 60;
-// Lock times the web app offers: 15 min, 1 h, 8 h.
-const UNLOCK_KEY_TTLS = [900, 3600, 28800];
+// Lock times the web app offers, counted from the last use: 15 min, 1 h, 8 h, 1 week.
+const UNLOCK_KEY_TTLS = [900, 3600, 28800, 604800];
 const UNLOCK_KEY_PREFIX = "unlock:";
 const NO_UNLOCK_KEY = "no unlock key for this session";
 
@@ -85,7 +87,8 @@ type Auth = Signed | SessionAuth;
 // WebAuthn relying party, taken from the request URL the Worker serves.
 export type RelyingParty = { origin: string; id: string };
 // A session's unlock key in the DO key-value store under unlock:<token_hash>.
-type UnlockKey = { key: string; expires_at: number };
+// Entries written before the lock time slid carry no ttl and do not slide.
+type UnlockKey = { key: string; ttl?: number; expires_at: number };
 type RequestRow = { id: string; status: string; meta_ct: ArrayBuffer; from_device: string; created_at: number; revision_ids: string | null };
 
 const now = () => Math.floor(Date.now() / 1000);
@@ -174,8 +177,21 @@ export class Account extends DurableObject<Env> {
     return this.sql.exec<{ v: number }>("UPDATE account SET devices_version = devices_version + 1 RETURNING devices_version AS v").one().v;
   }
 
-  private sessionValid(tokenHash: string): boolean {
-    return this.sql.exec("SELECT 1 FROM sessions WHERE token_hash = ? AND expires_at > ?", tokenHash, now()).toArray().length > 0;
+  // Checks a session and counts this request as its use: a valid session
+  // slides to SESSION_IDLE_SECONDS from now, capped at SESSION_MAX_SECONDS
+  // after sign-in, and its unlock key slides to its ttl from now, capped at
+  // the session end. An expired unlock key stays expired.
+  private useSession(tokenHash: string): boolean {
+    const t = now();
+    const row = this.sql.exec<{ e: number }>(
+      "UPDATE sessions SET expires_at = min(?, created_at + ?) WHERE token_hash = ? AND expires_at > ? RETURNING expires_at AS e",
+      t + SESSION_IDLE_SECONDS, SESSION_MAX_SECONDS, tokenHash, t,
+    ).toArray()[0];
+    if (!row) return false;
+    const name = UNLOCK_KEY_PREFIX + tokenHash;
+    const entry = this.ctx.storage.kv.get<UnlockKey>(name);
+    if (entry?.ttl !== undefined && entry.expires_at > t) this.ctx.storage.kv.put(name, { ...entry, expires_at: Math.min(t + entry.ttl, row.e) });
+    return true;
   }
 
   // Verifies a session, or the signature against the account key ("ak") or
@@ -190,7 +206,7 @@ export class Account extends DurableObject<Env> {
         const limited = await rateLimit(this.env, "write", `${req.accountId}:session`);
         if (limited) return limited;
       }
-      if (!this.sessionValid(req.session)) return fail(401, SESSION_EXPIRED);
+      if (!this.useSession(req.session)) return fail(401, SESSION_EXPIRED);
       return { account };
     }
     if (!account || account.id !== req.accountId) return fail(404, "account not found");
@@ -468,7 +484,7 @@ export class Account extends DurableObject<Env> {
     this.ctx.storage.transactionSync(() => {
       this.sql.exec("UPDATE passkeys SET sign_count = ?, last_used_at = ? WHERE credential_id = ?", newCounter, t, credentialId);
       this.sql.exec("DELETE FROM sessions WHERE expires_at <= ?", t);
-      this.sql.exec("INSERT INTO sessions (token_hash, credential_id, created_at, expires_at) VALUES (?, ?, ?, ?)", tokenHash, credentialId, t, t + SESSION_SECONDS);
+      this.sql.exec("INSERT INTO sessions (token_hash, credential_id, created_at, expires_at) VALUES (?, ?, ?, ?)", tokenHash, credentialId, t, t + SESSION_IDLE_SECONDS);
     });
     const slot = current.slot_id ? this.sql.exec<SlotRow>("SELECT version, blob, ak_sig FROM slots WHERE id = ?", current.slot_id).one() : null;
     const res = json(200, {
@@ -482,7 +498,7 @@ export class Account extends DurableObject<Env> {
         ak_sig: b64Encode(new Uint8Array(slot.ak_sig)),
       },
     });
-    res.headers.set("Set-Cookie", `${SESSION_COOKIE}=${account.id}.${b64urlEncode(token)}; Max-Age=${SESSION_SECONDS}; Path=/; Secure; HttpOnly; SameSite=Strict`);
+    res.headers.set("Set-Cookie", `${SESSION_COOKIE}=${account.id}.${b64urlEncode(token)}; Max-Age=${SESSION_MAX_SECONDS}; Path=/; Secure; HttpOnly; SameSite=Strict`);
     return res;
   }
 
@@ -497,26 +513,27 @@ export class Account extends DurableObject<Env> {
 
   // PUT /api/v1/session/unlock-key {ttl}, session + CSRF. Creates or replaces
   // the session's unlock key: 32 random bytes the web app wraps the vault key
-  // with in browser storage. It expires after ttl seconds, at the latest with
-  // the session. Keys of ended sessions are dropped here.
+  // with in browser storage. It expires ttl seconds after the session's last
+  // use (useSession), at the latest with the session. Keys of ended sessions
+  // are dropped here.
   async putUnlockKey(req: SessionAuth, body: Uint8Array): Promise<Response> {
     const auth = await this.authenticate(req, true);
     if (auth instanceof Response) return auth;
     const ttl = parseObject(body, ["ttl"])?.ttl;
-    if (typeof ttl !== "number" || !UNLOCK_KEY_TTLS.includes(ttl)) return fail(400, "body must be {ttl} with ttl 900, 3600 or 28800");
+    if (typeof ttl !== "number" || !UNLOCK_KEY_TTLS.includes(ttl)) return fail(400, "body must be {ttl} with ttl 900, 3600, 28800 or 604800");
     const t = now();
     const live = new Set(this.sql.exec<{ token_hash: string }>("SELECT token_hash FROM sessions WHERE expires_at > ?", t).toArray().map((r) => r.token_hash));
     const kv = this.ctx.storage.kv;
     const ended = [...kv.list({ prefix: UNLOCK_KEY_PREFIX })].map(([name]) => name).filter((name) => !live.has(name.slice(UNLOCK_KEY_PREFIX.length)));
     for (const name of ended) kv.delete(name);
     const sessionEnd = this.sql.exec<{ e: number }>("SELECT expires_at AS e FROM sessions WHERE token_hash = ?", req.session).one().e;
-    const entry: UnlockKey = { key: b64Encode(crypto.getRandomValues(new Uint8Array(32))), expires_at: Math.min(t + ttl, sessionEnd) };
+    const entry: UnlockKey = { key: b64Encode(crypto.getRandomValues(new Uint8Array(32))), ttl, expires_at: Math.min(t + ttl, sessionEnd) };
     kv.put(UNLOCK_KEY_PREFIX + req.session, entry);
-    return json(200, entry);
+    return json(200, { key: entry.key, expires_at: entry.expires_at });
   }
 
   // GET /api/v1/session/unlock-key, session: the unlock key while it and the
-  // session are valid, else 404. Reading extends nothing.
+  // session are valid, else 404. Like every session request it slides both.
   async getUnlockKey(req: SessionAuth): Promise<Response> {
     const auth = await this.authenticate(req, false);
     if (auth instanceof Response) return auth;
@@ -527,7 +544,7 @@ export class Account extends DurableObject<Env> {
       this.ctx.storage.kv.delete(name);
       return fail(404, NO_UNLOCK_KEY);
     }
-    return json(200, entry);
+    return json(200, { key: entry.key, expires_at: entry.expires_at });
   }
 
   // DELETE /api/v1/session/unlock-key, session + CSRF: lock now. Like sign-out
@@ -704,7 +721,7 @@ export class Account extends DurableObject<Env> {
     if (revisions instanceof Response) return revisions;
 
     // No await below: state check and writes are one atomic step.
-    if (!this.sessionValid(req.session)) return fail(401, SESSION_EXPIRED);
+    if (!this.useSession(req.session)) return fail(401, SESSION_EXPIRED);
     this.expireDue();
     const r = this.request(id);
     if (!r) return fail(404, "request not found");
