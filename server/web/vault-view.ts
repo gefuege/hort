@@ -192,7 +192,7 @@ export const rowLabel = (r: Pick<Row, "name" | "field" | "env" | "context">) =>
 // Keyboard: what a key does where the focus is. "list" is the console outside
 // any input; "button" is an action button in it, which handles Enter itself.
 
-export type Command = "filter" | "down" | "up" | "show" | "copy" | "edit" | "delete" | "new" | "refresh" | "close" | "yes" | "no" | "first";
+export type Command = "filter" | "down" | "up" | "show" | "copy" | "edit" | "delete" | "new" | "refresh" | "close" | "yes" | "all" | "no" | "first";
 export type Focus = "filter" | "editor" | "list" | "button";
 const LIST_KEYS: Record<string, Command> = { "/": "filter", ArrowDown: "down", ArrowUp: "up", Enter: "show", c: "copy", e: "edit", d: "delete", n: "new", r: "refresh" };
 
@@ -200,7 +200,7 @@ export function command(key: string, focus: Focus, confirming: boolean): Command
   if (key === "Escape") return "close";
   if (focus === "filter") return key === "ArrowDown" || key === "Enter" ? "first" : null;
   if (focus === "editor") return null;
-  if (confirming) return key === "y" ? "yes" : key === "n" ? "no" : null;
+  if (confirming) return key === "y" ? "yes" : key === "a" ? "all" : key === "n" ? "no" : null;
   if (focus === "button" && key === "Enter") return null;
   return LIST_KEYS[key] ?? null;
 }
@@ -343,9 +343,15 @@ export async function vaultView(main: HTMLElement, host: Host): Promise<void> {
       ),
     );
     if (confirming === r.id) {
-      const yes = h("button", { class: "yes", type: "button", onclick: () => void deleteValue(r) }, h("u", {}, "y"), " delete");
       const no = h("button", { class: "no", type: "button", onclick: () => closeConfirm() }, h("u", {}, "n"), " keep");
-      li.append(h("span", { class: "confirm" }, `delete ${rowLabel(r)}? `, yes, no));
+      if (r.value === null) {
+        const yes = h("button", { class: "yes", type: "button", onclick: () => void deleteGuarded(() => removeEntry(r)) }, h("u", {}, "y"), " delete");
+        li.append(h("span", { class: "confirm" }, `delete secret ${r.name}? `, yes, no));
+      } else {
+        const yes = h("button", { class: "yes", type: "button", onclick: () => void deleteGuarded(() => removeValue(r)) }, h("u", {}, "y"), " value");
+        const all = h("button", { class: "all", type: "button", onclick: () => void deleteGuarded(() => removeEntry(r)) }, h("u", {}, "a"), " whole secret");
+        li.append(h("span", { class: "confirm" }, `delete ${rowLabel(r)}? `, yes, all, no));
+      }
     } else {
       const value = h("span", { class: `c-val${rev ? " shown" : ""}${r.value === null ? " none" : ""}` });
       if (r.value === null) value.textContent = "no value yet";
@@ -364,7 +370,7 @@ export async function vaultView(main: HTMLElement, host: Host): Promise<void> {
           r.value === null ? null : button("⏎", rev ? "hide" : "show", () => toggleShow(r)),
           r.value === null ? null : button("c", "copy", () => void copyValue(r)),
           button("e", "edit", () => openEditor(r)),
-          r.value === null ? null : button("d", "delete", () => askDelete(r), "danger"),
+          button("d", "delete", () => askDelete(r), "danger"),
         ),
       );
     }
@@ -461,16 +467,35 @@ export async function vaultView(main: HTMLElement, host: Host): Promise<void> {
     focusSelected();
   }
 
-  async function deleteValue(r: Row): Promise<void> {
+  // One busy guard for both delete paths: no double delete while a write runs.
+  async function deleteGuarded(remove: () => Promise<void>): Promise<void> {
     if (deleting) return;
     deleting = true;
-    for (const b of list.querySelectorAll<HTMLButtonElement>(".confirm .yes")) b.disabled = true;
+    const buttons = () => list.querySelectorAll<HTMLButtonElement>(".confirm .yes, .confirm .all");
+    for (const b of buttons()) b.disabled = true;
     try {
-      await removeValue(r);
+      await remove();
     } finally {
       deleting = false;
-      for (const b of list.querySelectorAll<HTMLButtonElement>(".confirm .yes")) b.disabled = false;
+      for (const b of buttons()) b.disabled = false;
     }
+  }
+
+  async function removeEntry(r: Row): Promise<void> {
+    try {
+      if (!(await run(() => write(host, u, r.name, [{ op: "delete-entry", field: "", key: "", value: "" }]).then(() => true)))) return;
+    } catch (err) {
+      say(messageOf(err), "error");
+      return;
+    }
+    confirming = null;
+    for (const x of shown) if (x.name === r.name) {
+      window.clearInterval(revealed.get(x.id)?.timer);
+      revealed.delete(x.id);
+    }
+    draw();
+    select(null);
+    say(`Deleted ${r.name} with all its values. Earlier values stay in history.`, "ok");
   }
 
   async function removeValue(r: Row): Promise<void> {
@@ -645,16 +670,18 @@ export async function vaultView(main: HTMLElement, host: Host): Promise<void> {
       case "refresh":
         return void refresh();
       case "yes":
-        return void (sel && deleteValue(sel));
+        return void (sel && deleteGuarded(() => (sel.value === null ? removeEntry(sel) : removeValue(sel))));
+      case "all":
+        return void (sel && sel.value !== null && deleteGuarded(() => removeEntry(sel)));
       case "no":
         return closeConfirm();
     }
     if (!sel) return;
     if (cmd === "edit") return openEditor(sel);
+    if (cmd === "delete") return askDelete(sel);
     if (sel.value === null) return;
     if (cmd === "show") toggleShow(sel);
     else if (cmd === "copy") void copyValue(sel);
-    else if (cmd === "delete") askDelete(sel);
   }
 
   function onLockChange(e: Event): void {

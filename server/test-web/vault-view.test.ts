@@ -117,7 +117,9 @@ describe("vault keys", () => {
     expect(command("c", "editor", false)).toBeNull();
     expect(command("Enter", "button", false)).toBeNull();
     expect(command("c", "button", false)).toBe("copy");
-    expect([command("y", "list", true), command("n", "list", true), command("c", "list", true)]).toEqual(["yes", "no", null]);
+    expect([command("y", "list", true), command("a", "list", true), command("n", "list", true), command("c", "list", true)]).toEqual(["yes", "all", "no", null]);
+    expect(command("a", "list", false)).toBeNull();
+    expect(command("a", "editor", true)).toBeNull();
     for (const focus of ["list", "filter", "editor", "button"] as const) expect(command("Escape", focus, true)).toBe("close");
   });
 });
