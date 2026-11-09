@@ -3,6 +3,7 @@
 // deltas. Revisions are decrypted and reduced in memory only. Every write goes
 // through validateWrite and the Append rule against the in-memory entry, then
 // POST /revisions. Values reach the DOM only on an explicit "Show".
+import { LOCK_LABEL, type LockAfter } from "./unlock-memory";
 import { b64Decode, b64Encode } from "../src/wire";
 import { accountIdEncode, appendStamp, current, lookupKey, newId, nowNs, openRevision, sealRevision, validateWrite, type AccountKeys, type Op, type Revision } from "./vault-core";
 
@@ -693,7 +694,7 @@ export async function vaultView(main: HTMLElement, host: Host): Promise<void> {
     if (!active()) return document.removeEventListener("change", onLockChange);
     const select = e.target as HTMLSelectElement;
     if (select.id !== "lock-after") return;
-    say(select.value === "immediately" ? "The vault locks when you close or reload this tab." : `The vault locks ${select.selectedOptions[0]?.text ?? select.value}.`, "ok");
+    say(select.value === "immediately" ? "The vault locks when you close or reload this tab." : `The vault locks ${LOCK_LABEL[select.value as LockAfter] ?? select.value}.`, "ok");
   }
 
   filter.addEventListener("input", () => {
