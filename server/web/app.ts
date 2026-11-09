@@ -137,6 +137,19 @@ async function changeLock(choice: LockAfter): Promise<void> {
   await api("DELETE", UNLOCK_KEY_PATH).catch(() => undefined);
 }
 
+// One account per browser: a kit unlock or passkey sign-in of another account
+// than the one unlocked or remembered here drops that account's unlock, kept
+// unlock and remembered ID. `endSession` also ends its session; a passkey
+// sign-in has already replaced the session cookie.
+async function switchAccount(accountId: string, endSession: boolean): Promise<void> {
+  const previous = unlocked?.accountId ?? rememberedAccount();
+  if (!previous || accountIdEncode(previous) === accountId) return;
+  if (endSession) await api("DELETE", "/api/v1/session").catch(() => undefined);
+  dropUnlock();
+  forget();
+  rememberAccount(accountId);
+}
+
 // Whether an unlock can be kept: a session of the remembered account (an Emergency Kit alone is never kept).
 const keepsUnlock = () => {
   const remembered = rememberedAccount();
@@ -357,6 +370,7 @@ async function passkeySignIn(say: (text: string) => void): Promise<{ result: Log
     authenticatorAttachment: cred.authenticatorAttachment ?? undefined,
   };
   const result = await ok<LoginResult>(await api("POST", "/api/v1/webauthn/login/verify", { body: JSON.stringify(response) }));
+  await switchAccount(result.account_id, false);
   signedIn = true;
   rememberAccount(result.account_id);
   if (!result.slot) return { result, unlockedNow: false };
@@ -396,6 +410,7 @@ async function kitUnlock(accountId: Uint8Array, secretKey: Uint8Array, passphras
   } finally {
     kek.fill(0);
   }
+  await switchAccount(accountIdEncode(accountId), true);
   await unlock(accountId, vk, b64Decode(ak_pub)!, PASSPHRASE_SLOT, record);
   return record.version;
 }
