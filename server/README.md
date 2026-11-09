@@ -131,6 +131,6 @@ npx wrangler deploy
 npx wrangler secret put REGISTRATION_TOKEN   # optional: invite-only registration
 ```
 
-Replace the `routes` entry in `wrangler.jsonc` with your own domain or remove it to use the `workers.dev` address.
+Replace the `routes` entry in `wrangler.jsonc` with your own domain, or remove it and set `"workers_dev": true` to use the `workers.dev` address. The full guide is [docs/self-hosting.md](../docs/self-hosting.md).
 
 Without `REGISTRATION_TOKEN`, anyone can create an account. Point the CLI at your Worker with `--server`.
