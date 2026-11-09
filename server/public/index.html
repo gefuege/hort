@@ -8,13 +8,13 @@
 <meta name="color-scheme" content="light dark">
 <link rel="icon" type="image/png" href="/favicon.png">
 <link rel="apple-touch-icon" href="/apple-touch-icon.png">
-<link rel="preload" href="/fonts/jetbrains-mono-latin-800-normal.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="/fonts/geist-sans-latin-600-normal.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="/style.css">
 <script src="/theme.js"></script>
 </head>
 <body>
 <nav class="m-nav">
-  <a class="brand" href="/"><span class="chev">&lt;</span><img src="/img/logo.png" alt="" width="32" height="32"><span class="chev">&gt;</span>Hort</a>
+  <a class="brand" href="/"><span class="chev">&lt;</span><img src="/img/logo.png" alt="" width="28" height="28"><span class="chev">&gt;</span>Hort</a>
   <div class="m-links"><a href="#agents">agents</a><a href="#security">security</a><a href="#install">install</a><a href="https://github.com/gefuege/hort">github ↗</a><a href="/vault">vault</a></div>
 </nav>
 
@@ -22,14 +22,14 @@
 <div class="section hero wrap">
   <div>
     <p class="eyebrow">Open source · Keys stay on your devices</p>
-    <div class="hero-mark" aria-hidden="true"><span class="chev">&lt;</span><img src="/img/logo.png" alt="" width="72" height="72"><span class="chev">&gt;</span></div>
+    <div class="hero-mark" aria-hidden="true"><span class="chev">&lt;</span><img src="/img/logo.png" alt="" width="64" height="64"><span class="chev">&gt;</span></div>
     <h1>Hort – secrets for you and your agents.<span class="cur" aria-hidden="true"></span></h1>
     <p class="lede">One encrypted vault for your API keys, tokens and passwords. You use it. Your coding agents use it. Your keys never leave your devices.</p>
     <div class="ctas"><a class="btn btn-primary" href="#install">Install the CLI →</a><a class="btn btn-ghost" href="https://github.com/gefuege/hort">View on GitHub</a></div>
     <p class="hero-note">The CLI works today. Sync, passkeys and the web app arrive with Hort 1.0. No account needed to start.</p>
   </div>
-  <div class="term hero-term">
-    <div class="term-bar"><i></i><i></i><i></i><span>zsh — ~/shop</span></div>
+  <div class="win term hero-term">
+    <div class="win-bar"><i></i><i></i><i></i><span>zsh — ~/shop</span></div>
 <pre tabindex="0"><span class="t-p">$</span> hort --list
 <span class="t-v">openai-key</span>     <span class="t-m">OpenAI API key</span>        <span class="t-m">[env: *]</span>
 <span class="t-v">db-password</span>    <span class="t-m">PostgreSQL password</span>   <span class="t-m">[env: *, prod]</span>
@@ -52,7 +52,7 @@
   <div class="examples">
     <div class="example">
       <p class="label">Today</p>
-      <div class="term"><pre tabindex="0"><span class="t-m"># What's there?</span>
+      <div class="win term"><pre tabindex="0"><span class="t-m"># What's there?</span>
 <span class="t-p">$</span> hort --list --json
 
 <span class="t-m"># Use it</span>
@@ -64,7 +64,7 @@
     </div>
     <div class="example">
       <p class="label soon">Coming with 1.0</p>
-      <div class="term"><pre tabindex="0"><span class="t-a">agent</span>  › I need the Stripe client ID for this integration.
+      <div class="win term"><pre tabindex="0"><span class="t-a">agent</span>  › I need the Stripe client ID for this integration.
 <span class="t-p">hort</span>   › Requested "stripe / client_id". Waiting for you on hort.pm …
 <span class="t-v">you</span>    › <span class="t-m">(open the link, enter the value, done)</span>
 <span class="t-a">agent</span>  › $ hort get stripe client_id</pre></div>
@@ -128,15 +128,15 @@
   <p class="sec-tag">// install</p>
   <h2 class="sec-h">Install in one line.</h2>
   <div class="install-grid">
-    <div><h3>macOS (Homebrew)</h3><div class="term"><pre tabindex="0">brew install sebastian-breitzke/tap/hort &amp;&amp; hort init</pre></div></div>
-    <div><h3>npm (any OS)</h3><div class="term"><pre tabindex="0">npm install -g @s16e/hort &amp;&amp; hort init</pre></div></div>
-    <div><h3>Windows (Scoop)</h3><div class="term"><pre tabindex="0">scoop bucket add sebastian-breitzke https://github.com/sebastian-breitzke/scoop-bucket
+    <div><h3>macOS (Homebrew)</h3><div class="win term"><pre tabindex="0">brew install sebastian-breitzke/tap/hort &amp;&amp; hort init</pre></div></div>
+    <div><h3>npm (any OS)</h3><div class="win term"><pre tabindex="0">npm install -g @s16e/hort &amp;&amp; hort init</pre></div></div>
+    <div><h3>Windows (Scoop)</h3><div class="win term"><pre tabindex="0">scoop bucket add sebastian-breitzke https://github.com/sebastian-breitzke/scoop-bucket
 scoop install hort
 hort init</pre></div></div>
     <div><h3>Linux and Windows binaries</h3><p class="after-line"><a href="https://github.com/gefuege/hort/releases">GitHub Releases</a></p></div>
   </div>
   <h3 class="sub-h after">After install</h3>
-  <div class="term"><pre tabindex="0">hort --set-secret openai-key --value-stdin --description "OpenAI API key"
+  <div class="win term"><pre tabindex="0">hort --set-secret openai-key --value-stdin --description "OpenAI API key"
 hort --secret openai-key</pre></div>
   <p class="after-line">Set a passphrase during <code>hort init</code>. That's it. Then tell your agent to run <code>hort --help</code>.</p>
 </div>

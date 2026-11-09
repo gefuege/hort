@@ -261,21 +261,26 @@ export async function vaultView(main: HTMLElement, host: Host): Promise<void> {
   const refreshButton = h("button", { class: "tbtn", type: "button", title: "Refresh (r)" }, h("kbd", {}, "r"), h("span", { class: "lbl" }, "refresh"), h("span", { class: "ico", "aria-hidden": "true" }, "↻"));
   const newButton = h("button", { class: "tbtn tbtn-primary", type: "button", title: "New secret (n)" }, h("kbd", {}, "n"), h("span", { class: "lbl" }, "new"), h("span", { class: "ico", "aria-hidden": "true" }, "+ new"));
   const count = h("span", {});
-  const synced = h("span", {});
   const list = h("ul", { class: "v-list", "aria-label": "Secrets" });
   const statusLine = h("p", { class: "v-status status", role: "status", "aria-live": "polite" });
+  const synced = h("span", { class: "right" });
   const root = h(
     "div",
-    { class: "console" },
-    h("div", { class: "prompt" }, h("label", { class: "ps1", htmlFor: filter.id }, "> ", h("span", { class: "cmd" }, "hort list")), filter, refreshButton, newButton),
-    h("div", { class: "meta" }, count, synced),
-    h("div", { class: "v-cols", "aria-hidden": "true" }, ...["name", "field", "env", "context", "value", "description"].map((c) => h("span", {}, c))),
-    list,
-    statusLine,
+    { class: "win console" },
+    h("div", { class: "win-bar" }, h("i", {}), h("i", {}), h("i", {}), h("span", {}, "hort — vault"), synced),
     h(
       "div",
-      { class: "hints", "aria-label": "Keyboard shortcuts" },
-      ...[["/", "filter"], ["↑ ↓", "select"], ["enter", "show"], ["c", "copy"], ["e", "edit"], ["d", "delete"], ["n", "new"], ["esc", "close"]].map(([k, what]) => h("span", {}, h("kbd", {}, k), what)),
+      { class: "win-body" },
+      h("div", { class: "prompt" }, h("label", { class: "ps1", htmlFor: filter.id }, "> ", h("span", { class: "cmd" }, "hort list")), filter, refreshButton, newButton),
+      h("div", { class: "meta" }, count),
+      h("div", { class: "v-cols", "aria-hidden": "true" }, ...["name", "field", "env", "context", "value", "description"].map((c) => h("span", {}, c))),
+      list,
+      statusLine,
+      h(
+        "div",
+        { class: "hints", "aria-label": "Keyboard shortcuts" },
+        ...[["/", "filter"], ["↑ ↓", "select"], ["enter", "show"], ["c", "copy"], ["e", "edit"], ["d", "delete"], ["n", "new"], ["esc", "close"]].map(([k, what]) => h("span", {}, h("kbd", {}, k), what)),
+      ),
     ),
   );
   const markSynced = () => (synced.textContent = `synced ${new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`);

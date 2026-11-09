@@ -137,10 +137,10 @@ async function changeLock(choice: LockAfter): Promise<void> {
 }
 
 function lockControl(): HTMLElement {
-  const select = h("select", { id: "lock-after" }, ...LOCK_CHOICES.map((c) => h("option", { value: c }, LOCK_LABEL[c])));
+  const select = h("select", { class: "lock-switch", "aria-label": "Lock time" }, ...LOCK_CHOICES.map((c) => h("option", { value: c }, `lock ${LOCK_LABEL[c]}`)));
   select.value = lockSetting();
   select.addEventListener("change", () => void changeLock(select.value as LockAfter));
-  return h("label", { class: "lock-switch", htmlFor: "lock-after" }, "Lock", select);
+  return select;
 }
 
 // The server refused the session: the kept unlock is useless from here.
