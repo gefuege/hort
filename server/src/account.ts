@@ -656,7 +656,9 @@ export class Account extends DurableObject<Env> {
   private storeRevisions(revisions: Map<string, Uint8Array>, fromDevice: string | null): { accepted: string[]; duplicate: string[] } | Response {
     const ids = [...revisions.keys()];
     const stored = new Set(
-      this.sql.exec<{ id: string }>(`SELECT id FROM revisions WHERE id IN (${ids.map(() => "?").join(",")})`, ...ids)
+      // One JSON parameter instead of one per ID: SQLite in a Durable Object
+      // allows only 100 bound variables per statement, a push carries up to 500.
+      this.sql.exec<{ id: string }>("SELECT id FROM revisions WHERE id IN (SELECT value FROM json_each(?))", JSON.stringify(ids))
         .toArray().map((row) => row.id),
     );
     const fresh = [...revisions].filter(([rid]) => !stored.has(rid));

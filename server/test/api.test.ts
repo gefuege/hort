@@ -637,6 +637,16 @@ describe("revisions", () => {
     expect(from).toEqual([f.deviceId, f.deviceId, f.deviceId]);
   });
 
+  it("pushes a full batch of 500 revisions and dedupes them on a second push", async () => {
+    const f = await created(await randomFixture());
+    const batch = Array.from({ length: 500 }, () => revision());
+    const first = await push(f, batch);
+    expect(first.status).toBe(200);
+    expect(((await first.json()) as { accepted: string[] }).accepted).toHaveLength(500);
+    const again = await push(f, batch);
+    expect(((await again.json()) as { duplicate: string[] }).duplicate).toHaveLength(500);
+  });
+
   it("validates push bodies, envelope size and the pull query", async () => {
     const f = await created(await randomFixture());
     const invalid = [[], [{ id: "x", ct: revision().ct }], [{ id: rid(), ct: "!!" }], [{ id: rid(), ct: b64Encode(random(27)) }], [{ id: rid() }], Array.from({ length: 501 }, revision)];
