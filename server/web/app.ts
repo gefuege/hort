@@ -745,7 +745,7 @@ function accessView(body: HTMLElement, first: typeof notice): void {
   const viaKit = kit !== null;
   const out = status();
 
-  const registerButton = h("button", { class: `tbtn tbtn-big${viaKit ? " tbtn-primary" : ""}`, type: "button" }, h("kbd", {}, "p"), viaKit ? "register a passkey" : "add another passkey");
+  const registerButton = h("button", { class: `tbtn tbtn-big${viaKit && signedIn ? " tbtn-primary" : ""}`, type: "button" }, h("kbd", {}, "p"), viaKit ? "register a passkey" : "add another passkey");
   action(registerButton, out, async () => {
     if (!window.PublicKeyCredential) throw new Error("This browser does not support passkeys.");
     out.set("Waiting for your passkey …");
@@ -838,9 +838,9 @@ function accessView(body: HTMLElement, first: typeof notice): void {
       { class: "block" },
       h("h3", {}, "> passkey"),
       viaKit
-        ? h("p", { class: "ink" }, "Your vault is unlocked in this tab with your Emergency Kit. Register a passkey so you can sign in on this device.")
+        ? h("p", { class: "ink" }, signedIn ? "Your vault is unlocked in this tab with your Emergency Kit. Register a passkey so you can sign in on this device." : "Your vault is unlocked in this tab with your Emergency Kit. Sign in with your passkey, or register one if this account has none yet.")
         : h("p", {}, "List and revoke your passkeys under devices (", h("code", {}, "g d"), "). Add another only for a new device or password manager."),
-      h("div", { class: "row-actions" }, registerButton),
+      h("div", { class: "row-actions" }, viaKit && !signedIn ? passkeyButton("sign in with passkey", out, () => render()) : null, registerButton),
     ),
     h("section", { class: "block" }, h("h3", {}, "> new passphrase"), passForm),
     h(
