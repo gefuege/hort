@@ -192,6 +192,13 @@ export function rows(entries: Map<string, Revision[]>, filter: string): { rows: 
 export const rowLabel = (r: Pick<Row, "name" | "field" | "env" | "context">) =>
   [r.name, r.field].filter(Boolean).join(" ") + (r.env ? ` · env ${r.env}` : "") + (r.context ? ` · context ${r.context}` : "");
 
+// The env/context cell: "prod · tenant-a"; a context alone keeps the empty env visible as "· tenant-a".
+export const envContext = (r: Pick<Row, "env" | "context">) => (r.context ? `${r.env} · ${r.context}` : r.env);
+
+// A name as text with a line-break opportunity after each ".", "-" and "_".
+const breakable = (s: string): Array<string | HTMLElement> =>
+  s.split(/(?<=[._-])/).flatMap((t, i) => (i ? [document.createElement("wbr"), t] : [t]));
+
 // ---------------------------------------------------------------------------
 // Keyboard: what a key does where the focus is. "list" is the console outside
 // any input; "button" is an action button in it, which handles Enter itself.
@@ -265,7 +272,7 @@ export async function vaultView(main: HTMLElement, host: Host): Promise<void> {
   const refreshButton = h("button", { class: "tbtn", type: "button", title: "Refresh (r)" }, h("kbd", {}, "r"), h("span", { class: "lbl" }, "refresh"), h("span", { class: "ico", "aria-hidden": "true" }, "↻"));
   const newButton = h("button", { class: "tbtn tbtn-primary", type: "button", title: "New secret (n)" }, h("kbd", {}, "n"), h("span", { class: "lbl" }, "new"), h("span", { class: "ico", "aria-hidden": "true" }, "+ new"));
   const count = h("span", {});
-  const list = h("ul", { class: "v-list", "aria-label": "Secrets" });
+  const list = h("ul", { class: "v-list s-list", "aria-label": "Secrets" });
   const statusLine = h("p", { class: "v-status status", role: "status", "aria-live": "polite" });
   const synced = h("span", {});
   const root = h(
@@ -273,7 +280,7 @@ export async function vaultView(main: HTMLElement, host: Host): Promise<void> {
     { class: "console-view" },
     h("div", { class: "prompt" }, h("label", { class: "ps1", htmlFor: filter.id }, "> ", h("span", { class: "cmd" }, "hort list")), filter, refreshButton, newButton),
     h("div", { class: "meta" }, count, synced),
-    h("div", { class: "v-cols", "aria-hidden": "true" }, ...["name", "field", "env", "context", "value", "description"].map((c) => h("span", {}, c))),
+    h("div", { class: "v-cols s-cols", "aria-hidden": "true" }, ...["name", "field", "env / context", "description"].map((c) => h("span", {}, c))),
     list,
     h(
       "div",
@@ -344,10 +351,9 @@ export async function vaultView(main: HTMLElement, host: Host): Promise<void> {
       h(
         "span",
         { class: "key" },
-        h("span", { class: "c-name" }, r.name),
-        h("span", { class: "c-field" }, r.value === null ? "" : r.field || any("default")),
-        h("span", { class: "c-env" }, r.env || any()),
-        h("span", { class: "c-ctx" }, r.context || any()),
+        h("span", { class: "c-name", title: r.name }, ...breakable(r.name)),
+        h("span", { class: "c-field" }, r.value === null ? any("no value yet") : r.field || any("default")),
+        h("span", { class: "c-env" }, envContext(r) || any()),
       ),
     );
     if (confirming === r.id) {
@@ -361,17 +367,14 @@ export async function vaultView(main: HTMLElement, host: Host): Promise<void> {
         li.append(h("span", { class: "confirm" }, h("span", { class: "q" }, `delete ${rowLabel(r)}?`), no, all, yes));
       }
     } else {
-      const value = h("span", { class: `c-val${rev ? " shown" : ""}${r.value === null ? " none" : ""}` });
-      if (r.value === null) value.textContent = "no value yet";
-      else if (rev) {
-        rev.ttl = h("span", { class: "ttl" }, `hides in ${secondsLeft(rev.deadline)} s`);
-        value.append(r.value === "" ? "(empty)" : r.value, rev.ttl);
-      } else value.textContent = "••••••••••";
+      const value = rev
+        ? h("span", { class: "c-val" }, r.value === "" ? "(empty)" : r.value, (rev.ttl = h("span", { class: "ttl" }, `hides in ${secondsLeft(rev.deadline)} s`)))
+        : null;
       const button = (key: string, label: string, run: () => void, cls?: string) =>
         h("button", { type: "button", class: cls, onclick: () => ((selected = r.id), run()) }, h("u", {}, key), ` ${label}`);
       li.append(
-        value,
         h("span", { class: "c-desc" }, r.first ? r.description : ""),
+        ...(value ? [value] : []),
         h(
           "span",
           { class: "act" },

@@ -3,7 +3,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { b64Decode } from "../src/wire";
 import { current, deriveAccountKeys, resolve, type Op, type Revision } from "../web/vault-core";
-import { command, forgetVault, pull, rowLabel, rows, secondsLeft, SignInRequired, write, type Host } from "../web/vault-view";
+import { command, envContext, forgetVault, pull, rowLabel, rows, secondsLeft, SignInRequired, write, type Host } from "../web/vault-view";
 
 async function unlockedVault() {
   const accountId = crypto.getRandomValues(new Uint8Array(16));
@@ -86,6 +86,13 @@ describe("vault rows", () => {
     ["notes", [rev("describe", "", "", "only a description")]],
     ["gone", [rev("set", "", "*:*", "x"), rev("delete-entry")]],
   ]);
+
+  it("combines env and context in one label, an empty env staying empty", () => {
+    expect(envContext({ env: "prod", context: "delife" })).toBe("prod · delife");
+    expect(envContext({ env: "prod", context: "" })).toBe("prod");
+    expect(envContext({ env: "", context: "tenant-a" })).toBe(" · tenant-a");
+    expect(envContext({ env: "", context: "" })).toBe("");
+  });
 
   it("lists one row per value, the entry's name and description on its first row only", () => {
     const r = rows(entries, "");
