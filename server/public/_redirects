@@ -1,1 +1,6 @@
-/r/* /r 200
+/login /vault 302
+/recover /access 302
+/vault /console 200
+/devices /console 200
+/access /console 200
+/r/* /console 200

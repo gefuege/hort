@@ -1,9 +1,8 @@
-// /vault (contract §8.1, §8.2): the unlocked vault in this tab. The first
+// /vault (contract §8.1, §8.2): the vault view of the console, for the unlocked vault in this tab. The first
 // visit pulls every revision from cursor 0, later visits in the same tab pull
 // deltas. Revisions are decrypted and reduced in memory only. Every write goes
 // through validateWrite and the Append rule against the in-memory entry, then
 // POST /revisions. Values reach the DOM only on an explicit "Show".
-import { LOCK_LABEL, type LockAfter } from "./unlock-memory";
 import { b64Decode, b64Encode } from "../src/wire";
 import { accountIdEncode, appendStamp, current, lookupKey, newId, nowNs, openRevision, sealRevision, validateWrite, type AccountKeys, type Op, type Revision } from "./vault-core";
 
@@ -22,6 +21,8 @@ export type Host = {
   unlocked: () => Unlocked | null;
   // Renders passkey sign-in (and unlock) into `into`; the vault opens once it is unlocked.
   login: (into: HTMLElement) => void;
+  // A line for the status bar once the vault is loaded, such as the outcome of a request.
+  notice?: { text: string; kind?: "ok" | "error" };
 };
 
 type Vault = { account: string; cursor: number; entries: Map<string, Revision[]>; ids: Set<string>; skipped: number };
@@ -216,7 +217,7 @@ export async function vaultView(main: HTMLElement, host: Host): Promise<void> {
   const { h, messageOf } = host;
   const body = h("div", {});
   const signInPrompt = (text?: string) => {
-    body.replaceChildren(text ? h("p", { class: "sec-intro" }, text) : "");
+    body.replaceChildren(text ? h("p", { class: "ink" }, text) : "");
     host.login(body);
   };
   main.append(body);
@@ -264,23 +265,22 @@ export async function vaultView(main: HTMLElement, host: Host): Promise<void> {
   const count = h("span", {});
   const list = h("ul", { class: "v-list", "aria-label": "Secrets" });
   const statusLine = h("p", { class: "v-status status", role: "status", "aria-live": "polite" });
-  const synced = h("span", { class: "right" });
+  const synced = h("span", {});
   const root = h(
     "div",
-    { class: "win console" },
-    h("div", { class: "win-bar" }, h("i", {}), h("i", {}), h("i", {}), h("span", {}, "hort — vault"), synced),
+    { class: "console-view" },
+    h("div", { class: "prompt" }, h("label", { class: "ps1", htmlFor: filter.id }, "> ", h("span", { class: "cmd" }, "hort list")), filter, refreshButton, newButton),
+    h("div", { class: "meta" }, count, synced),
+    h("div", { class: "v-cols", "aria-hidden": "true" }, ...["name", "field", "env", "context", "value", "description"].map((c) => h("span", {}, c))),
+    list,
     h(
       "div",
-      { class: "win-body" },
-      h("div", { class: "prompt" }, h("label", { class: "ps1", htmlFor: filter.id }, "> ", h("span", { class: "cmd" }, "hort list")), filter, refreshButton, newButton),
-      h("div", { class: "meta" }, count),
-      h("div", { class: "v-cols", "aria-hidden": "true" }, ...["name", "field", "env", "context", "value", "description"].map((c) => h("span", {}, c))),
-      list,
+      { class: "foot" },
       statusLine,
       h(
         "div",
         { class: "hints", "aria-label": "Keyboard shortcuts" },
-        ...[["/", "filter"], ["↑ ↓", "select"], ["enter", "show"], ["c", "copy"], ["e", "edit"], ["d", "delete"], ["n", "new"], ["esc", "close"]].map(([k, what]) => h("span", {}, h("kbd", {}, k), what)),
+        ...[["/", "filter"], ["↑ ↓", "select"], ["enter", "show"], ["c", "copy"], ["e", "edit"], ["d", "delete"], ["n", "new"], ["esc", "close"], ["g v·d·a", "switch"], ["?", "help"]].map(([k, what]) => h("span", {}, h("kbd", {}, k), what)),
       ),
     ),
   );
@@ -690,13 +690,6 @@ export async function vaultView(main: HTMLElement, host: Host): Promise<void> {
     else if (cmd === "copy") void copyValue(sel);
   }
 
-  function onLockChange(e: Event): void {
-    if (!active()) return document.removeEventListener("change", onLockChange);
-    const select = e.target as HTMLSelectElement;
-    if (select.id !== "lock-after") return;
-    say(select.value === "immediately" ? "The vault locks when you close or reload this tab." : `The vault locks ${LOCK_LABEL[select.value as LockAfter] ?? select.value}.`, "ok");
-  }
-
   filter.addEventListener("input", () => {
     selected = null;
     confirming = null;
@@ -705,9 +698,9 @@ export async function vaultView(main: HTMLElement, host: Host): Promise<void> {
   newButton.addEventListener("click", () => openEditor(null));
   refreshButton.addEventListener("click", () => void refresh());
   document.addEventListener("keydown", onKey);
-  document.addEventListener("change", onLockChange);
 
   body.replaceChildren(root);
   markSynced();
   draw();
+  if (host.notice) say(host.notice.text, host.notice.kind);
 }

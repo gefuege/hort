@@ -1,7 +1,7 @@
-// Hort web app: /login, /recover, /devices, /vault and /r/<id> (contract §5.4, §8.1, §8.2).
-// The vault key lives in this module's memory. The pages are one app: links
-// between them swap the view without a page load, so an unlocked vault stays
-// unlocked. With a lock time other than "immediately", reloads and new tabs
+// Hort web app: one console with the views /vault, /devices, /access and
+// /r/<id> (contract §5.4, §8.1, §8.2). The vault key lives in this module's
+// memory. Tabs and g-chords swap the view without a page load, so an unlocked
+// vault stays unlocked. With a lock time other than "immediately", reloads and new tabs
 // reopen it until that time (unlock-memory.ts); signing out drops everything.
 // No innerHTML anywhere: the CSP requires Trusted Types for script sinks.
 import { b64Decode, b64Encode, b64urlDecode, b64urlEncode, str } from "../src/wire";
@@ -42,6 +42,7 @@ import {
 } from "./unlock-memory";
 import { REQUEST_PATH, requestView } from "./request-view";
 import { forgetVault, vaultView } from "./vault-view";
+import { devicesView } from "./devices-view";
 
 // ---------------------------------------------------------------------------
 // State, memory only
@@ -49,7 +50,7 @@ import { forgetVault, vaultView } from "./vault-view";
 type Unlocked = { accountId: Uint8Array; vk: Uint8Array; keys: AccountKeys };
 let unlocked: Unlocked | null = null;
 let signedIn = false;
-// Kit values typed on /recover, kept for the print view on that page only.
+// Kit values typed for a kit unlock, kept for printing the kit in the access view.
 let kit: { accountId: string; secretKey: string } | null = null;
 
 function forget(): void {
@@ -136,13 +137,6 @@ async function changeLock(choice: LockAfter): Promise<void> {
   await api("DELETE", UNLOCK_KEY_PATH).catch(() => undefined);
 }
 
-function lockControl(): HTMLElement {
-  const select = h("select", { id: "lock-after", class: "lock-switch", "aria-label": "Lock time" }, ...LOCK_CHOICES.map((c) => h("option", { value: c }, `lock ${LOCK_LABEL[c]}`)));
-  select.value = lockSetting();
-  select.addEventListener("change", () => void changeLock(select.value as LockAfter));
-  return select;
-}
-
 // The server refused the session: the kept unlock is useless from here.
 function sessionEnded(): void {
   signedIn = false;
@@ -176,23 +170,23 @@ function add(el: HTMLElement, ...children: Child[]): void {
   for (const c of children) if (c !== null && c !== false && c !== undefined) el.append(c);
 }
 
-function field(label: string, input: HTMLInputElement | HTMLTextAreaElement, hint?: string): HTMLElement {
+function field(label: string, input: HTMLInputElement | HTMLTextAreaElement, hint?: string, cls?: string): HTMLElement {
   input.id ||= `f-${label.toLowerCase().replace(/\W+/g, "-")}`;
-  return h("div", { class: "field" }, h("label", { htmlFor: input.id }, label), input, hint ? h("p", { class: "hint" }, hint) : null);
+  return h("div", { class: cls ? `f ${cls}` : "f" }, h("label", { htmlFor: input.id }, label), input, hint ? h("p", { class: "hint" }, hint) : null);
 }
 
-function status(): { el: HTMLElement; set: (text: string, kind?: "error" | "ok") => void } {
-  const el = h("p", { class: "status", role: "status" });
+// The status line at the foot of a view; `inline` is a status line inside a block.
+function status(inline = false): { el: HTMLElement; set: (text: string, kind?: "error" | "ok") => void } {
+  const base = inline ? "status" : "v-status status";
+  const el = h("p", { class: base, role: "status", "aria-live": "polite" });
   return {
     el,
     set(text, kind) {
       el.textContent = text;
-      el.className = `status${kind ? ` status-${kind}` : ""}`;
+      el.className = `${base}${kind ? ` status-${kind}` : ""}`;
     },
   };
 }
-
-const time = (t: number | null) => (t === null ? "never" : new Date(t * 1000).toLocaleString());
 
 // Runs a button action with the button disabled and errors shown in place.
 function action(button: HTMLButtonElement, out: ReturnType<typeof status>, run: () => Promise<void>): void {
@@ -405,26 +399,241 @@ async function signOut(): Promise<void> {
   dropUnlock();
   if (rememberedAccount() && confirm("Forget this device? Your next sign-in here then asks for the passkey twice again.")) forgetDevice();
   forget();
-  location.assign("/login");
+  location.assign("/vault");
 }
 
 // ---------------------------------------------------------------------------
-// Views
+// Console: one window, a view per address, the session in the menubar
 
-function kitForm(onUnlocked: () => void, accountIdPrefill = ""): HTMLElement {
+type View = "vault" | "devices" | "access" | "request";
+const VIEW_PATH: Record<Exclude<View, "request">, string> = { vault: "/vault", devices: "/devices", access: "/access" };
+const CHORD: Record<string, View> = { v: "vault", d: "devices", a: "access", r: "request" };
+
+// The open request keeps its tab until it is answered or declined.
+let requestPath: string | null = null;
+let help = false;
+let kitOpen = false;
+// Signed in with a passkey that cannot unlock the vault: the account ID for the kit form.
+let signedInLocked: string | null = null;
+// The outcome of the previous view for the next view's status line.
+let notice: { text: string; kind?: "ok" | "error" } | null = null;
+// Starts the passkey sign-in of the unlock view, while it is shown.
+let signInNow: (() => void) | null = null;
+
+const viewOf = (path: string): View | null =>
+  REQUEST_PATH.test(path) ? "request" : ((Object.keys(VIEW_PATH) as (keyof typeof VIEW_PATH)[]).find((v) => VIEW_PATH[v] === path) ?? null);
+
+const typing = (t: EventTarget | null) => t instanceof HTMLElement && t.matches("input, textarea, select");
+
+// A document key listener that ends with its view: it detaches on the first key after the view is gone.
+function keys(root: HTMLElement, handle: (e: KeyboardEvent) => boolean | void): void {
+  const listener = (e: KeyboardEvent) => {
+    if (!root.isConnected) return document.removeEventListener("keydown", listener);
+    if (e.metaKey || e.ctrlKey || e.altKey || e.defaultPrevented) return;
+    if (handle(e)) e.preventDefault();
+  };
+  document.addEventListener("keydown", listener);
+}
+
+const promptLine = (cmd: string) => h("div", { class: "prompt static" }, h("span", { class: "ps1" }, "> ", h("span", { class: "cmd" }, cmd)));
+
+function foot(out: ReturnType<typeof status>, hints: string[][]): HTMLElement {
+  return h("div", { class: "foot" }, out.el, h("div", { class: "hints", "aria-label": "Keyboard shortcuts" }, ...hints.map(([k, what]) => h("span", {}, h("kbd", {}, k), what))));
+}
+
+const NAV_HINTS = [["g v·d·a", "switch"], ["?", "help"]];
+
+// Shows a line in the status bar of the current view.
+function flash(text: string, kind?: "ok" | "error"): void {
+  const line = document.querySelector<HTMLElement>(".win-body .v-status");
+  if (!line) return;
+  line.textContent = text;
+  line.className = `v-status status${kind ? ` status-${kind}` : ""}`;
+}
+
+// --- menubar: account, lock time, sign out
+
+const lockText = (c: LockAfter) => (c === "immediately" ? "when the tab closes" : LOCK_LABEL[c]);
+
+function lockMenu(): HTMLElement {
+  const button = h("button", { class: "tlink", type: "button", id: "lock-btn", "aria-haspopup": "menu", "aria-expanded": "false", "aria-controls": "lock-menu" }, `locks ${lockText(lockSetting())}`);
+  const items = LOCK_CHOICES.map((c) => h("button", { type: "button", role: "menuitemradio", tabIndex: -1, "aria-checked": String(c === lockSetting()) }, lockText(c)));
+  const menu = h("span", { class: "menu", role: "menu", id: "lock-menu", "aria-label": "Lock time", hidden: true }, ...items);
+  const wrap = h("span", { class: "lock-wrap" }, button, menu);
+  const open = (show: boolean) => {
+    menu.hidden = !show;
+    button.setAttribute("aria-expanded", String(show));
+    if (show) items[LOCK_CHOICES.indexOf(lockSetting())].focus();
+  };
+  button.addEventListener("click", () => open(button.getAttribute("aria-expanded") !== "true"));
+  items.forEach((item, i) =>
+    item.addEventListener("click", () => {
+      const choice = LOCK_CHOICES[i];
+      void changeLock(choice);
+      items.forEach((x, j) => x.setAttribute("aria-checked", String(i === j)));
+      button.textContent = `locks ${lockText(choice)}`;
+      open(false);
+      button.focus();
+      flash(choice === "immediately" ? "The vault locks when you close or reload this tab." : `The vault locks ${LOCK_LABEL[choice]}.`, "ok");
+    }),
+  );
+  menu.addEventListener("keydown", (e) => {
+    const i = items.indexOf(document.activeElement as HTMLButtonElement);
+    if (e.key === "Tab") return open(false);
+    if (e.key === "Escape") {
+      open(false);
+      button.focus();
+    } else if (e.key === "ArrowDown" || e.key === "ArrowUp") items[(i + (e.key === "ArrowDown" ? 1 : items.length - 1)) % items.length].focus();
+    else return;
+    e.preventDefault();
+    e.stopPropagation();
+  });
+  const outside = (e: MouseEvent) => {
+    if (!wrap.isConnected) return document.removeEventListener("click", outside);
+    if (!menu.hidden && !wrap.contains(e.target as Node)) open(false);
+  };
+  document.addEventListener("click", outside);
+  return wrap;
+}
+
+function sessionBar(): void {
+  const el = document.getElementById("session");
+  if (!el) return;
+  const account = unlocked?.accountId ?? rememberedAccount();
+  if (!account && !signedIn) {
+    const signIn = h("button", { class: "tlink", type: "button" }, "sign in");
+    signIn.addEventListener("click", () => {
+      kitOpen = false;
+      render();
+      signInNow?.();
+    });
+    el.replaceChildren(window.PublicKeyCredential ? signIn : "");
+    return;
+  }
+  const id = account ? accountIdEncode(account) : signedInLocked ?? "";
+  const signOutLink = h("button", { class: "tlink", type: "button" }, "sign out");
+  signOutLink.addEventListener("click", () => void signOut());
+  el.replaceChildren(
+    h(
+      "span",
+      { class: "status-line" },
+      h("span", { class: `acct${unlocked ? "" : " locked"}`, title: `Account ID ${id}` }, h("span", { class: "dot", "aria-hidden": "true" }), id.slice(0, 8) + (id.length > 8 ? "…" : "")),
+      h("span", { class: "sep", "aria-hidden": "true" }, "·"),
+      unlocked ? lockMenu() : h("span", {}, "locked"),
+      h("span", { class: "sep", "aria-hidden": "true" }, "·"),
+      signOutLink,
+    ),
+  );
+}
+
+// --- title bar: title and tabs
+
+function windowBar(view: View): void {
+  const title = document.querySelector(".win-bar .title");
+  const tabs = document.querySelector(".win-bar .tabs");
+  if (title) title.textContent = `hort — ${!unlocked ? (signedIn || rememberedAccount() ? "locked" : "sign in") : help ? "help" : view}`;
+  if (!tabs) return;
+  const views: View[] = ["vault", "devices", "access"];
+  if (requestPath) views.push("request");
+  tabs.replaceChildren(
+    ...(unlocked
+      ? views.map((v) =>
+          h(
+            "button",
+            { class: "tab", role: "tab", type: "button", "aria-selected": String(v === view && !help), onclick: () => go(v) },
+            v === "request" ? h("span", { class: "new", "aria-hidden": "true" }) : null,
+            v,
+            h("kbd", {}, `g ${v[0]}`),
+          ),
+        )
+      : []),
+  );
+}
+
+function go(view: View): void {
+  if (view === "request" && !requestPath) return;
+  help = false;
+  navigate(view === "request" ? requestPath! : VIEW_PATH[view]);
+}
+
+// --- locked or signed out: the console only unlocks
+
+// The passkey button: signs in, unlocks where the passkey can, then `done`.
+function passkeyButton(label: string, out: ReturnType<typeof status>, done: () => void): HTMLButtonElement {
+  const button = h("button", { class: "tbtn tbtn-primary tbtn-big", type: "button", id: "unlock-btn" }, h("kbd", {}, "⏎"), label);
+  action(button, out, async () => {
+    if (!window.PublicKeyCredential) throw new Error("This browser does not support passkeys.");
+    out.set("Waiting for your passkey …");
+    const { result, unlockedNow } = await passkeySignIn((t) => out.set(t));
+    if (unlockedNow || unlocked) return done();
+    signedInLocked = result.account_id;
+    render();
+  });
+  return button;
+}
+
+// Passkey sign-in inside a view whose session the server refused.
+function signInBlock(into: HTMLElement, done: () => void, sentence?: string): void {
+  const out = status(true);
+  into.append(h("section", { class: "block" }, sentence ? h("p", { class: "ink" }, sentence) : null, h("div", { class: "row-actions" }, passkeyButton("sign in with passkey", out, done)), out.el));
+}
+
+const REQUEST_SENTENCE = "Your agent asked for a secret. Sign in with your passkey to see the request and answer it.";
+
+function unlockView(body: HTMLElement, view: View): void {
+  signInNow = null;
+  if (kitOpen || signedInLocked || !window.PublicKeyCredential) return kitView(body, view);
+  const known = rememberedAccount();
   const out = status();
-  const accountInput = h("input", { autocomplete: "username", spellcheck: false, value: accountIdPrefill, required: true });
+  const button = passkeyButton(known ? "unlock with passkey" : "sign in with passkey", out, () => render());
+  signInNow = () => button.click();
+  const kitButton = h("button", { class: "tbtn", type: "button", onclick: () => openKit(true) }, h("kbd", {}, "k"), "unlock with Emergency Kit");
+  const root = h(
+    "div",
+    { class: "console-view" },
+    promptLine(known ? "hort unlock" : "hort sign-in"),
+    h(
+      "section",
+      { class: "block lead" },
+      h("p", { class: "ink" }, view === "request" ? REQUEST_SENTENCE : known ? "Your vault is locked. Your passkey unlocks it." : "Sign in with your passkey. It signs you in and unlocks your vault."),
+      known
+        ? h("p", {}, "Account ", h("code", {}, accountIdEncode(known)), " is remembered in this browser, so one confirmation is enough.")
+        : h("p", {}, "The first time on a device you confirm your passkey twice: once to sign in, once to unlock your vault. Hort then remembers your account ID in this browser, so next time one confirmation is enough."),
+      h("div", { class: "row-actions" }, button),
+      h("p", { class: "alt" }, "No passkey yet, or lost it? ", kitButton),
+    ),
+    foot(out, [["enter", known ? "unlock" : "sign in"], ["k", "Emergency Kit"]]),
+  );
+  body.append(root);
+  keys(root, (e) => {
+    if (typing(e.target) || (e.target as Element).closest("button, a")) return;
+    if (e.key === "Enter") button.click();
+    else if (e.key === "k") openKit(true);
+    else return;
+    return true;
+  });
+}
+
+function openKit(open: boolean): void {
+  kitOpen = open;
+  if (!open) signedInLocked = null;
+  render();
+  if (open) [...document.querySelectorAll<HTMLInputElement>(".win-body input")].find((i) => !i.value)?.focus();
+}
+
+function kitView(body: HTMLElement, view: View): void {
+  const out = status();
+  const prefill = signedInLocked ?? (rememberedAccount() ? accountIdEncode(rememberedAccount()!) : "");
+  const accountInput = h("input", { autocomplete: "username", spellcheck: false, value: prefill, required: true });
   const keyInput = h("input", { autocomplete: "off", spellcheck: false, required: true, placeholder: "H4-XXXXXX-XXXXX-XXXXX-XXXXX-XXXXX-X" });
   const passInput = h("input", { type: "password", autocomplete: "current-password", required: true });
-  const submit = h("button", { class: "btn btn-primary", type: "submit" }, "Unlock");
+  const submit = h("button", { class: "tbtn tbtn-primary tbtn-big", type: "submit" }, h("kbd", {}, "⏎"), "unlock");
+  const back = window.PublicKeyCredential ? h("button", { class: "tbtn", type: "button", onclick: () => openKit(false) }, h("kbd", {}, "esc"), "back to passkey") : null;
   const form = h(
     "form",
-    { class: "form" },
-    field("Account ID", accountInput),
-    field("Secret Key", keyInput),
-    field("Passphrase", passInput),
-    h("div", { class: "actions" }, submit),
-    out.el,
+    {},
+    h("div", { class: "fgrid" }, field("Account ID", accountInput), field("Secret Key", keyInput), field("Passphrase", passInput)),
+    h("div", { class: "row-actions" }, submit, back),
   );
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
@@ -438,128 +647,88 @@ function kitForm(onUnlocked: () => void, accountIdPrefill = ""): HTMLElement {
       kit = { accountId: accountIdEncode(accountId), secretKey: await formatSecretKey(secretKey) };
       passInput.value = "";
       keyInput.value = "";
-      onUnlocked();
+      kitOpen = false;
+      signedInLocked = null;
+      if (view === "request") return render();
+      notice = { text: signedIn ? "Unlocked with your Emergency Kit." : "Unlocked with your Emergency Kit. Register a passkey to sign in on this device.", kind: "ok" };
+      navigate("/access");
     } catch (err) {
       out.set(messageOf(err), "error");
     } finally {
       submit.disabled = false;
     }
   });
-  return form;
-}
-
-function unlockedPanel(): HTMLElement {
-  const out = status();
-  const signOutButton = h("button", { class: "btn btn-ghost", type: "button" }, "Sign out");
-  action(signOutButton, out, signOut);
-  return h(
-    "section",
-    { class: "panel" },
-    h("h2", { class: "panel-h" }, "Vault unlocked"),
-    h("p", {}, "Account ", h("code", {}, accountIdEncode(unlocked!.accountId))),
+  const root = h(
+    "div",
+    { class: "console-view" },
+    promptLine("hort unlock --kit"),
+    signedInLocked
+      ? h(
+          "section",
+          { class: "block" },
+          h("h3", {}, "> signed in, vault still locked"),
+          h("p", { class: "ink" }, "This passkey signs you in but cannot unlock your vault. Some passkey providers do not support that. Enter your passphrase and Secret Key to unlock."),
+        )
+      : null,
     h(
-      "p",
-      { class: "muted" },
-      lockSetting() === "immediately" || !signedIn
-        ? "Your vault key stays in this tab only. Closing the tab or signing out locks it again."
-        : `This browser keeps your vault unlocked across reloads and tabs, and locks it ${LOCK_LABEL[lockSetting()]} or when you sign out.`,
+      "section",
+      { class: "block" },
+      h("h3", {}, "> unlock with your Emergency Kit"),
+      h("p", {}, window.PublicKeyCredential ? "" : "This browser does not support passkeys. ", "Enter the account ID, Secret Key and passphrase from your Emergency Kit. Enter them only on the server named in your kit."),
+      form,
     ),
-    h("div", { class: "actions" }, signedIn ? h("a", { class: "btn btn-primary", href: "/vault" }, "Open vault") : null, signedIn ? h("a", { class: "btn btn-ghost", href: "/devices" }, "Devices") : null, location.pathname === "/recover" ? null : h("a", { class: "btn btn-ghost", href: "/recover" }, "Set new passphrase"), signOutButton),
-    out.el,
+    foot(out, back ? [["enter", "unlock"], ["esc", "back"]] : [["enter", "unlock"]]),
   );
-}
-
-function loginView(main: HTMLElement, onUnlocked: () => void = () => navigate("/vault")): void {
-  if (unlocked && signedIn) {
-    main.append(unlockedPanel());
-    return;
-  }
-  if (!window.PublicKeyCredential) {
-    main.append(
-      h("p", { class: "sec-intro" }, "This browser does not support passkeys. ", h("a", { href: "/recover" }, "Unlock with your Emergency Kit"), " instead."),
-    );
-    return;
-  }
-  const out = status();
-  const button = h("button", { class: "btn btn-primary", type: "button" }, "Unlock with passkey");
-  const area = h("div", {});
-  action(button, out, async () => {
-    out.set("Waiting for your passkey …");
-    const { result, unlockedNow } = await passkeySignIn((t) => out.set(t));
-    if (unlockedNow) {
-      onUnlocked();
-      return;
-    }
-    button.hidden = true;
-    out.set("");
-    area.replaceChildren(
-      h(
-        "section",
-        { class: "panel" },
-        h("h2", { class: "panel-h" }, "Signed in, vault still locked"),
-        h("p", {}, "This passkey signs you in but cannot unlock your vault. Some passkey providers do not support that. Enter your passphrase and Secret Key to unlock."),
-        kitForm(onUnlocked, result.account_id),
-      ),
-    );
+  body.append(root);
+  keys(root, (e) => {
+    if (e.key !== "Escape" || !back) return;
+    openKit(false);
+    return true;
   });
-  add(main,
-    h("p", { class: "sec-intro" }, "Your vault is locked. Your passkey signs you in and unlocks it."),
-    h("div", { class: "actions" }, button),
-    out.el,
-    unlocked || rememberedAccount()
-      ? null
-      : h("p", { class: "muted" }, "The first time on a device you confirm your passkey twice: once to sign in, once to unlock your vault. Hort then remembers your account ID in this browser, so next time one confirmation is enough."),
-    area,
-    h("p", { class: "muted" }, "No passkey yet, or lost it? ", h("a", { href: "/recover" }, "Recover with your Emergency Kit"), "."),
-  );
 }
 
-function recoverView(main: HTMLElement): void {
-  if (!unlocked) {
-    main.append(
-      h(
-        "p",
-        { class: "sec-intro" },
-        "Enter the account ID, Secret Key and passphrase from your Emergency Kit. Enter them only on the server named in your kit.",
-      ),
-      kitForm(() => render("/recover")),
-    );
-    return;
-  }
-  const u = unlocked;
+// --- access: passkey, new passphrase, Emergency Kit
 
-  const passkeyOut = status();
-  // Signed in with a passkey (no kit): the passphrase is the task here, another passkey is secondary.
-  const viaPasskey = !kit;
-  const registerButton = h("button", { class: viaPasskey ? "btn btn-ghost" : "btn btn-primary", type: "button" }, viaPasskey ? "Add another passkey" : "Register a passkey");
-  const next = h("div", { class: "actions" });
-  action(registerButton, passkeyOut, async () => {
+function accessView(body: HTMLElement, first: typeof notice): void {
+  const u = unlocked!;
+  const viaKit = kit !== null;
+  const out = status();
+
+  const registerButton = h("button", { class: `tbtn tbtn-big${viaKit ? " tbtn-primary" : ""}`, type: "button" }, h("kbd", {}, "p"), viaKit ? "register a passkey" : "add another passkey");
+  action(registerButton, out, async () => {
     if (!window.PublicKeyCredential) throw new Error("This browser does not support passkeys.");
-    passkeyOut.set("Waiting for your passkey …");
-    const unlocks = await registerPasskey(u, (t) => passkeyOut.set(t));
-    passkeyOut.set(
+    out.set("Waiting for your passkey …");
+    const unlocks = await registerPasskey(u, (t) => out.set(t));
+    out.set(
       unlocks
         ? "Passkey registered. It signs you in and unlocks your vault."
         : "Passkey registered for sign-in. It cannot unlock your vault, so after signing in you enter your passphrase and Secret Key.",
       "ok",
     );
-    next.replaceChildren(h("a", { class: "btn btn-ghost", href: "/login" }, "Sign in with it"));
   });
 
-  const passOut = status();
   const newPass = h("input", { type: "password", autocomplete: "new-password", required: true });
   const repeat = h("input", { type: "password", autocomplete: "new-password", required: true });
   // Unlocked with the kit, the Secret Key is known; unlocked with a passkey, it comes from the printed kit.
-  const keyInput = kit ? null : h("input", { autocomplete: "off", spellcheck: false, required: true, placeholder: "H4-XXXXXX-XXXXX-XXXXX-XXXXX-XXXXX-X" });
-  const passSubmit = h("button", { class: viaPasskey ? "btn btn-primary" : "btn btn-ghost", type: "submit" }, "Set new passphrase");
+  const keyInput = viaKit ? null : h("input", { autocomplete: "off", spellcheck: false, required: true, placeholder: "H4-XXXXXX-XXXXX-XXXXX-XXXXX-XXXXX-X" });
+  const passSubmit = h("button", { class: "tbtn tbtn-primary", type: "submit" }, "set new passphrase");
   const passForm = h(
     "form",
-    { class: "form" },
-    keyInput && field("Secret Key", keyInput, "Your passkey opens the vault but never shows your Secret Key, and a new passphrase only works together with it. Copy it from your Emergency Kit. A wrong Secret Key makes the new passphrase useless; your passkeys keep working."),
-    field("New passphrase", newPass),
-    field("Repeat new passphrase", repeat),
-    h("div", { class: "actions" }, passSubmit),
-    passOut.el,
+    {},
+    h(
+      "div",
+      { class: "fgrid" },
+      keyInput &&
+        field(
+          "Secret Key",
+          keyInput,
+          "Your passkey opens the vault but never shows your Secret Key, and a new passphrase only works together with it. Copy it from your Emergency Kit. A wrong Secret Key makes the new passphrase useless; your passkeys keep working.",
+          "full",
+        ),
+      field("New passphrase", newPass),
+      field("Repeat new passphrase", repeat),
+    ),
+    h("div", { class: "row-actions" }, passSubmit),
   );
   passForm.addEventListener("submit", async (e) => {
     e.preventDefault();
@@ -567,7 +736,7 @@ function recoverView(main: HTMLElement): void {
     try {
       if (newPass.value !== repeat.value) throw new Error("The two passphrases differ.");
       const secretKey = await parseSecretKey(kit ? kit.secretKey : keyInput!.value);
-      passOut.set("Setting the new passphrase … this takes a few seconds.");
+      out.set("Setting the new passphrase … this takes a few seconds.");
       const res = await fetch(`/api/v1/accounts/${accountIdEncode(u.accountId)}/slot`);
       const { slot } = await ok<{ slot: WireSlot }>(res);
       const s = await newPassphraseSlot(u.keys, u.vk, secretKey, newPass.value, slot.version);
@@ -576,16 +745,15 @@ function recoverView(main: HTMLElement): void {
       newPass.value = "";
       repeat.value = "";
       if (keyInput) keyInput.value = "";
-      passOut.set("New passphrase set. Your devices pick it up at their next sync; your Secret Key stays the same.", "ok");
+      out.set("New passphrase set. Your devices pick it up at their next sync; your Secret Key stays the same.", "ok");
     } catch (err) {
-      passOut.set(messageOf(err), "error");
+      out.set(messageOf(err), "error");
     } finally {
       passSubmit.disabled = false;
     }
   });
 
-  const printButton = h("button", { class: "btn btn-ghost", type: "button" }, "Print Emergency Kit");
-  printButton.addEventListener("click", () => {
+  const print = () => {
     if (!kit) return;
     document.getElementById("kit")?.remove();
     document.body.append(
@@ -598,161 +766,136 @@ function recoverView(main: HTMLElement): void {
       ),
     );
     window.print();
-  });
-
-  const passkeyPanel = h("section", { class: "panel" }, h("h2", { class: "panel-h" }, viaPasskey ? "Another passkey" : "Passkey"), h("div", { class: "actions" }, registerButton), passkeyOut.el, next);
-  const passPanel = h("section", { class: "panel" }, h("h2", { class: "panel-h" }, "New passphrase"), passForm);
-  add(main,
-    h(
-      "p",
-      { class: "sec-intro" },
-      viaPasskey
-        ? "You are signed in with a passkey. Set a new passphrase here; add another passkey only for a new device or password manager."
-        : "Your vault is unlocked in this tab. Register a passkey so you can sign in on this device, or set a new passphrase.",
-    ),
-    ...(viaPasskey ? [passPanel, passkeyPanel] : [passkeyPanel, passPanel]),
-    kit ? h("section", { class: "panel" }, h("h2", { class: "panel-h" }, "Emergency Kit"), h("p", { class: "muted" }, "Print the kit with the values you just entered. Nothing is stored."), h("div", { class: "actions" }, printButton)) : null,
-    unlockedPanel(),
-  );
-}
-
-type Listing = {
-  devices: { id: string; name: string; created_at: number; last_seen_at: number | null; revoked_at: number | null }[];
-  passkeys: { id: string; prf: boolean; created_at: number; last_used_at: number | null; revoked_at: number | null }[];
-  last_visit_at?: number | null;
-};
-
-async function devicesView(main: HTMLElement): Promise<void> {
-  const out = status();
-  main.append(out.el);
-  const res = await fetch("/api/v1/devices", { credentials: "same-origin" });
-  if (res.status === 401) {
-    sessionEnded();
-    out.set("");
-    loginView(main, () => render("/devices"));
-    return;
-  }
-  const list = await ok<Listing>(res);
-  signedIn = true;
-
-  const since = list.last_visit_at ?? null;
-  const notices: string[] = [];
-  if (since !== null) {
-    for (const d of list.devices) {
-      if (d.created_at > since) notices.push(`New device “${d.name}” enrolled ${time(d.created_at)}`);
-      if (d.revoked_at !== null && d.revoked_at > since) notices.push(`Device “${d.name}” revoked ${time(d.revoked_at)}`);
-    }
-    for (const p of list.passkeys) {
-      if (p.created_at > since) notices.push(`New passkey ${p.id.slice(0, 8)} added ${time(p.created_at)}`);
-      if (p.revoked_at !== null && p.revoked_at > since) notices.push(`Passkey ${p.id.slice(0, 8)} revoked ${time(p.revoked_at)}`);
-    }
-  }
-
-  // Marks the row revoked in place: a reload would reset the server-side visit time and drop the notices above.
-  const revoke = (label: string, item: { id: string; revoked_at: number | null }) => {
-    const b = h("button", { class: "btn btn-ghost btn-small", type: "button" }, "Revoke");
-    action(b, out, async () => {
-      if (!confirm(`Revoke ${label}? It loses access to this account's server.`)) return;
-      await ok(await api("DELETE", `/api/v1/devices/${item.id}`));
-      item.revoked_at = Math.floor(Date.now() / 1000);
-      b.replaceWith(state(item.revoked_at, b));
-    });
-    return b;
   };
-  const state = (revoked: number | null, b: HTMLElement) => (revoked === null ? b : h("span", { class: "muted" }, `revoked ${time(revoked)}`));
 
-  const signOutButton = h("button", { class: "btn btn-ghost", type: "button" }, "Sign out");
-  action(signOutButton, out, signOut);
+  const root = h(
+    "div",
+    { class: "console-view" },
+    promptLine("hort access"),
+    h(
+      "section",
+      { class: "block" },
+      h("h3", {}, "> passkey"),
+      viaKit
+        ? h("p", { class: "ink" }, "Your vault is unlocked in this tab with your Emergency Kit. Register a passkey so you can sign in on this device.")
+        : h("p", {}, "List and revoke your passkeys under devices (", h("code", {}, "g d"), "). Add another only for a new device or password manager."),
+      h("div", { class: "row-actions" }, registerButton),
+    ),
+    h("section", { class: "block" }, h("h3", {}, "> new passphrase"), passForm),
+    h(
+      "section",
+      { class: "block" },
+      h("h3", {}, "> emergency kit"),
+      viaKit
+        ? h("p", {}, "Print the kit with the values you just entered. Nothing is stored.")
+        : h("p", {}, "Your Emergency Kit holds your account ID and Secret Key. You can print it again right after unlocking with it."),
+      viaKit && h("div", { class: "row-actions" }, h("button", { class: "tbtn", type: "button", onclick: print }, h("kbd", {}, "k"), "print Emergency Kit")),
+    ),
+    foot(out, [["p", "add passkey"], ...(viaKit ? [["k", "print kit"]] : []), ...NAV_HINTS]),
+  );
+  body.append(root);
+  if (first) out.set(first.text, first.kind);
+  keys(root, (e) => {
+    if (typing(e.target)) return;
+    if (e.key === "p") registerButton.click();
+    else if (e.key === "k" && viaKit) print();
+    else return;
+    return true;
+  });
+}
 
-  add(main,
-    notices.length
-      ? h("section", { class: "notices", "aria-label": "Since your last visit" }, h("h2", { class: "panel-h" }, "Since your last visit"), h("ul", {}, ...notices.map((n) => h("li", {}, n))))
-      : null,
-    h("h2", { class: "sub-h" }, "Devices"),
+// --- help
+
+function helpView(body: HTMLElement): void {
+  const k = (key: string, what: string) => h("li", {}, h("kbd", { class: "k" }, key), h("span", {}, what));
+  const out = status();
+  body.append(
     h(
-      "table",
-      { class: "list" },
-      h("thead", {}, h("tr", {}, h("th", {}, "Name"), h("th", {}, "Added"), h("th", {}, "Last seen"), h("th", {}, ""))),
-      h("tbody", {}, ...list.devices.map((d) => h("tr", {}, h("td", {}, d.name), h("td", { "data-label": "Added" }, time(d.created_at)), h("td", { "data-label": "Last seen" }, time(d.last_seen_at)), h("td", {}, state(d.revoked_at, revoke(`device “${d.name}”`, d)))))),
+      "div",
+      { class: "console-view" },
+      promptLine("hort help"),
+      h(
+        "ul",
+        { class: "help" },
+        h("li", { class: "help-h" }, "// switch view"),
+        k("g v", "vault"),
+        k("g d", "devices and passkeys"),
+        k("g a", "access: passkey, passphrase, Emergency Kit"),
+        requestPath ? k("g r", "the open request") : null,
+        k("?", "this help"),
+        k("esc", "close help"),
+        h("li", { class: "help-h" }, "// in a list"),
+        k("/", "filter"),
+        k("↑ ↓", "select"),
+        k("enter", "show or hide value"),
+        k("c", "copy, clears after 30 s"),
+        k("e", "edit"),
+        k("n", "new secret"),
+        k("r", "refresh"),
+        k("d", "delete value, or revoke a device or passkey"),
+        k("y a n", "answer the inline question"),
+        h("li", { class: "help-h" }, "// access"),
+        k("p", "add a passkey"),
+        k("k", "print the Emergency Kit after a kit unlock"),
+      ),
+      foot(out, [["esc", "close help"]]),
     ),
-    h("h2", { class: "sub-h" }, "Passkeys"),
-    list.passkeys.length
-      ? h(
-          "table",
-          { class: "list" },
-          h("thead", {}, h("tr", {}, h("th", {}, "Passkey"), h("th", {}, "Unlocks vault"), h("th", {}, "Added"), h("th", {}, "Last used"), h("th", {}, ""))),
-          h("tbody", {}, ...list.passkeys.map((p) => h("tr", {}, h("td", {}, h("code", {}, p.id.slice(0, 8))), h("td", { "data-label": "Unlocks vault" }, p.prf ? "yes" : "no"), h("td", { "data-label": "Added" }, time(p.created_at)), h("td", { "data-label": "Last used" }, time(p.last_used_at)), h("td", {}, state(p.revoked_at, revoke(`passkey ${p.id.slice(0, 8)}`, p)))))),
-        )
-      : h("p", { class: "muted" }, "No passkeys. ", h("a", { href: "/recover" }, "Register one"), " after unlocking with your Emergency Kit."),
-    h(
-      "p",
-      { class: "aside-note" },
-      "Revoking ends server access for that device or passkey. It does not protect against anyone who already holds your vault key; in that case create a new account and change the exposed secrets where they were issued.",
-    ),
-    h("div", { class: "actions" }, signOutButton),
   );
 }
 
-// ---------------------------------------------------------------------------
-// Router
+// --- router
 
-const routes: Record<string, { tag: string; title: string; view: (main: HTMLElement) => void | Promise<void> }> = {
-  "/login": { tag: "// login", title: "Sign in", view: loginView },
-  "/recover": { tag: "// recover", title: "Recover access", view: recoverView },
-  "/devices": { tag: "// devices", title: "Devices", view: devicesView },
-  "/vault": {
-    tag: "// vault",
-    title: "Vault",
-    view: (main) =>
-      vaultView(main, {
-        h, messageOf, api, ok,
-        unlocked: () => unlocked,
-        // The vault asks for sign-in only when the server refused the session (or there is none).
-        login: (into) => {
-          sessionEnded();
-          loginView(into, () => render("/vault"));
-        },
-      }),
-  },
-};
-
-// /r/<id>: an agent's secret request (contract §7.3).
-const requestRoute = {
-  tag: "// request",
-  title: "Secret request",
-  view: (main: HTMLElement) =>
-    requestView(
-      main,
+function render(path = location.pathname): void {
+  const view = viewOf(path) ?? "vault";
+  if (view === "request") requestPath = path;
+  // A fresh body per view: a view still loading appends to the detached old one, never into the next.
+  const old = document.querySelector(".win-body")!;
+  const body = old.cloneNode(false) as HTMLElement;
+  old.replaceWith(body);
+  document.getElementById("kit")?.remove();
+  sessionBar();
+  windowBar(view);
+  document.title = `${!unlocked ? "Sign in" : help ? "Help" : view === "request" ? "Secret request" : view[0].toUpperCase() + view.slice(1)} – Hort`;
+  const first = notice;
+  notice = null;
+  let run: void | Promise<void>;
+  if (!unlocked) run = unlockView(body, view);
+  else if (help) run = helpView(body);
+  else if (view === "access") run = accessView(body, first);
+  else if (view === "devices") run = devicesView(body, { h, messageOf, api, ok, login: (into) => (sessionEnded(), signInBlock(into, () => render(), "Sign in with your passkey to see the devices and passkeys of this account.")) });
+  else if (view === "request")
+    run = requestView(
+      body,
       {
         h,
-        status,
         messageOf,
         api,
         ok,
         keys: () => (unlocked && signedIn ? unlocked.keys : null),
         sessionLost: sessionEnded,
-        login: (into, done) => loginView(into, done),
+        login: (into, done) => signInBlock(into, done, REQUEST_SENTENCE),
+        done: (text, kind) => {
+          if (text) {
+            requestPath = null;
+            notice = { text, kind };
+          }
+          navigate("/vault");
+        },
       },
-      location.pathname,
-    ),
-};
-
-const routeFor = (path: string) => routes[path] ?? (REQUEST_PATH.test(path) ? requestRoute : undefined);
-
-function render(path: string): void {
-  const route = routeFor(path)!;
-  // A fresh <main> per view: a view still loading appends to the detached old one, never into the next page.
-  const old = document.querySelector("main")!;
-  const main = old.cloneNode(false) as HTMLElement;
-  old.replaceWith(main);
-  document.getElementById("kit")?.remove();
-  document.title = `${route.title} – Hort`;
-  for (const a of document.querySelectorAll<HTMLAnchorElement>(".m-links a")) {
-    if (a.pathname === path) a.setAttribute("aria-current", "page");
-    else a.removeAttribute("aria-current");
-  }
-  main.replaceChildren(h("p", { class: "sec-tag" }, route.tag), h("h1", { class: "sec-h" }, route.title));
-  Promise.resolve(route.view(main)).catch((err) => main.append(h("p", { class: "status status-error", role: "status" }, messageOf(err))));
+      path,
+    );
+  else
+    run = vaultView(body, {
+      h, messageOf, api, ok,
+      unlocked: () => unlocked,
+      notice: first ?? undefined,
+      // The vault asks for sign-in only when the server refused the session (or there is none).
+      login: (into) => {
+        sessionEnded();
+        signInBlock(into, () => render());
+      },
+    });
+  Promise.resolve(run).catch((err) => body.isConnected && body.append(h("p", { class: "v-status status status-error", role: "status" }, messageOf(err))));
 }
 
 function navigate(path: string): void {
@@ -760,29 +903,59 @@ function navigate(path: string): void {
   render(path);
 }
 
-document.addEventListener("click", (e) => {
-  const a = (e.target as Element).closest?.("a");
-  if (!a || a.origin !== location.origin || !routeFor(a.pathname) || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
-  e.preventDefault();
-  navigate(a.pathname);
+// g-chords and help, before any view's own keys: a view sees a key the console took as handled.
+let chord: number | undefined;
+document.addEventListener("keydown", (e) => {
+  if (!unlocked || e.metaKey || e.ctrlKey || e.altKey || e.defaultPrevented || typing(e.target)) return;
+  if ((e.target as Element).closest?.(".menu")) return;
+  if (chord !== undefined) {
+    window.clearTimeout(chord);
+    chord = undefined;
+    flash("");
+    const view = CHORD[e.key];
+    if (view && (view !== "request" || requestPath)) {
+      e.preventDefault();
+      go(view);
+    }
+    return;
+  }
+  if (e.key === "g") {
+    e.preventDefault();
+    chord = window.setTimeout(() => {
+      chord = undefined;
+      flash("");
+    }, 1500);
+    flash(`g … then v vault · d devices · a access${requestPath ? " · r request" : ""}`);
+  } else if (e.key === "?") {
+    e.preventDefault();
+    help = !help;
+    render();
+  } else if (e.key === "Escape" && help) {
+    e.preventDefault();
+    help = false;
+    render();
+  }
 });
-window.addEventListener("popstate", () => routeFor(location.pathname) && render(location.pathname));
+window.addEventListener("popstate", () => {
+  help = false;
+  render();
+});
 // Wipes memory only; the kept unlock in browser storage is what lets a reload reopen the vault.
 window.addEventListener("pagehide", forget);
 
 // Reopens a kept unlock, then renders. "Unlocking …" shows while that runs.
 async function start(): Promise<void> {
+  // /login and /recover redirect on the server; any other address of this page opens the vault view.
+  if (!viewOf(location.pathname)) history.replaceState(null, "", "/vault");
   const path = location.pathname;
-  if (!routeFor(path)) return;
   if (storedUnlock()) {
-    document.querySelector("main")?.replaceChildren(h("p", { class: "status", role: "status" }, "Unlocking …"));
+    document.querySelector(".win-body")?.replaceChildren(h("p", { class: "v-status status", role: "status" }, "Unlocking …"));
     await restoreUnlocked();
   }
   // A click during "Unlocking …" rendered its view locked; render it again once unlocked.
-  if (location.pathname === path || unlocked) render(location.pathname);
+  if (location.pathname === path || unlocked) render();
 }
 
 // A page restored from the back-forward cache shows the state it had, but its memory was dropped.
 window.addEventListener("pageshow", (e) => e.persisted && void start());
-if (routeFor(location.pathname)) document.querySelector(".m-nav")?.append(lockControl());
 void start();

@@ -25,7 +25,6 @@ type StatusOut = { el: HTMLElement; set: (text: string, kind?: "error" | "ok") =
 // What the page needs from the app shell, which owns the unlocked vault.
 export type Host = {
   h: <K extends keyof HTMLElementTagNameMap>(tag: K, props?: Record<string, unknown>, ...children: Child[]) => HTMLElementTagNameMap[K];
-  status: () => StatusOut;
   messageOf: (err: unknown) => string;
   api: (method: string, path: string, o?: { body?: string }) => Promise<Response>;
   ok: <T>(res: Response) => Promise<T>;
@@ -35,6 +34,8 @@ export type Host = {
   sessionLost: () => void;
   // Renders passkey sign-in (and unlock) into `into`; `done` runs once the vault is unlocked.
   login: (into: HTMLElement, done: () => void) => void;
+  // Closes the request and returns to the vault, with the outcome for its status line.
+  done: (text?: string, kind?: "ok") => void;
 };
 
 export const REQUEST_PATH = /^\/r\/([0-9a-f]{32})$/;
@@ -44,24 +45,45 @@ class SessionLost extends Error {}
 type RequestRecord = { status: string; meta_ct: string; revision_ids: string[] };
 
 export async function requestView(main: HTMLElement, host: Host, path: string): Promise<void> {
+  const { h } = host;
   const id = REQUEST_PATH.exec(path)![1];
-  const body = host.h("div");
-  main.append(body);
+  const body = h("div");
+  const line = h("p", { class: "v-status status", role: "status", "aria-live": "polite" });
+  const out: StatusOut = {
+    el: line,
+    set(text, kind) {
+      line.textContent = text;
+      line.className = `v-status status${kind ? ` status-${kind}` : ""}`;
+    },
+  };
+  const root = h(
+    "div",
+    { class: "console-view" },
+    h("div", { class: "prompt static" }, h("span", { class: "ps1" }, "> ", h("span", { class: "cmd" }, "hort request"))),
+    body,
+    h("div", { class: "foot" }, line, h("div", { class: "hints", "aria-label": "Keyboard shortcuts" }, ...[["enter", "store"], ["esc", "back to vault"], ["g v·d·a", "switch"], ["?", "help"]].map(([k, what]) => h("span", {}, h("kbd", {}, k), what)))),
+  );
+  main.append(root);
+  const onKey = (e: KeyboardEvent) => {
+    if (!root.isConnected) return document.removeEventListener("keydown", onKey);
+    if (e.key !== "Escape" || e.defaultPrevented) return;
+    e.preventDefault();
+    host.done();
+  };
+  document.addEventListener("keydown", onKey);
   const show = async (): Promise<void> => {
     body.replaceChildren();
+    out.set("");
     try {
-      await load(body, host, id, show);
+      await load(body, host, id, show, out);
     } catch (err) {
       if (!(err instanceof SessionLost)) {
-        body.append(host.h("p", { class: "status status-error", role: "status" }, host.messageOf(err)));
+        out.set(host.messageOf(err), "error");
         return;
       }
       host.sessionLost();
-      body.replaceChildren(
-        host.h("p", { class: "sec-intro" }, "Your agent asked for a secret. Sign in with your passkey to see the request and answer it."),
-      );
-      const slot = host.h("div");
-      body.append(slot);
+      const slot = h("div");
+      body.replaceChildren(slot);
       host.login(slot, () => void show());
     }
   };
@@ -95,7 +117,7 @@ async function pull(host: Host, keys: AccountKeys, name: string, after: number, 
   }
 }
 
-async function load(body: HTMLElement, host: Host, id: string, retry: () => Promise<void>): Promise<void> {
+async function load(body: HTMLElement, host: Host, id: string, retry: () => Promise<void>, out: StatusOut): Promise<void> {
   const { h } = host;
   const keys = host.keys();
   if (!keys) throw new SessionLost();
@@ -103,8 +125,13 @@ async function load(body: HTMLElement, host: Host, id: string, retry: () => Prom
   const res = await get(host, `/api/v1/requests/${id}`);
   if (res.status === 404) {
     body.append(
-      h("p", { class: "sec-intro" }, "This request was not found in your account."),
-      h("p", { class: "muted" }, "Check that you signed in with the passkey of the account your agent uses."),
+      h(
+        "section",
+        { class: "block" },
+        h("h3", {}, "> request not found"),
+        h("p", { class: "ink" }, "This request was not found in your account."),
+        h("p", {}, "Check that you signed in with the passkey of the account your agent uses."),
+      ),
     );
     return;
   }
@@ -116,8 +143,9 @@ async function load(body: HTMLElement, host: Host, id: string, retry: () => Prom
     throw new Error("This request cannot be read with your vault key.");
   }
 
-  body.append(
-    h("p", { class: "sec-intro" }, "Your agent asks you for a secret. The agent never sees what you enter here."),
+  const block = h("section", { class: "block" }, h("h3", {}, "> your agent asks for a secret"), h("p", { class: "ink" }, "The agent never sees what you enter here."));
+  body.append(block);
+  block.append(
     h(
       "dl",
       { class: "facts" },
@@ -140,7 +168,7 @@ async function load(body: HTMLElement, host: Host, id: string, retry: () => Prom
       declined: "This request was declined. Nothing was stored.",
       expired: "This request expired. Requests last 24 hours; ask your agent to request it again.",
     };
-    body.append(h("section", { class: "panel" }, h("h2", { class: "panel-h" }, request.status), h("p", {}, text[request.status] ?? `Status: ${request.status}`)));
+    block.append(h("p", { class: "ink" }, text[request.status] ?? `Status: ${request.status}`));
     return;
   }
 
@@ -155,7 +183,6 @@ async function load(body: HTMLElement, host: Host, id: string, retry: () => Prom
   const now = current(entry);
   const exists = [...now.values.values()].some((v) => v.field === meta.field && v.key === key);
 
-  const out = host.status();
   const single = h("input", { id: "f-value", type: "password", autocomplete: "off", spellcheck: false });
   const multi = h("textarea", { id: "f-value-multi", rows: 6, autocomplete: "off", spellcheck: false, autocapitalize: "off", hidden: true });
   const multiToggle = h("input", { id: "f-multiline", type: "checkbox" });
@@ -168,14 +195,14 @@ async function load(body: HTMLElement, host: Host, id: string, retry: () => Prom
     to.focus();
   });
   const value = () => (multiToggle.checked ? multi.value : single.value);
-  const store = h("button", { class: "btn btn-primary", type: "submit" }, exists ? "Replace value" : "Store value");
-  const decline = h("button", { class: "btn btn-ghost", type: "button" }, "Decline");
+  const store = h("button", { class: "tbtn tbtn-primary tbtn-big", type: "submit" }, h("kbd", {}, "⏎"), exists ? "replace value" : "store value");
+  const decline = h("button", { class: "tbtn", type: "button" }, "decline");
   const form = h(
     "form",
-    { class: "form" },
+    {},
     h(
       "div",
-      { class: "field" },
+      { class: "f" },
       h("label", { htmlFor: "f-value" }, "Value"),
       single,
       multi,
@@ -184,14 +211,13 @@ async function load(body: HTMLElement, host: Host, id: string, retry: () => Prom
         ? h("p", { class: "hint" }, "A value is stored for this secret already. A new value replaces the current one; earlier values stay in history.")
         : h("p", { class: "hint" }, "No value is stored for this secret yet."),
     ),
-    h("div", { class: "actions" }, store, decline),
-    out.el,
+    h("div", { class: "row-actions" }, store, decline),
   );
 
   const finish = (text: string) => {
     single.value = "";
     multi.value = "";
-    form.replaceWith(h("section", { class: "panel" }, h("h2", { class: "panel-h" }, "Done"), h("p", {}, text)));
+    host.done(text, "ok");
   };
 
   form.addEventListener("submit", async (e) => {
@@ -216,7 +242,7 @@ async function load(body: HTMLElement, host: Host, id: string, retry: () => Prom
       const res = await host.api("POST", `/api/v1/requests/${id}/fulfill`, { body: JSON.stringify({ revisions: sealed }) });
       if (res.status === 401) throw new SessionLost();
       await host.ok(res);
-      finish(`Stored. Your agent can read "${meta.name}" now. You can close this page.`);
+      finish(`Stored. Your agent can read "${meta.name}" now.`);
     } catch (err) {
       if (err instanceof SessionLost) await retry();
       else out.set(host.messageOf(err), "error");
@@ -238,8 +264,6 @@ async function load(body: HTMLElement, host: Host, id: string, retry: () => Prom
     }
   });
 
-  body.append(
-    h("section", { class: "panel" }, h("h2", { class: "panel-h" }, "Your answer"), form),
-    h("p", { class: "aside-note" }, "The text above comes from your agent, not from Hort. Enter a value only if you expect this request."),
-  );
+  block.append(form);
+  body.append(h("p", { class: "note" }, "The text above comes from your agent, not from Hort. Enter a value only if you expect this request."));
 }

@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="light dark">
 <meta name="robots" content="noindex">
-<title>Devices – Hort</title>
+<title>Vault – Hort</title>
 <link rel="icon" type="image/png" href="/favicon.png">
 <link rel="stylesheet" href="/style.css">
 <script src="/theme.js"></script>
@@ -14,12 +14,13 @@
 <body>
 <nav class="m-nav">
   <a class="brand" href="/"><span class="chev">&lt;</span><img src="/img/logo.png" alt="" width="28" height="28"><span class="chev">&gt;</span>Hort</a>
-  <div class="m-links"><a href="/vault">vault</a><a href="/devices" aria-current="page">devices</a><a href="/recover">recover</a></div>
+  <div class="session" id="session"></div>
 </nav>
-<main class="section wrap">
-  <p class="sec-tag">// devices</p>
-  <h1 class="sec-h">Devices</h1>
-  <noscript><p class="sec-intro">The device list needs JavaScript.</p></noscript>
+<main class="console wrap">
+  <section class="win" aria-label="Hort console">
+    <div class="win-bar"><i></i><i></i><i></i><span class="title">hort — vault</span><div class="tabs" role="tablist" aria-label="Views"></div></div>
+    <div class="win-body"><noscript><p class="v-status status">The Hort console needs JavaScript.</p></noscript></div>
+  </section>
 </main>
 </body>
 </html>

@@ -1,6 +1,7 @@
 /// <reference types="vite/client" />
 import { describe, expect, it } from "vitest";
 import headersFile from "../public/_headers?raw";
+import redirectsFile from "../public/_redirects?raw";
 import { SECURITY_HEADERS } from "../src/entry";
 
 const pages = import.meta.glob("../public/**/*.{html,css}", { query: "?raw", import: "default", eager: true }) as Record<
@@ -23,7 +24,7 @@ describe("security headers (contract §8.3)", () => {
 describe("assets", () => {
   it("load nothing from another origin and no inline script", () => {
     const files = Object.entries(pages);
-    expect(files.length).toBeGreaterThan(5);
+    expect(Object.keys(pages)).toContain("../public/console.html");
     // Outbound links (<a href>) are fine; every other reference must be same-origin.
     const loaded = /(?:<(?:link|script|img|iframe|source)\b[^>]*?\s(?:src|href)=|url\(|@import\s+)["']?(?:https?:)?\/\/([^/"')\s]+)/gi;
     for (const [file, text] of files) {
@@ -33,5 +34,27 @@ describe("assets", () => {
         expect(['<script src="/theme.js"></script>', '<script type="module" src="/js/app.js"></script>'], file).toContain(tag);
       }
     }
+  });
+});
+
+describe("console routes", () => {
+  it("serve the one console page for every view and send /login and /recover to a view", () => {
+    const rules = Object.fromEntries(
+      redirectsFile
+        .trim()
+        .split("\n")
+        .map((l: string) => {
+          const [from, to, code] = l.split(/\s+/);
+          return [from, `${to} ${code}`];
+        }),
+    );
+    expect(rules).toEqual({
+      "/login": "/vault 302",
+      "/recover": "/access 302",
+      "/vault": "/console 200",
+      "/devices": "/console 200",
+      "/access": "/console 200",
+      "/r/*": "/console 200",
+    });
   });
 });
