@@ -157,7 +157,7 @@ async function copy(value: string, cleared: (done: boolean) => void): Promise<vo
 // ("default" when empty), env or context. `first` marks the first shown row of
 // its entry, which alone carries name and description.
 
-export type Row = { id: string; name: string; description: string; first: boolean; field: string; key: string; env: string; context: string; value: string | null; prefix: number };
+export type Row = { id: string; name: string; description: string; first: boolean; field: string; key: string; env: string; context: string; value: string | null; prefix: number; kind: "single" | "parent" | "child"; guide: string; again: boolean; fields: number };
 
 const part = (s: string) => (s === "*" ? "" : s);
 const splitKey = (key: string) => {
@@ -177,14 +177,27 @@ export function rows(entries: Map<string, Revision[]>, filter: string): { rows: 
     secrets++;
     const variants = [...cur.values.values()].sort((a, b) => order(a.field, b.field) || order(a.key, b.key));
     values += variants.length;
-    let first = true;
+    const tree = variants.some((x) => x.field !== "");
+    const hits: Array<{ x: { field: string; key: string; value: string | null }; env: string; context: string }> = [];
     for (const x of variants.length ? variants : [{ field: "", key: "", value: null }]) {
       const { env, context } = splitKey(x.key);
       const hay = [name, cur.description, x.value === null ? "" : x.field || "default", env, context].join(" ").toLowerCase();
-      if (!terms.every((t) => hay.includes(t))) continue;
-      out.push({ id: JSON.stringify([name, x.field, x.key]), name, description: cur.description, first, field: x.field, key: x.key, env, context, value: x.value, prefix: 0 });
-      first = false;
+      if (terms.every((t) => hay.includes(t))) hits.push({ x, env, context });
     }
+    if (!hits.length) continue;
+    const row = (x: { field: string; key: string; value: string | null }, env: string, context: string, first: boolean, rest: Partial<Row>): Row => ({
+      id: JSON.stringify([name, x.field, x.key]), name, description: cur.description, first, field: x.field, key: x.key, env, context, value: x.value, prefix: 0, kind: "single", guide: "", again: false, fields: 0, ...rest,
+    });
+    if (tree) {
+      out.push(row({ field: "", key: "", value: null }, "", "", true, { id: JSON.stringify([name, null]), kind: "parent", fields: new Set(hits.map((h) => h.x.field)).size }));
+    }
+    hits.forEach(({ x, env, context }, i) => {
+      out.push(
+        tree
+          ? row(x, env, context, false, { kind: "child", guide: i === hits.length - 1 ? "└─ " : "├─ ", again: i > 0 && hits[i - 1].x.field === x.field })
+          : row(x, env, context, i === 0, {}),
+      );
+    });
   }
   let before = "";
   for (const r of out) {
@@ -300,7 +313,7 @@ export async function vaultView(main: HTMLElement, host: Host): Promise<void> {
     { class: "console-view" },
     h("div", { class: "prompt" }, h("label", { class: "ps1", htmlFor: filter.id }, "> ", h("span", { class: "cmd" }, "hort list")), filter, refreshButton, newButton),
     h("div", { class: "meta" }, count, synced),
-    h("div", { class: "s-grid" }, h("div", { class: "v-cols s-cols", "aria-hidden": "true" }, ...["name", "field", "env / context", "description"].map((c) => h("span", {}, c))), list),
+    h("div", { class: "s-grid" }, h("div", { class: "v-cols s-cols", "aria-hidden": "true" }, ...["name", "env / context", "description"].map((c) => h("span", {}, c))), list),
     h(
       "div",
       { class: "foot" },
@@ -361,7 +374,7 @@ export async function vaultView(main: HTMLElement, host: Host): Promise<void> {
     const rev = revealed.get(r.id);
     const sel = r.id === selected;
     const li = h("li", {
-      class: `v-row${r.first ? " first" : " cont"}${sel ? " sel" : ""}${rev ? " revealed" : ""}`,
+      class: `v-row${r.kind === "child" ? " child" : r.first ? " first" : " cont"}${sel ? " sel" : ""}${rev ? " revealed" : ""}`,
       tabIndex: tabbable ? 0 : -1,
       "aria-label": rowLabel(r),
     });
@@ -370,16 +383,24 @@ export async function vaultView(main: HTMLElement, host: Host): Promise<void> {
       h(
         "span",
         { class: "key" },
-        h("span", { class: "c-name", title: r.name }, ...nameNodes(r.name, r.prefix)),
-        h("span", { class: "c-field" }, r.value === null ? any("no value yet") : r.field),
-        h("span", { class: "c-env", title: envContext(r) || undefined }, r.env ? h("span", { class: "tag" }, r.env) : null, r.context, r.env || r.context ? null : any()),
+        r.kind === "child"
+          ? h("span", { class: `c-name sub${r.again ? " again" : ""}`, title: r.field || undefined }, h("span", { class: "guide" }, r.guide), ...(r.field ? breakable(r.field) : [h("span", { class: "any" }, "(default)")]))
+          : h("span", { class: "c-name", title: r.name }, ...nameNodes(r.name, r.prefix), r.kind === "parent" ? h("span", { class: "cnt" }, ` ${r.fields} ${r.fields === 1 ? "field" : "fields"}`) : null),
+        h(
+          "span",
+          { class: "c-env", title: envContext(r) || undefined },
+          r.value === null && r.kind === "single" ? h("span", { class: "none" }, "no value yet") : null,
+          r.env ? h("span", { class: "tag" }, r.env) : null,
+          r.context,
+          r.kind !== "parent" && r.value !== null && !r.env && !r.context ? any() : null,
+        ),
       ),
     );
     if (confirming === r.id) {
       const no = h("button", { class: "no", type: "button", onclick: () => closeConfirm() }, h("u", {}, "n"), " keep");
       if (r.value === null) {
         const yes = h("button", { class: "yes", type: "button", onclick: () => void deleteGuarded(() => removeEntry(r)) }, h("u", {}, "y"), " delete");
-        li.append(h("span", { class: "confirm" }, h("span", { class: "q" }, `delete secret ${r.name}?`), no, yes));
+        li.append(h("span", { class: "confirm" }, h("span", { class: "q" }, r.kind === "parent" ? `delete secret ${r.name} with all its values?` : `delete secret ${r.name}?`), no, yes));
       } else {
         const yes = h("button", { class: "yes", type: "button", onclick: () => void deleteGuarded(() => removeValue(r)) }, h("u", {}, "y"), " value");
         const all = h("button", { class: "all", type: "button", onclick: () => void deleteGuarded(() => removeEntry(r)) }, h("u", {}, "a"), " whole secret");

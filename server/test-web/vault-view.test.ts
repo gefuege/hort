@@ -101,8 +101,8 @@ describe("vault rows", () => {
       ["aaas-cert.api-key", [rev("set", "", "*:*", "a")]],
       ["aaas-cert.auth-flow", [rev("set", "", "*:*", "b"), rev("set", "x", "*:*", "c")]],
     ]);
-    expect(rows(e, "").rows.map((x) => x.prefix)).toEqual([0, 10, 0]);
-    expect(rows(e, "auth").rows.map((x) => x.prefix)).toEqual([0, 0]);
+    expect(rows(e, "").rows.map((x) => x.prefix)).toEqual([0, 10, 0, 0]);
+    expect(rows(e, "auth").rows.map((x) => x.prefix)).toEqual([0, 0, 0]);
   });
 
   it("combines env and context in one label, an empty env staying empty", () => {
@@ -112,22 +112,43 @@ describe("vault rows", () => {
     expect(envContext({ env: "", context: "" })).toBe("");
   });
 
+  it("lists an entry with named fields as a parent row and one child row per value", () => {
+    const r = rows(entries, "");
+    expect(r.rows.map((x) => [x.kind, x.guide, x.again, x.fields])).toEqual([
+      ["parent", "", false, 2],
+      ["child", "├─ ", false, 0],
+      ["child", "└─ ", false, 0],
+      ["single", "", false, 0],
+      ["single", "", false, 0],
+      ["parent", "", false, 1],
+      ["child", "├─ ", false, 0],
+      ["child", "└─ ", true, 0],
+    ]);
+    expect(r.rows[0].value).toBeNull();
+    expect(new Set(r.rows.map((x) => x.id)).size).toBe(r.rows.length);
+  });
+
+  it("shows a parent with only the children a field filter matches", () => {
+    expect(rows(entries, "username").rows.map(rowLabel)).toEqual(["db", "db username"]);
+    expect(rows(entries, "username").rows.map((x) => x.guide)).toEqual(["", "└─ "]);
+  });
+
   it("lists one row per value, the entry's name and description on its first row only", () => {
     const r = rows(entries, "");
     expect(r.secrets).toBe(4);
     expect(r.values).toBe(5);
-    expect(r.rows.map(rowLabel)).toEqual(["db password · env prod", "db username", "notes", "npm", "stripe secret_key · env prod · context tenant-a", "stripe secret_key · env staging"]);
-    expect(r.rows.map((x) => x.first)).toEqual([true, false, true, true, true, false]);
+    expect(r.rows.map(rowLabel)).toEqual(["db", "db password · env prod", "db username", "notes", "npm", "stripe", "stripe secret_key · env prod · context tenant-a", "stripe secret_key · env staging"]);
+    expect(r.rows.map((x) => x.first)).toEqual([true, false, false, true, true, true, false, false]);
     expect(r.rows.find((x) => x.name === "notes")!.value).toBeNull();
   });
 
   it("matches individual values by their field, env or context, and every value by the entry's name or description", () => {
-    expect(rows(entries, "prod").rows.map(rowLabel)).toEqual(["db password · env prod", "stripe secret_key · env prod · context tenant-a"]);
-    expect(rows(entries, "payments staging").rows.map(rowLabel)).toEqual(["stripe secret_key · env staging"]);
-    expect(rows(entries, "DB").rows).toHaveLength(2);
+    expect(rows(entries, "prod").rows.map(rowLabel)).toEqual(["db", "db password · env prod", "stripe", "stripe secret_key · env prod · context tenant-a"]);
+    expect(rows(entries, "payments staging").rows.map(rowLabel)).toEqual(["stripe", "stripe secret_key · env staging"]);
+    expect(rows(entries, "DB").rows).toHaveLength(3);
     expect(rows(entries, "default").rows.map(rowLabel)).toEqual(["npm"]);
     const tenant = rows(entries, "tenant-a").rows;
-    expect(tenant.map((x) => [x.name, x.first])).toEqual([["stripe", true]]);
+    expect(tenant.map((x) => [x.name, x.first])).toEqual([["stripe", true], ["stripe", false]]);
     expect(rows(entries, "nothing-like-this").rows).toEqual([]);
   });
 });
