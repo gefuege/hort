@@ -364,7 +364,7 @@ function unlockedPanel(): HTMLElement {
   );
 }
 
-function loginView(main: HTMLElement, onUnlocked: () => void = () => render("/login")): void {
+function loginView(main: HTMLElement, onUnlocked: () => void = () => navigate("/vault")): void {
   if (unlocked && signedIn) {
     main.append(unlockedPanel());
     return;
@@ -586,7 +586,20 @@ const routes: Record<string, { tag: string; title: string; view: (main: HTMLElem
   "/login": { tag: "// login", title: "Sign in", view: loginView },
   "/recover": { tag: "// recover", title: "Recover access", view: recoverView },
   "/devices": { tag: "// devices", title: "Devices", view: devicesView },
-  "/vault": { tag: "// vault", title: "Vault", view: (main) => vaultView(main, { h, field, status, action, messageOf, api, ok, unlocked: () => unlocked }) },
+  "/vault": {
+    tag: "// vault",
+    title: "Vault",
+    view: (main) =>
+      vaultView(main, {
+        h, field, status, action, messageOf, api, ok,
+        unlocked: () => unlocked,
+        // The vault asks for sign-in only when the server refused the session (or there is none).
+        login: (into) => {
+          signedIn = false;
+          loginView(into, () => render("/vault"));
+        },
+      }),
+  },
 };
 
 // /r/<id>: an agent's secret request (contract §7.3).
@@ -627,12 +640,16 @@ function render(path: string): void {
   Promise.resolve(route.view(main)).catch((err) => main.append(h("p", { class: "status status-error", role: "status" }, messageOf(err))));
 }
 
+function navigate(path: string): void {
+  if (path !== location.pathname) history.pushState(null, "", path);
+  render(path);
+}
+
 document.addEventListener("click", (e) => {
   const a = (e.target as Element).closest?.("a");
   if (!a || a.origin !== location.origin || !routeFor(a.pathname) || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
   e.preventDefault();
-  if (a.pathname !== location.pathname) history.pushState(null, "", a.pathname);
-  render(a.pathname);
+  navigate(a.pathname);
 });
 window.addEventListener("popstate", () => routeFor(location.pathname) && render(location.pathname));
 window.addEventListener("pagehide", forget);

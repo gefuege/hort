@@ -23,6 +23,8 @@ export type Host = {
   api: (method: string, path: string, o?: { body?: string }) => Promise<Response>;
   ok: <T>(res: Response) => Promise<T>;
   unlocked: () => Unlocked | null;
+  // Renders passkey sign-in (and unlock) into `into`; the vault opens once it is unlocked.
+  login: (into: HTMLElement) => void;
 };
 
 type Vault = { account: string; cursor: number; entries: Map<string, Revision[]>; ids: Set<string>; skipped: number };
@@ -157,16 +159,15 @@ export async function vaultView(main: HTMLElement, host: Host): Promise<void> {
   const textInput = (props: Record<string, unknown> = {}) => h("input", { id: `v-${++inputs}`, autocomplete: "off", spellcheck: false, ...props });
   const valueInput = () => h("textarea", { id: `v-${++inputs}`, autocomplete: "off", spellcheck: false, rows: 3 });
   const body = h("div", {});
-  const signInPrompt = (text: string) =>
-    body.replaceChildren(
-      h("p", { class: "sec-intro" }, text),
-      h("div", { class: "actions" }, h("a", { class: "btn btn-primary", href: "/login" }, "Sign in with a passkey"), h("a", { class: "btn btn-ghost", href: "/recover" }, "Use your Emergency Kit")),
-    );
+  const signInPrompt = (text?: string) => {
+    body.replaceChildren(text ? h("p", { class: "sec-intro" }, text) : "");
+    host.login(body);
+  };
   main.append(body);
 
   const u = host.unlocked();
   if (!u) {
-    signInPrompt("Your vault is locked in this tab. Sign in with a passkey that unlocks it, or use your Emergency Kit.");
+    signInPrompt();
     return;
   }
   // False once another view replaced this one or the tab locked or switched vaults.
