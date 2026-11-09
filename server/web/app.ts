@@ -140,7 +140,9 @@ const slotRecord = (s: WireSlot): SlotRecord => ({ version: s.version, bytes: b6
 // ---------------------------------------------------------------------------
 // WebAuthn
 
-const bytes = (b: ArrayBuffer | ArrayBufferView) => (b instanceof ArrayBuffer ? new Uint8Array(b) : new Uint8Array(b.buffer, b.byteOffset, b.byteLength));
+// ArrayBuffer.isView instead of instanceof: passkeys from password-manager
+// extensions hand over buffers from another realm, where instanceof fails.
+const bytes = (b: ArrayBuffer | ArrayBufferView) => (ArrayBuffer.isView(b) ? new Uint8Array(b.buffer, b.byteOffset, b.byteLength) : new Uint8Array(b));
 type PRFOutputs = { enabled?: boolean; results?: { first?: ArrayBuffer | ArrayBufferView } };
 const prfOf = (cred: PublicKeyCredential) => (cred.getClientExtensionResults() as { prf?: PRFOutputs }).prf;
 const prfInput = async (accountId: Uint8Array) => ({ prf: { eval: { first: await prfEvalSalt(accountId) } } }) as AuthenticationExtensionsClientInputs;
