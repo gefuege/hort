@@ -376,7 +376,7 @@ function loginView(main: HTMLElement, onUnlocked: () => void = () => navigate("/
     return;
   }
   const out = status();
-  const button = h("button", { class: "btn btn-primary", type: "button" }, "Sign in with a passkey");
+  const button = h("button", { class: "btn btn-primary", type: "button" }, "Unlock with passkey");
   const area = h("div", {});
   action(button, out, async () => {
     out.set("Waiting for your passkey …");
@@ -398,7 +398,7 @@ function loginView(main: HTMLElement, onUnlocked: () => void = () => navigate("/
     );
   });
   add(main,
-    h("p", { class: "sec-intro" }, "Sign in with a passkey you registered for Hort. A passkey that supports it also unlocks your vault."),
+    h("p", { class: "sec-intro" }, "Your vault is locked. Your passkey signs you in and unlocks it."),
     h("div", { class: "actions" }, button),
     out.el,
     unlocked || rememberedAccount()
@@ -515,7 +515,7 @@ async function devicesView(main: HTMLElement): Promise<void> {
   if (res.status === 401) {
     signedIn = false;
     out.set("");
-    main.append(h("p", { class: "sec-intro" }, "Sign in with your passkey to see your devices and passkeys."), h("div", { class: "actions" }, h("a", { class: "btn btn-primary", href: "/login" }, "Sign in")));
+    loginView(main, () => render("/devices"));
     return;
   }
   const list = await ok<Listing>(res);
@@ -629,7 +629,10 @@ const routeFor = (path: string) => routes[path] ?? (REQUEST_PATH.test(path) ? re
 
 function render(path: string): void {
   const route = routeFor(path)!;
-  const main = document.querySelector("main")!;
+  // A fresh <main> per view: a view still loading appends to the detached old one, never into the next page.
+  const old = document.querySelector("main")!;
+  const main = old.cloneNode(false) as HTMLElement;
+  old.replaceWith(main);
   document.getElementById("kit")?.remove();
   document.title = `${route.title} – Hort`;
   for (const a of document.querySelectorAll<HTMLAnchorElement>(".m-links a")) {
