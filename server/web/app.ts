@@ -529,7 +529,9 @@ function recoverView(main: HTMLElement): void {
   const u = unlocked;
 
   const passkeyOut = status();
-  const registerButton = h("button", { class: "btn btn-primary", type: "button" }, "Register a passkey");
+  // Signed in with a passkey (no kit): the passphrase is the task here, another passkey is secondary.
+  const viaPasskey = !kit;
+  const registerButton = h("button", { class: viaPasskey ? "btn btn-ghost" : "btn btn-primary", type: "button" }, viaPasskey ? "Add another passkey" : "Register a passkey");
   const next = h("div", { class: "actions" });
   action(registerButton, passkeyOut, async () => {
     if (!window.PublicKeyCredential) throw new Error("This browser does not support passkeys.");
@@ -549,11 +551,11 @@ function recoverView(main: HTMLElement): void {
   const repeat = h("input", { type: "password", autocomplete: "new-password", required: true });
   // Unlocked with the kit, the Secret Key is known; unlocked with a passkey, it comes from the printed kit.
   const keyInput = kit ? null : h("input", { autocomplete: "off", spellcheck: false, required: true, placeholder: "H4-XXXXXX-XXXXX-XXXXX-XXXXX-XXXXX-X" });
-  const passSubmit = h("button", { class: "btn btn-ghost", type: "submit" }, "Set new passphrase");
+  const passSubmit = h("button", { class: viaPasskey ? "btn btn-primary" : "btn btn-ghost", type: "submit" }, "Set new passphrase");
   const passForm = h(
     "form",
     { class: "form" },
-    keyInput && field("Secret Key", keyInput, "From your Emergency Kit. A Secret Key that is not yours makes the new passphrase useless, and your passkeys stay the way in."),
+    keyInput && field("Secret Key", keyInput, "Your passkey opens the vault but never shows your Secret Key, and a new passphrase only works together with it. Copy it from your Emergency Kit. A wrong Secret Key makes the new passphrase useless; your passkeys keep working."),
     field("New passphrase", newPass),
     field("Repeat new passphrase", repeat),
     h("div", { class: "actions" }, passSubmit),
@@ -598,10 +600,17 @@ function recoverView(main: HTMLElement): void {
     window.print();
   });
 
+  const passkeyPanel = h("section", { class: "panel" }, h("h2", { class: "panel-h" }, viaPasskey ? "Another passkey" : "Passkey"), h("div", { class: "actions" }, registerButton), passkeyOut.el, next);
+  const passPanel = h("section", { class: "panel" }, h("h2", { class: "panel-h" }, "New passphrase"), passForm);
   add(main,
-    h("p", { class: "sec-intro" }, "Your vault is unlocked in this tab. Register a passkey so you can sign in on this device, or set a new passphrase."),
-    h("section", { class: "panel" }, h("h2", { class: "panel-h" }, "Passkey"), h("div", { class: "actions" }, registerButton), passkeyOut.el, next),
-    h("section", { class: "panel" }, h("h2", { class: "panel-h" }, "New passphrase"), passForm),
+    h(
+      "p",
+      { class: "sec-intro" },
+      viaPasskey
+        ? "You are signed in with a passkey. Set a new passphrase here; add another passkey only for a new device or password manager."
+        : "Your vault is unlocked in this tab. Register a passkey so you can sign in on this device, or set a new passphrase.",
+    ),
+    ...(viaPasskey ? [passPanel, passkeyPanel] : [passkeyPanel, passPanel]),
     kit ? h("section", { class: "panel" }, h("h2", { class: "panel-h" }, "Emergency Kit"), h("p", { class: "muted" }, "Print the kit with the values you just entered. Nothing is stored."), h("div", { class: "actions" }, printButton)) : null,
     unlockedPanel(),
   );
