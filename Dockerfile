@@ -1,6 +1,6 @@
 # Hort — CLI image. Mount /var/lib/hort/.hort for persistent vault state.
-# Build: docker build -t ghcr.io/s16e/hort:dev .
-# Run: docker run --rm -it -v hort-state:/var/lib/hort/.hort ghcr.io/s16e/hort:dev init
+# Build: docker build -t ghcr.io/gefuege/hort:dev .
+# Run: docker run --rm -it -v hort-state:/var/lib/hort/.hort ghcr.io/gefuege/hort:dev init
 
 ARG GO_VERSION=1.26
 ARG DEBIAN_VERSION=bookworm-20241016-slim

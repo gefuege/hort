@@ -41,10 +41,12 @@ HORT_PASSPHRASE="test" ./hort init
 - `internal/vault/session.go` — Session key persistence
 - `internal/vault/lock.go` — File locks by canonical vault path (concurrent-safe writers)
 - `internal/vault/io.go`, `json.go` — Atomic file writes, strict JSON decoding
-- `internal/vault/crypto.go`, `format.go`, `v3.go` — v3 reader only, kept for the coming v3→v4 migration
+- `internal/vault/crypto.go`, `format.go`, `v3.go`, `migrate.go` — v3 reader and the one-time v3→v4 migration (`hort migrate`)
 - `internal/store/store.go` — Reads and writes on the one local vault
 - `internal/cli/commands.go` — Command implementations (direct store access)
-- `internal/cli/sync.go` — Time limit (`syncLimit`) for automatic sync around reads and writes
+- `internal/cli/sync.go` — Sync with the Hort server, enroll, devices; time limit (`syncLimit`) for automatic sync around reads and writes
+- `internal/api/` — HTTP client for the sync API
+- `internal/mcp/` — `hort mcp`: MCP stdio server with the `request_secret` tool
 - `internal/helptext/text.go` — Help text (serves as agent prompt)
 - `internal/cli/output.go` — Output formatting (plain/JSON)
 - `server/` — Cloudflare Worker `hort-api`: sync API under `/api/*` (TypeScript) and the hort.pm web app and landing page from `server/public/`; see `server/README.md`
@@ -56,12 +58,15 @@ One local vault at `~/.hort/vault.enc`; session key in `~/.hort/.session`, locks
 
 ## Sync
 
-Sync runs through the Hort server (`server/`) and arrives with Hort 1.0; folder sync is removed.
+Sync runs through the Hort server (`server/`): hort.pm or a self-hosted one (`docs/self-hosting.md`). The server stores ciphertext only. `hort sync` registers the account on first use (a server with `REGISTRATION_TOKEN` needs `HORT_REGISTRATION_TOKEN`); `hort enroll` adds a device. Folder sync is removed.
 
 ## Release
 
-Tag push triggers the `cli` job in `release.yml` (goreleaser → binaries +
-Homebrew). npm publish is manual:
+Tag push triggers the `cli` job in `release.yml` (goreleaser → binaries,
+Homebrew formula and Scoop manifest) and `docker.yml` (`ghcr.io/gefuege/hort`).
+The version comes from the tag through ldflags (`main.version`); `hort --version`
+prints it. The Homebrew tap and Scoop bucket stay under `sebastian-breitzke`
+(`HOMEBREW_TAP_TOKEN` is scoped to them). npm publish is manual:
 
 ```bash
 git tag v<version> && git push --tags
@@ -78,8 +83,8 @@ Package: `@s16e/hort`. Do not automate npm publish via CI.
 
 ## Vault contract
 
-Outer and inner versions are 4. v3 and v2 vaults are rejected; `hort migrate`
-(v3 to v4) follows. Byte authority is `spec/vectors/README.md`. Entries persist
+Outer and inner versions are 4. v3 and v2 vaults are rejected by normal commands;
+`hort migrate` converts v3 to v4 once (v2 must go through Hort 0.4.1 first). Byte authority is `spec/vectors/README.md`. Entries persist
 revisions only; descriptions are describe revisions.
 
 `hort history NAME [--json]` explicitly returns revision values.

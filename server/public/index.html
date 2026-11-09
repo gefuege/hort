@@ -26,15 +26,15 @@
     <h1>Hort – secrets for you and your agents.<span class="cur" aria-hidden="true"></span></h1>
     <p class="lede">One encrypted vault for your API keys, tokens and passwords. You use it. Your coding agents use it. Your keys never leave your devices.</p>
     <div class="ctas"><a class="btn btn-primary" href="#install">Install the CLI →</a><a class="btn btn-ghost" href="https://github.com/gefuege/hort">View on GitHub</a></div>
-    <p class="hero-note">The CLI works today. Sync, passkeys and the web app arrive with Hort 1.0. No account needed to start.</p>
+    <p class="hero-note">Hort 1.0 is here: CLI, encrypted sync and the web app. The CLI works without an account. Registration on hort.pm opens soon; until then it needs an invitation token.</p>
   </div>
   <div class="win term hero-term">
     <div class="win-bar"><i></i><i></i><i></i><span>zsh — ~/shop</span></div>
-<pre tabindex="0"><span class="t-p">$</span> hort --list
+<pre tabindex="0"><span class="t-p">$</span> hort list
 <span class="t-v">openai-key</span>     <span class="t-m">OpenAI API key</span>        <span class="t-m">[env: *]</span>
 <span class="t-v">db-password</span>    <span class="t-m">PostgreSQL password</span>   <span class="t-m">[env: *, prod]</span>
 
-<span class="t-p">$</span> hort --secret db-password --env prod
+<span class="t-p">$</span> hort get db-password --env prod
 <span class="t-a">••••••••••••</span></pre>
   </div>
 </div>
@@ -44,26 +44,26 @@
   <h2 class="sec-h">Your agent asks. You answer. It never sees the secret.</h2>
   <p class="sec-intro">Agents need credentials. Today you paste them into the chat, the agent forgets, and next session it asks again. Hort gives your agents one place to look, and one polite way to ask for what's missing.</p>
   <div class="cards">
-    <div class="card"><span class="num">[01]</span><h3>Discover</h3><p>The agent runs <code>hort --list</code> and sees what exists: names, descriptions, environments. No values.</p></div>
-    <div class="card"><span class="num">[02]</span><h3>Read</h3><p><code>hort --secret &lt;name&gt;</code> prints just the value on stdout. Ready for <code>$(...)</code> and pipes. Locked vault? Exit code 2, and the agent asks you to unlock.</p></div>
-    <div class="card"><span class="num">[03]</span><h3>Ask for what's missing<span class="tag tag-soon">Coming with 1.0</span></h3><p>The agent requests a secret by name via MCP. You get a link, open hort.pm and type the value there. The agent only learns that the secret now exists.</p></div>
+    <div class="card"><span class="num">[01]</span><h3>Discover</h3><p>The agent runs <code>hort list</code> and sees what exists: names, descriptions, environments. No values.</p></div>
+    <div class="card"><span class="num">[02]</span><h3>Read</h3><p><code>hort get &lt;name&gt;</code> prints just the value on stdout. Ready for <code>$(...)</code> and pipes. Locked vault? Exit code 2, and the agent asks you to unlock.</p></div>
+    <div class="card"><span class="num">[03]</span><h3>Ask for what's missing</h3><p>The agent requests a secret by name via MCP. You get a link, open hort.pm and type the value there. The agent only learns that the secret now exists.</p></div>
   </div>
 
   <div class="examples">
     <div class="example">
-      <p class="label">Today</p>
+      <p class="label">Read</p>
       <div class="win term"><pre tabindex="0"><span class="t-m"># What's there?</span>
-<span class="t-p">$</span> hort --list --json
+<span class="t-p">$</span> hort list --json
 
 <span class="t-m"># Use it</span>
-<span class="t-p">$</span> export STRIPE_KEY=$(hort --secret stripe-key --env prod)
+<span class="t-p">$</span> export STRIPE_KEY=$(hort get stripe-key --env prod)
 
 <span class="t-m"># Different value per customer</span>
-<span class="t-p">$</span> hort --secret tenant-id --env prod --context acme</pre></div>
+<span class="t-p">$</span> hort get tenant-id --env prod --context acme</pre></div>
       <p class="caption">Fallback built in: <code>env+context → env+* → *+*</code>. Specific wins, the baseline catches the rest.</p>
     </div>
     <div class="example">
-      <p class="label soon">Coming with 1.0</p>
+      <p class="label soon">Ask</p>
       <div class="win term"><pre tabindex="0"><span class="t-a">agent</span>  › I need the Stripe client ID for this integration.
 <span class="t-p">hort</span>   › Requested "stripe / client_id". Waiting for you on hort.pm …
 <span class="t-v">you</span>    › <span class="t-m">(open the link, enter the value, done)</span>
@@ -71,30 +71,25 @@
       <p class="caption">The value goes from your browser into your vault. The chat only ever sees the name.</p>
     </div>
   </div>
-  <p class="aside-note">Using Claude Code? The <code>hort-secrets</code> plugin already lets an agent ask for a secret without seeing it: you type the value into a field above the prompt, Hort stores it, the chat gets the name.</p>
+  <p class="aside-note">Using Claude Code? Add the MCP server once with <code>claude mcp add hort -- hort mcp</code>. Then your agent can request a secret by name; you type the value on hort.pm, never into the chat.</p>
 </div>
 
 <div class="section wrap" id="features">
   <p class="sec-tag">// features</p>
   <h2 class="sec-h">Small tool. Sharp edges where they belong.</h2>
-  <h3 class="sub-h">Available today</h3>
   <ul class="feat">
     <li><strong>One encrypted vault.</strong><span>AES-256-GCM, key derived with Argon2id. One file on your disk.</span></li>
     <li><strong>Built for agents.</strong><span><code>hort --help</code> teaches an agent the whole interface in one call. Plain values on stdout, errors on stderr, <code>--json</code> when it wants structure.</span></li>
     <li><strong>Environments and contexts.</strong><span>One name, many values: dev, prod, per tenant or customer. Lookups fall back to the baseline.</span></li>
     <li><strong>History.</strong><span>Every change is a revision. <code>hort history &lt;name&gt;</code> shows what changed and when.</span></li>
-    <li><strong>Offline first.</strong><span>No network calls, no telemetry. Hort works on a plane.</span></li>
-    <li><strong>Device sync through a server.</strong><span>Your devices sync through the Hort server, at hort.pm or one you host yourself. It sees ciphertext only; keys stay on your devices. Sync runs when you use Hort, and Hort works offline.</span></li>
+    <li><strong>Offline first.</strong><span>No telemetry, and reads and writes keep working without a network. Hort works on a plane.</span></li>
     <li><strong>Values stay out of your shell history.</strong><span><code>--value-stdin</code> keeps secrets out of process arguments.</span></li>
-  </ul>
-  <h3 class="sub-h">Coming with 1.0</h3>
-  <ul class="feat">
-    <li><strong>Secret Key + passphrase.<span class="tag tag-soon">Coming with 1.0</span></strong><span>Unlock with your passphrase plus a device-generated Secret Key. A stolen copy of your vault is useless without both.</span></li>
-    <li><strong>Passkey unlock in the browser.<span class="tag tag-soon">Coming with 1.0</span></strong><span>Unlock hort.pm with a passkey (WebAuthn PRF). No passphrase typing on every visit.</span></li>
-    <li><strong>Named fields.<span class="tag tag-soon">Coming with 1.0</span></strong><span>One secret, several parts: <code>hort get stripe client_id</code>, <code>hort get stripe secret</code>.</span></li>
-    <li><strong>Encrypted sync, hosted in the EU.<span class="tag tag-soon">Coming with 1.0</span></strong><span>Sync runs on Cloudflare in the EU. The server stores ciphertext and never sees a key.</span></li>
-    <li><strong>hort.pm web app.<span class="tag tag-soon">Coming with 1.0</span></strong><span>Read, copy and set secrets in the browser, on any device you trust.</span></li>
-    <li><strong>Agents ask, you answer.<span class="tag tag-soon">Coming with 1.0</span></strong><span>Agents request missing secrets via MCP. You enter them on hort.pm; the agent gets the name, not the value.</span></li>
+    <li><strong>Secret Key + passphrase.</strong><span>Unlock with your passphrase plus a device-generated Secret Key. A stolen copy of your vault is useless without both.</span></li>
+    <li><strong>Passkey unlock in the browser.</strong><span>Unlock hort.pm with a passkey (WebAuthn PRF). No passphrase typing on every visit.</span></li>
+    <li><strong>Named fields.</strong><span>One secret, several parts: <code>hort get stripe client_id</code>, <code>hort get stripe secret</code>.</span></li>
+    <li><strong>Encrypted sync, hosted in the EU.</strong><span>Your devices sync through hort.pm, hosted on Cloudflare in the EU, or through a server you host yourself. The server stores ciphertext and never sees a key. Sync runs when you use Hort.</span></li>
+    <li><strong>hort.pm web app.</strong><span>Read, copy and set secrets in the browser, on any device you trust.</span></li>
+    <li><strong>Agents ask, you answer.</strong><span>Agents request missing secrets via MCP. You enter them on hort.pm; the agent gets the name, not the value.</span></li>
   </ul>
 </div>
 
@@ -106,18 +101,18 @@
     <div>
       <h3>What Hort protects</h3>
       <ul>
-        <li>Keys and plaintext exist only on your devices, and in your browser while hort.pm is unlocked.<span class="tag tag-soon">Browser part: 1.0</span></li>
+        <li>Keys and plaintext exist only on your devices, and in your browser while hort.pm is unlocked.</li>
         <li>The vault is encrypted with AES-256-GCM. Tampering is detected.</li>
-        <li>The sync server stores ciphertext only. It cannot read your secrets.<span class="tag tag-soon">Coming with 1.0</span></li>
-        <li>Agents get values through the CLI on your machine. With the 1.0 request flow, they never get values you type for them.<span class="tag tag-soon">Coming with 1.0</span></li>
+        <li>The sync server stores ciphertext only. It cannot read your secrets.</li>
+        <li>Agents get values through the CLI on your machine. With the request flow, they never get values you type for them.</li>
       </ul>
     </div>
     <div>
       <h3>What Hort does not protect against</h3>
       <ul>
         <li><strong>Someone who controls your machine.</strong> Root or malware on an unlocked device can read what you can read. That's true for every local secret manager.</li>
-        <li><strong>Whoever controls the hort.pm deployment.</strong><span class="tag tag-soon">Coming with 1.0</span> The web app is JavaScript served by hort.pm. Whoever controls that deployment could ship code that reads secrets after you unlock in the browser. We reduce the risk: strict Content Security Policy, no third-party scripts, open source code you can check. If you don't want this risk at all, use only the CLI. Or run the backend yourself.</li>
-        <li><strong>Losing both Secret Key and passphrase.</strong><span class="tag tag-soon">Coming with 1.0</span> Then your data is gone. Nobody can reset it, including us. Print your Emergency Kit and keep it somewhere safe.</li>
+        <li><strong>Whoever controls the hort.pm deployment.</strong> The web app is JavaScript served by hort.pm. Whoever controls that deployment could ship code that reads secrets after you unlock in the browser. We reduce the risk: strict Content Security Policy, no third-party scripts, open source code you can check. If you don't want this risk at all, use only the CLI. Or run the backend yourself.</li>
+        <li><strong>Losing both Secret Key and passphrase.</strong> Then your data is gone. Nobody can reset it, including us. Print your Emergency Kit and keep it somewhere safe.</li>
       </ul>
     </div>
   </div>
@@ -136,8 +131,8 @@ hort init</pre></div></div>
     <div><h3>Linux and Windows binaries</h3><p class="after-line"><a href="https://github.com/gefuege/hort/releases">GitHub Releases</a></p></div>
   </div>
   <h3 class="sub-h after">After install</h3>
-  <div class="win term"><pre tabindex="0">hort --set-secret openai-key --value-stdin --description "OpenAI API key"
-hort --secret openai-key</pre></div>
+  <div class="win term"><pre tabindex="0">printf '%s' "$KEY" | hort set openai-key --value-stdin --description "OpenAI API key"
+hort get openai-key</pre></div>
   <p class="after-line">Set a passphrase during <code>hort init</code>. That's it. Then tell your agent to run <code>hort --help</code>.</p>
 </div>
 
@@ -145,7 +140,7 @@ hort --secret openai-key</pre></div>
   <p class="sec-tag">// open source</p>
   <h2 class="sec-h">Yours to read, run and keep.</h2>
   <p>Hort is open source under the MIT license. Read the code, audit the crypto, send a pull request.</p>
-  <p>The CLI needs no server at all. When Hort 1.0 brings sync and the web app, you can use the hosted service at hort.pm or run the backend yourself.<span class="tag tag-soon">Coming with 1.0</span></p>
+  <p>The CLI needs no server at all. For sync and the web app, use the hosted service at hort.pm or <a href="https://github.com/gefuege/hort/blob/main/docs/self-hosting.md">run the backend yourself</a>.</p>
   <h3 class="sub-h">Why "Hort"?</h3>
   <p class="why">"Hort" is German for a safe place, and for a treasure hoard, like the Nibelungenhort. The logo is a key in a nest: your secrets, kept safe, close to home.</p>
   <div class="ctas"><a class="btn btn-primary" href="https://github.com/gefuege/hort">Star or fork on GitHub →</a></div>

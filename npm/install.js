@@ -8,7 +8,7 @@ const https = require("https");
 const os = require("os");
 
 const VERSION = require("./package.json").version;
-const REPO = "sebastian-breitzke/hort";
+const REPO = "gefuege/hort";
 
 const PLATFORM_MAP = { darwin: "darwin", linux: "linux", win32: "windows" };
 const ARCH_MAP = { x64: "amd64", arm64: "arm64" };

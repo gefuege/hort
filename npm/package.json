@@ -1,7 +1,7 @@
 {
   "name": "@s16e/hort",
   "version": "0.4.1",
-  "description": "Local secret store for humans and AI agents",
+  "description": "Encrypted secret store with sync for humans and AI agents",
   "keywords": [
     "secrets",
     "vault",
@@ -12,9 +12,9 @@
   "author": "Sebastian Breitzke",
   "repository": {
     "type": "git",
-    "url": "https://github.com/sebastian-breitzke/hort.git"
+    "url": "https://github.com/gefuege/hort.git"
   },
-  "homepage": "https://github.com/sebastian-breitzke/hort",
+  "homepage": "https://github.com/gefuege/hort",
   "bin": {
     "hort": "run.js"
   },

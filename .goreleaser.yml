@@ -18,7 +18,7 @@ builds:
       - amd64
       - arm64
     ldflags:
-      - -s -w
+      - -s -w -X main.version={{.Version}} -X main.commit={{.Commit}} -X main.date={{.Date}}
 
 archives:
   - ids:
@@ -39,9 +39,9 @@ nfpms:
       - hort
     package_name: hort
     vendor: s16e
-    homepage: https://github.com/sebastian-breitzke/hort
+    homepage: https://github.com/gefuege/hort
     maintainer: Sebastian Breitzke <sebastian@s16e.de>
-    description: Local secret and config store for humans and AI agents
+    description: Local, encrypted secret store with sync for humans and AI agents
     license: MIT
     formats:
       - deb
@@ -64,13 +64,13 @@ brews:
       name: homebrew-tap
       token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
     directory: Formula
-    homepage: "https://github.com/sebastian-breitzke/hort"
-    description: "Local secret and config store for humans and AI agents"
+    homepage: "https://github.com/gefuege/hort"
+    description: "Local, encrypted secret store with sync for humans and AI agents"
     license: MIT
     install: |
       bin.install "hort"
     test: |
-      assert_match "hort", shell_output("#{bin}/hort --help")
+      assert_match version.to_s, shell_output("#{bin}/hort --version")
 
 scoops:
   - repository:
@@ -78,8 +78,8 @@ scoops:
       name: scoop-bucket
       token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
     directory: bucket
-    homepage: "https://github.com/sebastian-breitzke/hort"
-    description: "Local secret and config store for humans and AI agents"
+    homepage: "https://github.com/gefuege/hort"
+    description: "Local, encrypted secret store with sync for humans and AI agents"
     license: MIT
 
 release:

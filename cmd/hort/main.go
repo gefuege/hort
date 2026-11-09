@@ -10,6 +10,13 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// Set by GoReleaser and the Dockerfile through -ldflags -X.
+var (
+	version = "dev"
+	commit  = "unknown"
+	date    = "unknown"
+)
+
 func main() {
 	root := &cobra.Command{
 		Use:           "hort",
@@ -17,6 +24,7 @@ func main() {
 		Long:          helptext.HelpText,
 		SilenceUsage:  true,
 		SilenceErrors: true,
+		Version:       fmt.Sprintf("%s (%s, %s)", version, commit, date),
 	}
 
 	// scopeFlags adds the --env/--context pair shared by get, set and delete.

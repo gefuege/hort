@@ -18,34 +18,17 @@ None of this is discoverable. An agent can't ask "what secrets are available?" �
 
 ## Who uses Hort
 
-**You, on your own machine.** Run `hort init`, set a passphrase, add secrets with `hort -s <name> -v <value>`.
+**You, on your own machine.** Run `hort init`, set a passphrase, store secrets with `hort set <name> --value <value>`.
 
-**Your AI coding agents.** Claude Code, Codex, Gemini, Cursor, whatever you run. `hort list` shows them what is available, `hort get <name>` gives them the value, `--json` gives it structured. No more "what's the DB password again?" on every new session. One vault, every agent.
+**Your AI coding agents.** Claude Code, Codex, Gemini, Cursor, whatever you run. `hort list` shows what is available, `hort get <name>` gives the value, `--json` gives it structured. One vault, every agent. When a secret is missing, the agent asks for it through `hort mcp`, and you type the value on hort.pm. It never enters the chat.
 
-**Your own apps, as a drop-in secret backend.** Instead of reinventing a secrets table, mount an encrypted file into hort at startup:
+**All your devices.** The vault syncs through the Hort server at hort.pm (EU) or one you host yourself. The server stores ciphertext only.
 
-```bash
-# your app on boot
-hort source mount --name myapp-prod \
-  --path ~/.myapp-prod/secrets.hort.enc \
-  --key-hex "$MYAPP_MASTER_KEY_HEX"
-```
-
-Your app reads and writes via the same hort CLI that it already uses for shell automation. The moment you do this, **the agents working on that app pick up the same secrets aus einem guss** — no separate credential system per integration, no copy-paste between the app's UI and the agent's context. Your app's `.env`-equivalent and your agent's `hort get` resolve to the same byte.
-
-**Integration code.** Anywhere a script or service needs "this token for dev, that one for prod, a third for the Heine tenant on prod" — the `env + context` fallback chain covers it in one call.
+**Integration code.** Anywhere a script or service needs "this token for dev, that one for prod, a third for the Heine tenant on prod", the `env + context` fallback chain covers it in one call.
 
 ## Install
 
-### npm / npx (cross-platform)
-
-```bash
-npx @s16e/hort --help       # Run without installing
-npm install -g @s16e/hort   # Install globally
-hort init
-```
-
-### macOS (Homebrew) — recommended
+### Homebrew (macOS, Linux)
 
 ```bash
 brew install sebastian-breitzke/tap/hort && hort init
@@ -53,7 +36,31 @@ brew install sebastian-breitzke/tap/hort && hort init
 
 Updates: `brew upgrade hort`
 
-### Linux
+### npm / npx (any OS)
+
+```bash
+npx @s16e/hort --help       # Run without installing
+npm install -g @s16e/hort   # Install globally
+hort init
+```
+
+### Windows (Scoop)
+
+```powershell
+scoop bucket add sebastian-breitzke https://github.com/sebastian-breitzke/scoop-bucket
+scoop install hort
+hort init
+```
+
+### Docker
+
+```bash
+docker run --rm -it -v hort-state:/var/lib/hort/.hort ghcr.io/gefuege/hort:latest init
+```
+
+The image runs one CLI command per call; the volume holds the vault.
+
+### Linux binary
 
 ```bash
 VERSION=$(curl -fsSI -o /dev/null -w '%{redirect_url}' https://github.com/gefuege/hort/releases/latest | grep -oE '[^/]+$') \
@@ -67,41 +74,29 @@ VERSION=$(curl -fsSI -o /dev/null -w '%{redirect_url}' https://github.com/gefueg
 ### Windows (PowerShell)
 
 ```powershell
-$release = (Invoke-RestMethod -Uri "https://api.github.com/repos/sebastian-breitzke/hort/releases/latest").tag_name
+$release = (Invoke-RestMethod -Uri "https://api.github.com/repos/gefuege/hort/releases/latest").tag_name
 $version = $release.TrimStart("v")
-$url = "https://github.com/sebastian-breitzke/hort/releases/download/$release/hort_${version}_windows_amd64.zip"
+$url = "https://github.com/gefuege/hort/releases/download/$release/hort_${version}_windows_amd64.zip"
 Invoke-WebRequest -Uri $url -OutFile "$env:TEMP\hort.zip"
 Expand-Archive -Path "$env:TEMP\hort.zip" -DestinationPath "$env:LOCALAPPDATA\hort" -Force
 $env:PATH += ";$env:LOCALAPPDATA\hort"
 [Environment]::SetEnvironmentVariable("PATH", "$([Environment]::GetEnvironmentVariable('PATH', 'User'));$env:LOCALAPPDATA\hort", "User")
 Remove-Item "$env:TEMP\hort.zip"
-Write-Host "hort installed" -ForegroundColor Green
 hort init
 ```
 
-### Windows (Scoop)
-
-```powershell
-scoop bucket add sebastian-breitzke https://github.com/sebastian-breitzke/scoop-bucket
-scoop install hort
-hort init
-```
-
-### From Source
+### From source
 
 ```bash
-go install github.com/sebastian-breitzke/hort/cmd/hort@latest && hort init
+go install github.com/gefuege/hort/cmd/hort@latest && hort init
 ```
 
-After `hort init` you'll set a passphrase — that's it. Vault created, session
-unlocked, ready to store secrets.
+`hort --version` prints the installed version.
 
-## Usage
-
-### Getting Started
+## Getting started
 
 ```bash
-# Create your vault — you'll set a passphrase
+# Create your vault: account, Secret Key and passphrase
 hort init
 
 # Store your first secret
@@ -112,6 +107,12 @@ TOKEN=$(hort get grafana-token)
 curl -H "Authorization: Bearer $TOKEN" https://monitoring.example.com
 ```
 
+`hort init` prints your **Emergency Kit** (account ID and Secret Key). Keep it somewhere safe and apart from the passphrase: your vault opens only with passphrase plus Secret Key, and nobody, including us, can recover either. `hort help recovery` lists what can and cannot be recovered.
+
+**Registration.** The hosted service at hort.pm is not open to everyone yet: registration opens soon. Until then, creating an account on hort.pm needs an invitation token, passed as `HORT_REGISTRATION_TOKEN` for `hort init` or the first `hort sync`. The token is only sent while registering and never stored. Your own server decides its own rule; see [Self-hosting](docs/self-hosting.md).
+
+## Usage
+
 ### Environments
 
 Every entry supports environment-specific values. Without `--env`, the baseline (`*`) is used.
@@ -120,42 +121,30 @@ Every entry supports environment-specific values. Without `--env`, the baseline 
 hort set db-password --value "dev-pass" --description "PostgreSQL password"
 hort set db-password --value "prod-pass" --env prod
 
-hort get db-password              # → dev-pass (baseline)
-hort get db-password --env prod   # → prod-pass
-hort get db-password --env staging # → dev-pass (fallback to baseline)
+hort get db-password               # dev-pass (baseline)
+hort get db-password --env prod    # prod-pass
+hort get db-password --env staging # dev-pass (fallback to baseline)
 ```
 
 ### Contexts
 
-Secrets aren't just per-environment. They can be per-environment *and* per-context. A context is any second dimension: tenant, customer, project.
+A context is a second dimension next to the environment: tenant, customer, project.
 
 ```bash
-hort set tenant-id --value "default-123" --description "SimpleChain tenant ID"
+hort set tenant-id --value "default-123" --description "Tenant ID"
 hort set tenant-id --value "prod-123" --env prod
 hort set tenant-id --value "heine-456" --env prod --context heine
-hort set tenant-id --value "otto-789" --env prod --context otto
 
-hort get tenant-id --env prod --context heine  # → heine-456
-hort get tenant-id --env prod --context otto   # → otto-789
-hort get tenant-id --env prod                  # → prod-123
-hort get tenant-id --env staging               # → default-123 (fallback to *+*)
+hort get tenant-id --env prod --context heine  # heine-456
+hort get tenant-id --env prod                  # prod-123
+hort get tenant-id --env staging               # default-123 (fallback to *+*)
 ```
 
-Fallback chain: `env+context → env+* → *+*`. Specific wins, baseline catches the rest.
+Fallback chain: `env+context -> env+* -> *+*`. Specific wins, the baseline catches the rest.
 
-### Service URLs and other values
+### Named fields
 
-Store service URLs, tenant IDs and tokens through the same secret interface:
-
-```bash
-hort set api-url --value "https://api.dev.example.com" --description "Base API URL"
-hort set api-url --value "https://api.example.com" --env prod
-API_URL=$(hort get api-url --env prod)
-```
-
-### Fields
-
-An entry can hold several named values. Without a field you use the default field; reads never fall back from a named field to the default field.
+An entry can hold several named values. Without a field you use the default field; a read never falls back from a named field to the default field.
 
 ```bash
 hort set db-login username --value "app"
@@ -165,325 +154,117 @@ hort get db-login password
 
 ### Discovery
 
-Agents need to know what's available. Hort makes everything discoverable:
-
 ```bash
-hort list
-# api-url      Base API URL           [env: *, prod]
-# tenant-id    SimpleChain tenant ID  [env: *, prod]  [ctx: heine, otto]
-
-hort describe tenant-id
-# Name:         tenant-id
-# Description:  SimpleChain tenant ID
-# Environments: *, prod
-# Contexts:     heine, otto
-
-hort list --json   # Machine-readable output
-hort describe tenant-id --json
+hort list [--json]            # all entries, never values
+hort describe tenant-id       # one entry: fields, environments, contexts
+hort search stripe            # names, descriptions, fields and scopes
+hort status [--json]          # locked or unlocked, account, server, last sync
 ```
 
-### History and migration
+### History and delete
 
-`hort history <name> [--source <name>] [--json]` shows all recorded revisions,
-including values and deletions. List, search and describe never show values.
-New changes record their local UTC time once. Imported legacy values have an
-unknown recorded time. Revisions sort by recorded time and then revision ID;
-unknown times sort first. A whole-entry deletion hides older values, including
-older variants that arrive later. A later set can revive its own scope.
-
-Existing v2 vaults need an explicit conversion after unlocking:
+`hort history <name>` shows all recorded revisions, including values and deletions. List, search and describe never show values. A whole-entry deletion hides older values; a later `set` revives its own scope.
 
 ```bash
-hort unlock
-hort migrate
-hort migrate --source myapp-prod
+hort delete tenant-id                              # whole entry
+hort delete tenant-id --env prod --context heine   # one scoped value
+hort delete db-login password                      # one field
 ```
 
-Each call converts exactly one unlocked source. Migration combines legacy secrets
-and configs into one secret collection and preserves exact keys, values and
-descriptions. If a name exists in both legacy collections, migration stops and
-reports the names without values. Resolve those collisions with the old CLI
-before migrating. The removed config flags have no aliases.
-
-Migration keeps the original encrypted bytes in `<vault>.pre-v3.bak` with mode
-0600. Ordinary saves do not overwrite that backup. Normal reads and writes reject
-v2 and never migrate automatically. The new outer and inner format versions are
-both 3; old binaries cannot read or write v3 vaults. Header fields are
-authenticated with the ciphertext.
-
-### Vault Management
+### Lock and unlock
 
 ```bash
-hort init              # Create new vault (set passphrase)
-hort init --restore    # Restore with existing passphrase on a new machine
-hort unlock            # Unlock vault (passphrase → session key cached)
-hort lock              # Lock vault (clear session key)
-hort status            # Show vault status, entry counts
+hort unlock    # passphrase, plus the Secret Key from ~/.hort/secret-key
+hort lock      # clear the session key
+hort passphrase  # set a new passphrase, keeping the Secret Key
+hort kit       # print the Emergency Kit again
 ```
 
-### Delete
+## Sync and devices
+
+Sync goes through the Hort server: hort.pm (EU, Cloudflare) or your own. The server stores ciphertext and public keys only. It never sees names, values, passphrase, Secret Key or vault key. Reads sync first and writes sync afterwards, for at most 2 seconds; a failed sync prints one warning and never changes the exit code. Hort works offline.
 
 ```bash
-hort delete tenant-id                          # Delete entire entry
-hort delete tenant-id --env prod               # Delete prod override only
-hort delete tenant-id --env prod --context heine  # Delete specific env+context
-hort delete db-login password                  # Delete one field
+hort sync          # sync now, without a time limit; the first run registers the account
 ```
 
-### Mounted Sources
-
-Hort supports multiple secret sources on top of the primary vault. Use `hort source mount` to register an external encrypted file (e.g. an app's instance-local secret store) as an additional source. Reads merge across every unlocked source with a `[source]` prefix; writes default to the primary vault and require `--source <name>` to target a mount.
+To add another device, run this on the new machine:
 
 ```bash
-# Register a mounted source (raw 32-byte key, no KDF)
-hort source mount --name fachwerk-heine \
-  --path ~/.fachwerk-heine/secrets.hort.enc \
-  --key-hex "$MY_APP_MASTER_KEY_HEX"
-
-hort source list                         # primary + all registered mounts
-hort --list                              # merged entries with [mount] prefixes
-hort --set-secret foo --value bar --source fachwerk-heine
-hort --secret foo --source fachwerk-heine
-hort source unmount --name fachwerk-heine
+hort enroll <account-id>     # asks for Secret Key and passphrase, then pulls the vault
+hort devices                 # devices and passkeys of this account
+hort devices revoke <id>     # end a device's server access
 ```
 
-The vault file itself stays on disk between unmounts — unmount only clears the cached key and removes the registry entry. Mount names must be lowercase `a-z0-9._-`. `primary` is reserved.
+Revoking ends server access only. It does not help against someone who already holds your vault key; `hort help recovery` says what does.
 
-### Device sync
+## Web app (hort.pm)
 
-Hort keeps the primary vault of several devices in step through a folder that
-a sync service of your choice, such as iCloud Drive, already replicates. Hort
-itself stays offline: it only reads and writes files in that folder.
+Open https://hort.pm/vault to read, copy and set secrets in the browser. Unlock with passphrase plus Secret Key, or with a passkey. The web app is JavaScript served by hort.pm: if you cannot accept that, use only the CLI. See the [threat model](https://hort.pm/threat-model.html) for what Hort does and does not protect against, and the [terms](https://hort.pm/terms.html).
+
+## Agent integration
+
+Hort is agent-first. `hort --help` ends with an `AGENT INSTRUCTIONS` section: an agent that runs it learns the interface in one call.
+
+1. `hort list --json`: discover entries
+2. `hort describe <name> --json`: environments, contexts, fields
+3. `hort get <name> [<field>]`: the value on stdout, no decoration, safe for `$()` and pipes
+4. Exit code 2 means the vault is locked: the agent asks you to run `hort unlock`
+
+### Ask for secrets without the chat (MCP)
+
+`hort mcp` is an MCP server on stdio with one tool, `request_secret`. The agent passes name, description and optionally field, env and context. You get a link to hort.pm, sign in with a passkey and type the value there. The agent learns only the name and a status (`stored`, `pending`, `declined`, `expired`, `conflict`) and reads the value afterwards with `hort get`. There is no MCP tool that reads values or lists secrets.
 
 ```bash
-# First device
-hort sync setup --path ~/path/to/sync-folder
-
-# Second device: same vault, same passphrase
-mkdir -p ~/.hort
-cp ~/path/to/sync-folder/hort-<id>.enc ~/.hort/vault.enc
-hort init --restore
-hort sync setup --path ~/path/to/sync-folder
-
-hort sync    # Exchange now and report; reads and writes also do this on their own
+claude mcp add hort -- hort mcp
 ```
 
-Each device writes one encrypted copy of its vault into the folder and merges
-the revisions of every other copy. The revision with the later time wins, and
-the other one stays in `hort history`, whichever device delivers first. Reads
-and writes keep working offline; changes travel on the next use with the folder
-in reach. A missing or unresponsive folder costs a warning on stderr and a few
-seconds at most.
+For other MCP clients, register the command `hort mcp` as a stdio server. The vault must be unlocked and registered on the server. `hort mcp --help` has the details.
 
-All devices share one passphrase. A vault created separately has a different
-key, so `hort sync setup` stops without changing anything. Mounted sources are
-not synced.
+### Automation
 
-Migrate a v2 vault before it joins, then bring it to the second device as a copy
-of the migrated v3 file plus `hort init --restore`. Two vaults migrated
-separately with the same key do merge, but migrated revisions have no recorded
-time, so current values can flip to the other device's.
+`HORT_PASSPHRASE` and `HORT_SECRET_KEY` replace the passphrase prompt and the Secret Key file (CI, scripting). Without a terminal, `hort init` prints the Emergency Kit and skips the typed-back confirmation.
 
-A file the sync service has not downloaded yet cannot be read for a moment. Hort
-warns and reads it on a later run; files from other devices never hold up the
-own push.
+## Upgrading from Hort 0.4
 
-If a device cannot read or decrypt its own file in the folder, it stops pushing
-and warns on every use. If that does not clear up, remove that file from the folder by hand and the next run
-writes it anew. After a fresh `hort init` the file still holds the old vault, so
-keep a copy if you need it.
+Hort 1.0 uses a new vault format (v4) with Secret Key and sync through the server. Folder sync is gone. A v3 vault is converted once and locally:
 
-### Removing an older daemon installation
+1. On every device, run `hort sync` with Hort 0.4.x so all changes converge.
+2. Install Hort 1.0 on one device and run `hort migrate`. It asks for your passphrase, creates the account and Secret Key and keeps every revision. The v3 file stays as `~/.hort/vault.enc.pre-v4.bak`.
+3. Run `hort sync` to register the vault on the server, then `hort enroll <account-id>` on your other devices.
 
-Hort now accesses vault files directly through the CLI. Before upgrading an
-older macOS installation, remove its launchd service. For a user-level install:
+A v2 vault must first be migrated with Hort 0.4.1. Mounted sources (`hort source ...`) and the old root flags (`hort --secret`, `hort --list`) no longer exist: use `hort get`, `hort list` and so on. `hort migrate --help` has the details.
+
+If an old macOS installation still has the launchd daemon, remove it:
 
 ```bash
 launchctl bootout "gui/$(id -u)/tech.s16e.hort.daemon"
 rm -f "$HOME/Library/LaunchAgents/tech.s16e.hort.daemon.plist"
-```
-
-For an installation made with `hort daemon install --system`:
-
-```bash
-sudo launchctl bootout system/tech.s16e.hort.daemon
-sudo rm -f /Library/LaunchDaemons/tech.s16e.hort.daemon.plist
-```
-
-If `bootout` reports that the service is not loaded, remove the plist anyway.
-After the service has stopped, remove its unused socket and PID file:
-
-```bash
 rm -f "$HOME/.hort/daemon.sock" "$HOME/.hort/daemon.pid"
 ```
 
-Keep `~/.hort/vault.enc`, its backup, and the session/source files. For v2 vaults, run the explicit migration described above. Containers now run individual CLI commands; mount the
-vault directory at `/var/lib/hort/.hort` and pass the desired command (for
-example `init`, `status --json`, or `--list`).
+## Self-hosting
 
-### Readiness
+The backend is a Cloudflare Worker in `server/` (see [server/README.md](server/README.md)). The step-by-step guide is [docs/self-hosting.md](docs/self-hosting.md). Point the CLI at your server with `hort init --server <url>`.
 
-Apps integrating Hort can use `hort status --json` as a single readiness
-check:
+## Security model
 
-```json
-{
-  "primary": { "unlocked": true, "vault_path":  "/Users/you/.hort/vault.enc",
-               "secret_count": 32 },
-  "ready": true
-}
-```
+- **Encryption:** AES-256-GCM, authenticated and tamper-proof. Keys are derived from passphrase plus Secret Key (Argon2id).
+- **Zero knowledge server:** the sync server stores ciphertext only.
+- **Session key:** file-based in `~/.hort/.session` (mode 0600), scoped to the OS user, until `hort lock`.
+- **No telemetry.** The only network traffic is sync with your configured server.
+- **Not protected against:** root or malware on an unlocked device; whoever controls the hort.pm deployment when you use the web app; losing both Secret Key and passphrase.
 
-`ready: true` means secrets can be resolved right now; `false` means the app
-should ask the user to run `hort unlock`.
+Details: [threat model](https://hort.pm/threat-model.html). Byte-level formats: `spec/vectors/README.md`.
 
-## Agent Integration
-
-Hort is agent-first, not agent-compatible. The `--help` output includes an `AGENT INSTRUCTIONS` section — when an agent runs `hort --help`, it learns the full interface in one call.
-
-**How agents use Hort:**
-
-1. `hort --list` — discover available secrets
-2. `hort --describe <name>` — see environments and contexts for an entry
-3. `hort --secret <name>` — read values
-4. Output is raw on stdout, no decoration — safe for `$()` and pipes
-5. `--json` flag for structured output when agents prefer to parse
-6. Exit code 2 = vault locked → agent asks user to run `hort unlock`
-
-**Automation:** Set `HORT_PASSPHRASE` to skip interactive prompts (CI/CD, scripting):
+## Development
 
 ```bash
-export HORT_PASSPHRASE="my-passphrase"
-hort init    # no terminal prompt
-hort unlock  # no terminal prompt
+go build ./cmd/hort/ && go test ./...
+cd server && npm ci && npm run check:web
 ```
 
-### Claude Code plugin: enter secrets without the chat
-
-The `hort-secrets` plugin lets an agent ask for secrets without seeing them. The agent calls `request_secrets` with name, description and optional env and context per secret. A bar above the prompt shows one field per secret. Enter stores the value through `hort --set-secret --value-stdin`, and the chat only learns the stored name.
-
-```text
-/plugin install hort-secrets --marketplace sebastian-breitzke/hort
-```
-
-Click the field or press `ctrl+x tab` before typing: text typed into the prompt goes to the chat. The field shows the value in plain text. `hort` must be on the `PATH` of the Claude Code process.
-
-## Exit Codes
-
-| Code | Meaning |
-|------|---------|
-| 0 | Success |
-| 1 | General error (not found, invalid args) |
-| 2 | Vault is locked |
-
-## Implementation Details
-
-### Architecture
-
-```
-cmd/hort/main.go            CLI entry point (Cobra)
-internal/
-├── vault/
-│   ├── crypto.go            AES-256-GCM encrypt/decrypt, Argon2id KDF, v3 encryption
-│   ├── format.go            v3 header layout + KDF flag
-│   ├── vault.go             VaultRef, load/save/update by ref, primary helpers
-│   ├── sources.go           Mounted-source registry (~/.hort/sources/index.json)
-│   ├── session.go           Per-ref session key persistence
-│   └── lock.go              Per-ref flock for concurrent writers
-├── store/
-│   └── store.go             Multi-source merge reads, targeted writes, ambiguity detection
-├── cli/
-│   ├── commands.go          Command implementations (direct store access)
-│   └── output.go            Output formatting (plain text + JSON)
-├── helptext/
-│   └── text.go              The `hort --help` string
-└── (...)
-
-```
-
-### Encryption
-
-Everything lives in a single file: `~/.hort/vault.enc`.
-Writes to the same canonical vault path share a local file lock, including mounted and symlink aliases. Locks live under `~/.hort/locks/`. Every successful update keeps the previous encrypted state in `~/.hort/vault.enc.bak`.
-
-**File format** (binary):
-
-```
-[magic:"HRT\x03"][version:1 byte (=3)][kdf:1 byte][salt:32][argon-time:4][argon-memory:4][argon-threads:1][nonce:12][ciphertext+tag:...]
-```
-
-`kdf = 0` → Argon2id-derived key (salt + params are meaningful). `kdf = 1` → raw 32-byte key supplied by the mounter (salt/params fields are present but unused). Mounted sources typically use `kdf = 1` so the mounting app's own master key is used directly, no Argon2id pass.
-
-- **Key derivation:** Argon2id (memory-hard, GPU-resistant) with 64 MB memory cost, 3 iterations, 4 threads
-- **Encryption:** AES-256-GCM with authenticated encryption (tamper-proof)
-- **Salt:** 32 bytes, cryptographically random, generated at vault creation
-- **Nonce:** 12 bytes, fresh random nonce on every write
-
-The header (salt + Argon2id params) is unencrypted by design — these are not secrets. The ciphertext is the AES-256-GCM sealed JSON vault body.
-
-### Vault Structure (decrypted)
-
-```json
-{
-  "version": 3,
-  "source_id": "21e9dcc8a5eb4d029bd7410ae905b13b",
-  "secrets": {
-    "tenant-id": {
-      "revisions": [
-        {
-          "id": "e88fb43536b544158b2c63bd4bbfdc86",
-          "recorded_at": "2026-11-02T12:00:00Z",
-          "op": "set",
-          "key": "*:*",
-          "value": "default-123"
-        }
-      ]
-    }
-  }
-}
-```
-
-Each entry stores only revisions: `set`, `delete`, `delete-entry` and `describe`.
-Current values and descriptions are reduced on read; there is no persisted
-current-value copy. Scoped revisions retain the exact `env:context` key.
-`*` is the baseline for either dimension. Source IDs and revision IDs are
-random 128-bit identities. Sources remain independent; the same name in several
-sources requires disambiguation.
-
-### Session
-
-`hort unlock` derives the encryption key from your passphrase and caches it in `~/.hort/.session` (chmod 600, OS user-owned). The session persists until `hort lock` — no TTL, no daemon.
-
-Subsequent CLI calls read the session key and use it to decrypt the vault on every operation. No in-memory state between calls.
-
-### Security Model
-
-- **Encryption:** AES-256-GCM — authenticated, tamper-proof
-- **Key derivation:** Argon2id — memory-hard, resistant to GPU/ASIC attacks
-- **Session key:** File-based, chmod 600, scoped to OS user
-- **No network:** Zero network access, no telemetry, no phone-home. Hort has no cloud service of its own; device sync only uses a local folder that a third-party service replicates
-- **Sync folder:** Holds encrypted vault copies, never plaintext or keys. Header and salt are included, so anyone who reads the folder can attack the passphrase offline: use a long random one. Deleted values stay in the encrypted history there as well
-- **Threat model:** Protects against other OS users and casual file access. Root access = game over — accepted for a local development tool
-- **Portability:** Same passphrase decrypts the vault on any machine. Copy `vault.enc`, run `hort init --restore`
-
-### Dependencies
-
-| Dependency | Purpose |
-|------------|---------|
-| `github.com/spf13/cobra` | CLI framework |
-| `golang.org/x/crypto` | Argon2id key derivation |
-| `golang.org/x/term` | Terminal passphrase input (no echo) |
-| Standard library | `crypto/aes`, `crypto/cipher`, `crypto/rand`, `encoding/json`, `os` |
-
-### Cross-Platform
-
-Single Go binary. No CGO, no system dependencies. Cross-compiles to:
-
-- macOS (amd64, arm64)
-- Linux (amd64, arm64)
-- Windows (amd64)
-
-GoReleaser builds all targets automatically on GitHub Release.
+Releases: a pushed `v*` tag builds binaries, Homebrew and Scoop packages with GoReleaser and the Docker image; npm is published by hand (see `AGENTS.md`).
 
 ## Name
 

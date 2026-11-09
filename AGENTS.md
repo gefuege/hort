@@ -2,7 +2,7 @@
 
 ## Release
 
-GitHub Actions (GoReleaser) handles Go binaries + Homebrew automatically on tag push.
+GitHub Actions handle everything except npm on tag push: GoReleaser (binaries, Homebrew, Scoop, version from the tag) and the Docker image `ghcr.io/gefuege/hort`.
 
 npm publish is manual — Sebastian runs it locally after tagging:
 
