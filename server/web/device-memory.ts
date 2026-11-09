@@ -1,5 +1,5 @@
 // The account ID this browser remembers, which is not secret.
-// The PRF eval salt depends on it, so a remembered ID lets /login evaluate the
+// The PRF eval salt depends on it, so a remembered ID lets the console evaluate the
 // PRF in the first passkey prompt. The wrapped vault key is unlock-memory.ts.
 // Every access is guarded: without usable storage the login takes two prompts.
 import { accountIdEncode, parseAccountId } from "./vault-core";

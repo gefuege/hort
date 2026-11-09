@@ -84,7 +84,7 @@
     <li><strong>Environments and contexts.</strong><span>One name, many values: dev, prod, per tenant or customer. Lookups fall back to the baseline.</span></li>
     <li><strong>History.</strong><span>Every change is a revision. <code>hort history &lt;name&gt;</code> shows what changed and when.</span></li>
     <li><strong>Offline first.</strong><span>No network calls, no telemetry. Hort works on a plane.</span></li>
-    <li><strong>Device sync through a folder.</strong><span>Point Hort at a folder that iCloud Drive or another sync service already replicates. Hort writes encrypted copies only.</span></li>
+    <li><strong>Device sync through a server.</strong><span>Your devices sync through the Hort server, at hort.pm or one you host yourself. It sees ciphertext only; keys stay on your devices. Sync runs when you use Hort, and Hort works offline.</span></li>
     <li><strong>Values stay out of your shell history.</strong><span><code>--value-stdin</code> keeps secrets out of process arguments.</span></li>
   </ul>
   <h3 class="sub-h">Coming with 1.0</h3>
@@ -121,7 +121,7 @@
       </ul>
     </div>
   </div>
-  <p class="today-note"><strong>Today, specifically:</strong> The CLI never talks to a server. Folder sync puts encrypted vault copies in your sync folder; anyone who can read that folder can try to guess your passphrase offline. Use a long, random one.</p>
+  <p class="today-note"><strong>Today, specifically:</strong> The sync server holds only encrypted vault data. Anyone who gets hold of it can try to guess your passphrase offline, so use a long, random one.</p>
 </div>
 
 <div class="section wrap" id="install">

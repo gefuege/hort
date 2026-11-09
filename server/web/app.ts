@@ -137,6 +137,12 @@ async function changeLock(choice: LockAfter): Promise<void> {
   await api("DELETE", UNLOCK_KEY_PATH).catch(() => undefined);
 }
 
+// Whether an unlock can be kept: a session of the remembered account (an Emergency Kit alone is never kept).
+const keepsUnlock = () => {
+  const remembered = rememberedAccount();
+  return signedIn && !!unlocked && !!remembered && accountIdEncode(remembered) === accountIdEncode(unlocked.accountId);
+};
+
 // The server refused the session: the kept unlock is useless from here.
 function sessionEnded(): void {
   signedIn = false;
@@ -424,6 +430,8 @@ const viewOf = (path: string): View | null =>
   REQUEST_PATH.test(path) ? "request" : ((Object.keys(VIEW_PATH) as (keyof typeof VIEW_PATH)[]).find((v) => VIEW_PATH[v] === path) ?? null);
 
 const typing = (t: EventTarget | null) => t instanceof HTMLElement && t.matches("input, textarea, select");
+// Devices needs only a session, so a user whose passkey cannot unlock the vault can still revoke a lost device.
+const sessionOnly = (view: View) => !unlocked && signedIn && view === "devices";
 
 // A document key listener that ends with its view: it detaches on the first key after the view is gone.
 function keys(root: HTMLElement, handle: (e: KeyboardEvent) => boolean | void): void {
@@ -519,7 +527,7 @@ function sessionBar(): void {
       { class: "status-line" },
       h("span", { class: `acct${unlocked ? "" : " locked"}`, title: `Account ID ${id}` }, h("span", { class: "dot", "aria-hidden": "true" }), id.slice(0, 8) + (id.length > 8 ? "…" : "")),
       h("span", { class: "sep", "aria-hidden": "true" }, "·"),
-      unlocked ? lockMenu() : h("span", {}, "locked"),
+      !unlocked || keepsUnlock() ? lockMenu() : h("span", {}, "locks when the tab closes"),
       h("span", { class: "sep", "aria-hidden": "true" }, "·"),
       signOutLink,
     ),
@@ -531,7 +539,7 @@ function sessionBar(): void {
 function windowBar(view: View): void {
   const title = document.querySelector(".win-bar .title");
   const tabs = document.querySelector(".win-bar .tabs");
-  if (title) title.textContent = `hort — ${!unlocked ? (signedIn || rememberedAccount() ? "locked" : "sign in") : help ? "help" : view}`;
+  if (title) title.textContent = `hort — ${sessionOnly(view) ? view : !unlocked ? (signedIn || rememberedAccount() ? "locked" : "sign in") : help ? "help" : view}`;
   if (!tabs) return;
   const views: View[] = ["vault", "devices", "access"];
   if (requestPath) views.push("request");
@@ -855,12 +863,12 @@ function render(path = location.pathname): void {
   document.getElementById("kit")?.remove();
   sessionBar();
   windowBar(view);
-  document.title = `${!unlocked ? "Sign in" : help ? "Help" : view === "request" ? "Secret request" : view[0].toUpperCase() + view.slice(1)} – Hort`;
+  document.title = `${sessionOnly(view) ? "Devices" : !unlocked ? "Sign in" : help ? "Help" : view === "request" ? "Secret request" : view[0].toUpperCase() + view.slice(1)} – Hort`;
   const first = notice;
   notice = null;
   let run: void | Promise<void>;
-  if (!unlocked) run = unlockView(body, view);
-  else if (help) run = helpView(body);
+  if (!unlocked && !sessionOnly(view)) run = unlockView(body, view);
+  else if (help && unlocked) run = helpView(body);
   else if (view === "access") run = accessView(body, first);
   else if (view === "devices") run = devicesView(body, { h, messageOf, api, ok, login: (into) => (sessionEnded(), signInBlock(into, () => render(), "Sign in with your passkey to see the devices and passkeys of this account.")) });
   else if (view === "request")
@@ -907,7 +915,7 @@ function navigate(path: string): void {
 let chord: number | undefined;
 document.addEventListener("keydown", (e) => {
   if (!unlocked || e.metaKey || e.ctrlKey || e.altKey || e.defaultPrevented || typing(e.target)) return;
-  if ((e.target as Element).closest?.(".menu")) return;
+  if ((e.target as Element).closest?.(".menu, form, .editor")) return;
   if (chord !== undefined) {
     window.clearTimeout(chord);
     chord = undefined;

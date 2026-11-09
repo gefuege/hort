@@ -67,6 +67,8 @@ export async function requestView(main: HTMLElement, host: Host, path: string): 
   const onKey = (e: KeyboardEvent) => {
     if (!root.isConnected) return document.removeEventListener("keydown", onKey);
     if (e.key !== "Escape" || e.defaultPrevented) return;
+    // Escape inside the form is not "leave": it must not discard what was typed.
+    if (e.target instanceof Element && e.target.closest("form, input, textarea, select")) return;
     e.preventDefault();
     host.done();
   };

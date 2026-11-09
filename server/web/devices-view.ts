@@ -1,6 +1,8 @@
 // /devices: the devices and passkeys of the account in the console, with an
 // inline revoke. GET /devices moves the server's visit time to now, so the
 // view loads the listing once and marks revoked rows in place.
+import { formatTime } from "./format-time";
+
 type Child = Node | string | null | false | undefined;
 
 export type Host = {
@@ -17,7 +19,7 @@ type Device = Item & { name: string; last_seen_at: number | null };
 type Passkey = Item & { prf: boolean; last_used_at: number | null };
 export type Listing = { devices: Device[]; passkeys: Passkey[]; last_visit_at?: number | null };
 
-const time = (t: number | null) => (t === null ? "never" : new Date(t * 1000).toLocaleString([], { dateStyle: "short", timeStyle: "short" }));
+const time = (t: number | null) => (t === null ? "never" : formatTime(t * 1000));
 
 // What changed since the previous visit of this account's sessions.
 export function notices(list: Listing): string[] {

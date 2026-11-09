@@ -4,6 +4,7 @@
 // through validateWrite and the Append rule against the in-memory entry, then
 // POST /revisions. Values reach the DOM only on an explicit "Show".
 import { b64Decode, b64Encode } from "../src/wire";
+import { formatTime } from "./format-time";
 import { accountIdEncode, appendStamp, current, lookupKey, newId, nowNs, openRevision, sealRevision, validateWrite, type AccountKeys, type Op, type Revision } from "./vault-core";
 
 type Child = Node | string | null | false | undefined;
@@ -37,7 +38,7 @@ export function forgetVault(): void {
 export class SignInRequired extends Error {}
 
 function sessionRefused(res: Response): SignInRequired | null {
-  if (res.status === 401) return new SignInRequired("Your vault is unlocked, but loading it needs a passkey sign-in on this device.");
+  if (res.status === 401) return new SignInRequired("Your session ended. Your passkey signs you in and unlocks your vault.");
   if (res.status === 409) {
     return new SignInRequired("You are signed in to a different account than the vault unlocked in this tab. Sign in with a passkey of this account, or use its Emergency Kit.");
   }
@@ -284,7 +285,7 @@ export async function vaultView(main: HTMLElement, host: Host): Promise<void> {
       ),
     ),
   );
-  const markSynced = () => (synced.textContent = `synced ${new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`);
+  const markSynced = () => (synced.textContent = `synced ${formatTime(Date.now())}`);
   // Listeners on document stay active only while this console is on the page.
   const active = () => root.isConnected && live();
 

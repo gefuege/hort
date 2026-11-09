@@ -11,7 +11,7 @@
   --grid-major:light-dark(rgba(61,122,28,.13),rgba(140,203,85,.085));--grid-minor:light-dark(rgba(61,122,28,.055),rgba(140,203,85,.035));
   --win:light-dark(#FDFBF6,#1A1617);--win-bar:light-dark(#EDE8DB,#221D1E);--win-shadow:light-dark(rgba(21,18,15,.14),rgba(0,0,0,.55));
   --surface:light-dark(#F1EDE2,#241F20);--ink:light-dark(#15120F,#EDE6DA);--muted:light-dark(#5E584E,#9C948A);--line:light-dark(#E2DCCE,#2C2627);--line-strong:light-dark(#B9B2A1,#443C3E);
-  --accent:light-dark(#E3A639,#F0B43C);--accent-ink:light-dark(#8A5A06,#F0B43C);--on-accent:light-dark(#15120F,#120D05);--accent2:light-dark(#3D7A1C,#8CCB55);--danger:light-dark(#B3261E,#FF8A80);
+  --accent:light-dark(#E3A639,#F0B43C);--accent-ink:light-dark(#8A5A06,#F0B43C);--on-accent:light-dark(#15120F,#120D05);--accent2:light-dark(#3A7519,#8CCB55);--danger:light-dark(#B3261E,#FF8A80);
   --f-sans:"Geist",system-ui,sans-serif;--f-mono:"Geist Mono",ui-monospace,"SF Mono",monospace;
   --r:0;--win-r:10px;--ctl-h:30px;
 }
