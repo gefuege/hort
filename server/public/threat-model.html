@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>Threat model – Hort</title>
+<link rel="icon" type="image/png" href="/favicon.png">
+<link rel="stylesheet" href="/style.css">
+<script src="/theme.js"></script>
+</head>
+<body>
+<nav class="m-nav"><a class="brand" href="/"><span class="chev">&lt;</span><img src="/img/logo.png" alt="" width="28" height="28"><span class="chev">&gt;</span>Hort</a></nav>
+<main class="section legal">
+<h1>Threat model</h1>
+<p>As of November 2026 · <a href="/privacy">Privacy (Datenschutz)</a> · <a href="/terms">Terms</a></p>
+<p>This page says what Hort protects and what it does not. It describes Hort 1.0 as built; where the code and a promise differ, the code wins.</p>
+
+<h2>What Hort protects</h2>
+<ul>
+  <li><strong>The server holds ciphertext only.</strong> Secret names, descriptions and values are encrypted on your device before they are sent. The server cannot decrypt them, and it cannot forge or change a revision, move one to another account, or replay an old passphrase slot (slots carry a signature by your account key and a version).</li>
+  <li><strong>Two secrets are needed to open your data: passphrase plus Secret Key.</strong> The Secret Key is 128 bits and never leaves your devices. Someone who gets the passphrase slot from the server (it can be fetched without signing in, which is how the Emergency Kit works) still cannot brute-force the passphrase without the Secret Key. The passphrase is stretched with Argon2id.</li>
+  <li><strong>Passkeys are bound to hort.pm.</strong> A phishing page on another domain cannot use them. Passkeys that support the PRF extension can unlock the vault in the browser without passphrase and Secret Key.</li>
+  <li><strong>The vault key stays in the browser.</strong> The web app keeps it in memory. To survive a reload within the lock time you picked (default 1 hour of idle time), it stores the vault key in the browser encrypted with a per-session unlock key that only the server hands out, only to your signed-in session, for that session. Neither the server alone nor the browser storage alone can open it. Signing out, choosing "immediately" or an ended session deletes it.</li>
+  <li><strong>Data placement:</strong> each account lives in its own SQLite Durable Object in Cloudflare's EU jurisdiction.</li>
+  <li><strong>A stolen locked device</strong> gives the thief the encrypted vault file and the Secret Key file, but not the passphrase. Revoking the device ends its server access.</li>
+  <li><strong>Agents:</strong> the MCP tool <code>request_secret</code> sends your agent's request to the web app, where you enter the value. The value never enters the chat. It adds no read power, because an agent with shell access could already run <code>hort get</code>.</li>
+</ul>
+
+<h2>What Hort does not protect against</h2>
+<ul>
+  <li><strong>A compromised device while the vault is unlocked.</strong> Malware, or anyone using the unlocked machine, can read and write everything, including the session file the CLI keeps while unlocked.</li>
+  <li><strong>Malicious web code served by the operator.</strong> If hort.pm, or Cloudflare, served you modified JavaScript, that code could read your passphrase, Secret Key and every value in the browser session. Users who only use the CLI are not affected. This is the largest residual risk of the web app. Mitigations: a strict Content Security Policy, no third-party code, open source. Checking the code that was actually served is on you; if you cannot accept this, use the CLI only or self-host.</li>
+  <li><strong>A compromised vault key.</strong> Whoever holds your vault key (a stolen unlocked device, a leaked session file, malicious web code) can read everything, derive your account key and enroll new devices and passkeys, including after being revoked. <strong>Revoking a device does not help.</strong> In Hort 1.0 the only recovery is a new account: run <code>hort init</code> on a clean device, set your values again and rotate the exposed secrets at their source. Hort 1.0 has no vault key rotation.</li>
+  <li><strong>Withholding and rollback.</strong> The operator can deny service, delay revisions or refuse enrollment. Hort 1.0 cannot detect that new revisions are being held back. Every device keeps a full copy, so the server never holds the only one.</li>
+  <li><strong>Metadata the server sees</strong> (the list below).</li>
+  <li><strong>Lost passphrase or Secret Key.</strong> There is no reset and no backdoor (see Recovery).</li>
+</ul>
+
+<h2>What the server can see</h2>
+<p>The server can see:</p>
+<ul>
+  <li>your account ID (random, no name or e-mail) and its creation time;</li>
+  <li>device names (you choose them with <code>--name</code>; the default is generic, such as <code>darwin-ab3d</code>), device and passkey public keys, and their created, last-seen and revoked times;</li>
+  <li>number, size, order and arrival time of revisions, and which device pushed each one;</li>
+  <li>that an agent request exists, its status, time and encrypted size;</li>
+  <li>session timing, and IP addresses and request details as processed by Cloudflare (see <a href="/privacy">Privacy</a>).</li>
+</ul>
+<p>The server cannot see secret names, descriptions, fields, environments, values, your passphrase, Secret Key or vault key, nor what a revision contains (a set, a delete or a description), nor the name of a requested secret.</p>
+<p>From sizes and times the operator can infer roughly how much you store and when you use Hort. Hort 1.0 adds no padding.</p>
+
+<h2>Recovery</h2>
+<ul>
+  <li>Forgot the passphrase but a device is unlocked, or a passkey unlocks the web app: set a new one (<code>hort passphrase</code>, or in the web app under Access).</li>
+  <li>Lost the Secret Key but a device is unlocked: <code>hort kit</code> prints it again.</li>
+  <li>Lost a locked device: <code>hort devices revoke &lt;id&gt;</code>. A thief still needs the passphrase to read a copied vault file.</li>
+  <li>Lost both passphrase and Secret Key, with no unlocked device or passkey: <strong>the data cannot be recovered</strong>. Hort cannot help, by design.</li>
+  <li>Vault key compromised: new account and rotation at the source, as above. <code>hort help recovery</code> says the same.</li>
+</ul>
+<p>Keep the Emergency Kit (Secret Key and account ID) apart from your passphrase. Whoever holds both can read everything.</p>
+<p>You can also run your own server: see <a href="https://github.com/gefuege/hort/blob/main/docs/self-hosting.md">self-hosting</a>. That moves the operator role to you; it does not remove the trust in the code your server serves.</p>
+<p><a href="/">← Back to Hort</a></p>
+</main>
+</body>
+</html>
