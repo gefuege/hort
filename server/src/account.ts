@@ -336,6 +336,9 @@ export class Account extends DurableObject<Env> {
     const version = this.ctx.storage.transactionSync(() => {
       this.sql.exec("UPDATE passkeys SET revoked_at = ?, slot_id = NULL WHERE id = ?", now(), id);
       if (passkey.slot_id) this.sql.exec("DELETE FROM slots WHERE id = ?", passkey.slot_id);
+      for (const { token_hash } of this.sql.exec<{ token_hash: string }>("SELECT token_hash FROM sessions WHERE credential_id = ?", passkey.credential_id)) {
+        this.ctx.storage.kv.delete(UNLOCK_KEY_PREFIX + token_hash);
+      }
       this.sql.exec("DELETE FROM sessions WHERE credential_id = ?", passkey.credential_id);
       return this.bumpDevicesVersion();
     });
@@ -504,9 +507,8 @@ export class Account extends DurableObject<Env> {
     const t = now();
     const live = new Set(this.sql.exec<{ token_hash: string }>("SELECT token_hash FROM sessions WHERE expires_at > ?", t).toArray().map((r) => r.token_hash));
     const kv = this.ctx.storage.kv;
-    for (const [name] of kv.list({ prefix: UNLOCK_KEY_PREFIX })) {
-      if (!live.has(name.slice(UNLOCK_KEY_PREFIX.length))) kv.delete(name);
-    }
+    const ended = [...kv.list({ prefix: UNLOCK_KEY_PREFIX })].map(([name]) => name).filter((name) => !live.has(name.slice(UNLOCK_KEY_PREFIX.length)));
+    for (const name of ended) kv.delete(name);
     const sessionEnd = this.sql.exec<{ e: number }>("SELECT expires_at AS e FROM sessions WHERE token_hash = ?", req.session).one().e;
     const entry: UnlockKey = { key: b64Encode(crypto.getRandomValues(new Uint8Array(32))), expires_at: Math.min(t + ttl, sessionEnd) };
     kv.put(UNLOCK_KEY_PREFIX + req.session, entry);

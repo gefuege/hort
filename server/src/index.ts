@@ -307,11 +307,18 @@ async function route(request: Request, env: Bindings): Promise<Response> {
     const session = await readSession(request, url, method !== "GET");
     if (session instanceof Response) return session;
     const stub = accountStub(env, session.accountId);
-    if (method === "GET") return stub.getUnlockKey(session);
-    if (method === "DELETE") return stub.deleteUnlockKey(session);
-    const body = await readBody(request);
-    if (!body) return fail(413, "request body exceeds 64 KiB");
-    return stub.putUnlockKey(session, body);
+    let res: Response;
+    if (method === "GET") res = await stub.getUnlockKey(session);
+    else if (method === "DELETE") res = await stub.deleteUnlockKey(session);
+    else {
+      const body = await readBody(request);
+      if (!body) return fail(413, "request body exceeds 64 KiB");
+      res = await stub.putUnlockKey(session, body);
+    }
+    // The key must not outlive the session in the browser's HTTP cache.
+    const uncached = new Response(res.body, res);
+    uncached.headers.set("Cache-Control", "no-store");
+    return uncached;
   }
 
   return fail(404, "not found");

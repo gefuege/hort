@@ -92,7 +92,8 @@ async function keepUnlocked(): Promise<void> {
     }
     const { key, expires_at } = (await res.json()) as { key: string; expires_at: number };
     const wrapped = await wrapVaultKey(b64Decode(key)!, u.accountId, u.vk, expires_at);
-    if (unlocked === u) storeUnlock(wrapped);
+    // Stored only if nothing changed meanwhile, so a quick switch to "immediately" wins.
+    if (unlocked === u && lockSetting() === choice) storeUnlock(wrapped);
   } catch {
     // the vault locks on reload
   }
@@ -763,7 +764,8 @@ async function start(): Promise<void> {
     document.querySelector("main")?.replaceChildren(h("p", { class: "status", role: "status" }, "Unlocking …"));
     await restoreUnlocked();
   }
-  if (location.pathname === path) render(path);
+  // A click during "Unlocking …" rendered its view locked; render it again once unlocked.
+  if (location.pathname === path || unlocked) render(location.pathname);
 }
 
 // A page restored from the back-forward cache shows the state it had, but its memory was dropped.

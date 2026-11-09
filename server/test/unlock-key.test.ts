@@ -2,9 +2,9 @@
 import { env } from "cloudflare:workers";
 import { runInDurableObject } from "cloudflare:test";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { b64Decode } from "../src/wire";
+import { b64Decode, hexEncode, sha256 } from "../src/wire";
 import { created, randomFixture } from "./helpers";
-import { session, sessionFetch } from "./passkey";
+import { Authenticator, cookieOf, login, registerPasskey, session, sessionFetch } from "./passkey";
 
 afterEach(() => vi.useRealTimers());
 
@@ -18,6 +18,25 @@ const tables = (account: string) =>
     state.storage.sql.exec<{ name: string }>("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE '\\_cf\\_%' ESCAPE '\\' AND name <> 'sqlite_sequence' ORDER BY name").toArray().map((r) => r.name));
 
 describe("unlock key", () => {
+  it("is never cached and goes with a revoked passkey", async () => {
+    const f = await created(await randomFixture());
+    const a = await Authenticator.create();
+    expect((await registerPasskey(f, a)).status).toBe(201);
+    const cookie = cookieOf(await login(f, a));
+    const put = await sessionFetch(cookie, "PUT", PATH, { ttl: 3600 });
+    expect(put.headers.get("Cache-Control")).toBe("no-store");
+    const got = await sessionFetch(cookie, "GET", PATH);
+    expect(got.status).toBe(200);
+    expect(got.headers.get("Cache-Control")).toBe("no-store");
+
+    // Revoked from a second session: the first session's key leaves storage with it.
+    const other = await session(f);
+    const id = hexEncode(await sha256(a.credentialId));
+    expect((await sessionFetch(other, "DELETE", `/api/v1/devices/${id}`)).status).toBe(200);
+    expect(await kvKeys(f.account)).toEqual([]);
+    expect((await sessionFetch(cookie, "GET", PATH)).status).toBe(401);
+  });
+
   it("creates, reads, replaces and deletes the key of the session, without a schema change", async () => {
     const f = await created(await randomFixture());
     const cookie = await session(f);
