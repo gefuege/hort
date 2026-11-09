@@ -23,7 +23,7 @@ code{font-family:var(--f-mono);font-size:.9em}
 :focus-visible{outline:2px solid var(--ink);outline-offset:2px}
 .wrap{max-width:1160px;margin:0 auto}
 
-.m-nav{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:16px clamp(16px,4vw,48px);border-bottom:1px solid var(--line)}
+.m-nav{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:12px;padding:16px clamp(16px,4vw,48px);border-bottom:1px solid var(--line)}
 .brand{display:flex;align-items:center;gap:10px;font:800 18px var(--f-display);letter-spacing:.04em;text-transform:uppercase;text-decoration:none}
 .brand img{width:32px;height:32px}
 .chev{color:var(--accent2);font-weight:800}
@@ -35,6 +35,8 @@ code{font-family:var(--f-mono);font-size:.9em}
 .theme-switch button:last-child{border-right:0}
 .theme-switch button[aria-pressed="true"]{background:var(--ink);color:var(--bg)}
 .theme-switch button:focus-visible{outline-offset:-2px}
+.lock-switch{display:flex;align-items:center;gap:6px;font:700 12px/1 var(--f-mono);color:var(--muted);flex:none;margin-left:auto}
+.lock-switch select{font:inherit;color:var(--ink);background:var(--bg);border:1px solid var(--line-strong);border-radius:var(--r);padding:6px 8px}
 
 .section{padding:clamp(40px,7vw,88px) clamp(16px,4vw,48px)}
 .btn{display:inline-flex;align-items:center;gap:8px;font:700 14px/1 var(--f-mono);text-decoration:none;padding:13px 20px;border-radius:var(--r);border:1px solid transparent}

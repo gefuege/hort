@@ -301,6 +301,19 @@ async function route(request: Request, env: Bindings): Promise<Response> {
     return cleared;
   }
 
+  // The web app's unlock key of this session (README "Passkeys and sessions").
+  if (path === "/api/v1/session/unlock-key") {
+    if (method !== "PUT" && method !== "GET" && method !== "DELETE") return fail(405, "method not allowed");
+    const session = await readSession(request, url, method !== "GET");
+    if (session instanceof Response) return session;
+    const stub = accountStub(env, session.accountId);
+    if (method === "GET") return stub.getUnlockKey(session);
+    if (method === "DELETE") return stub.deleteUnlockKey(session);
+    const body = await readBody(request);
+    if (!body) return fail(413, "request body exceeds 64 KiB");
+    return stub.putUnlockKey(session, body);
+  }
+
   return fail(404, "not found");
 }
 

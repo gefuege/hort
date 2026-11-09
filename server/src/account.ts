@@ -65,6 +65,10 @@ const MAX_PAGE_CT_BYTES = 4 * 1024 * 1024; // keeps a pull page response near 5.
 const MAX_ACCOUNT_REVISIONS = 50_000;
 const MAX_ACCOUNT_CT_BYTES = 64 * 1024 * 1024;
 const REQUEST_TTL_SECONDS = 24 * 60 * 60;
+// Lock times the web app offers: 15 min, 1 h, 8 h.
+const UNLOCK_KEY_TTLS = [900, 3600, 28800];
+const UNLOCK_KEY_PREFIX = "unlock:";
+const NO_UNLOCK_KEY = "no unlock key for this session";
 
 type AccountRow = { id: string; ak_pub: ArrayBuffer; devices_version: number };
 type DeviceRow = { id: string; pub: ArrayBuffer; name: string; created_at: number; last_seen_at: number | null; revoked_at: number | null };
@@ -80,6 +84,8 @@ export type SessionAuth = { accountId: string; session: string };
 type Auth = Signed | SessionAuth;
 // WebAuthn relying party, taken from the request URL the Worker serves.
 export type RelyingParty = { origin: string; id: string };
+// A session's unlock key in the DO key-value store under unlock:<token_hash>.
+type UnlockKey = { key: string; expires_at: number };
 type RequestRow = { id: string; status: string; meta_ct: ArrayBuffer; from_device: string; created_at: number; revision_ids: string | null };
 
 const now = () => Math.floor(Date.now() / 1000);
@@ -479,7 +485,53 @@ export class Account extends DurableObject<Env> {
 
   // DELETE /api/v1/session: sign out. The Worker clears the cookie.
   async logout(req: SessionAuth): Promise<Response> {
-    if (this.account()?.id === req.accountId) this.sql.exec("DELETE FROM sessions WHERE token_hash = ?", req.session);
+    if (this.account()?.id === req.accountId) {
+      this.sql.exec("DELETE FROM sessions WHERE token_hash = ?", req.session);
+      this.ctx.storage.kv.delete(UNLOCK_KEY_PREFIX + req.session);
+    }
+    return new Response(null, { status: 204 });
+  }
+
+  // PUT /api/v1/session/unlock-key {ttl}, session + CSRF. Creates or replaces
+  // the session's unlock key: 32 random bytes the web app wraps the vault key
+  // with in browser storage. It expires after ttl seconds, at the latest with
+  // the session. Keys of ended sessions are dropped here.
+  async putUnlockKey(req: SessionAuth, body: Uint8Array): Promise<Response> {
+    const auth = await this.authenticate(req, true);
+    if (auth instanceof Response) return auth;
+    const ttl = parseObject(body, ["ttl"])?.ttl;
+    if (typeof ttl !== "number" || !UNLOCK_KEY_TTLS.includes(ttl)) return fail(400, "body must be {ttl} with ttl 900, 3600 or 28800");
+    const t = now();
+    const live = new Set(this.sql.exec<{ token_hash: string }>("SELECT token_hash FROM sessions WHERE expires_at > ?", t).toArray().map((r) => r.token_hash));
+    const kv = this.ctx.storage.kv;
+    for (const [name] of kv.list({ prefix: UNLOCK_KEY_PREFIX })) {
+      if (!live.has(name.slice(UNLOCK_KEY_PREFIX.length))) kv.delete(name);
+    }
+    const sessionEnd = this.sql.exec<{ e: number }>("SELECT expires_at AS e FROM sessions WHERE token_hash = ?", req.session).one().e;
+    const entry: UnlockKey = { key: b64Encode(crypto.getRandomValues(new Uint8Array(32))), expires_at: Math.min(t + ttl, sessionEnd) };
+    kv.put(UNLOCK_KEY_PREFIX + req.session, entry);
+    return json(200, entry);
+  }
+
+  // GET /api/v1/session/unlock-key, session: the unlock key while it and the
+  // session are valid, else 404. Reading extends nothing.
+  async getUnlockKey(req: SessionAuth): Promise<Response> {
+    const auth = await this.authenticate(req, false);
+    if (auth instanceof Response) return auth;
+    const name = UNLOCK_KEY_PREFIX + req.session;
+    const entry = this.ctx.storage.kv.get<UnlockKey>(name);
+    if (!entry) return fail(404, NO_UNLOCK_KEY);
+    if (entry.expires_at <= now()) {
+      this.ctx.storage.kv.delete(name);
+      return fail(404, NO_UNLOCK_KEY);
+    }
+    return json(200, entry);
+  }
+
+  // DELETE /api/v1/session/unlock-key, session + CSRF: lock now. Like sign-out
+  // it touches only the cookie's own session, so an ended session may call it.
+  async deleteUnlockKey(req: SessionAuth): Promise<Response> {
+    if (this.account()?.id === req.accountId) this.ctx.storage.kv.delete(UNLOCK_KEY_PREFIX + req.session);
     return new Response(null, { status: 204 });
   }
 

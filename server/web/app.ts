@@ -1,7 +1,8 @@
 // Hort web app: /login, /recover, /devices, /vault and /r/<id> (contract §5.4, §8.1, §8.2).
-// The vault key lives only in this module's memory. The pages are one
-// app: links between them swap the view without a page load, so an unlocked
-// vault stays unlocked; closing the tab or signing out drops everything.
+// The vault key lives in this module's memory. The pages are one app: links
+// between them swap the view without a page load, so an unlocked vault stays
+// unlocked. With a lock time other than "immediately", reloads and new tabs
+// reopen it until that time (unlock-memory.ts); signing out drops everything.
 // No innerHTML anywhere: the CSP requires Trusted Types for script sinks.
 import { b64Decode, b64Encode, b64urlDecode, b64urlEncode, str } from "../src/wire";
 import {
@@ -26,6 +27,19 @@ import {
   type SlotRecord,
 } from "./vault-core";
 import { forgetDevice, rememberAccount, rememberedAccount } from "./device-memory";
+import {
+  dropUnlock,
+  LOCK_CHOICES,
+  LOCK_LABEL,
+  LOCK_TTL,
+  lockSetting,
+  setLockSetting,
+  storedUnlock,
+  storeUnlock,
+  unwrapVaultKey,
+  wrapVaultKey,
+  type LockAfter,
+} from "./unlock-memory";
 import { REQUEST_PATH, requestView } from "./request-view";
 import { forgetVault, vaultView } from "./vault-view";
 
@@ -54,6 +68,84 @@ async function unlock(accountId: Uint8Array, vk: Uint8Array, akPub: Uint8Array, 
   }
   unlocked?.vk.fill(0);
   unlocked = { accountId, vk, keys };
+  await keepUnlocked();
+}
+
+// ---------------------------------------------------------------------------
+// Lock time: the vault stays unlocked across reloads and tabs until then
+
+const UNLOCK_KEY_PATH = "/api/v1/session/unlock-key";
+
+// Wraps the vault key with a fresh unlock key of this session for the chosen
+// lock time. Without a session of this account (Emergency Kit alone) the
+// server refuses and nothing is kept.
+async function keepUnlocked(): Promise<void> {
+  const choice = lockSetting();
+  const u = unlocked;
+  const remembered = rememberedAccount();
+  if (!u || choice === "immediately" || !remembered || accountIdEncode(remembered) !== accountIdEncode(u.accountId)) return;
+  try {
+    const res = await api("PUT", UNLOCK_KEY_PATH, { body: JSON.stringify({ ttl: LOCK_TTL[choice] }) });
+    if (!res.ok) {
+      dropUnlock();
+      return;
+    }
+    const { key, expires_at } = (await res.json()) as { key: string; expires_at: number };
+    const wrapped = await wrapVaultKey(b64Decode(key)!, u.accountId, u.vk, expires_at);
+    if (unlocked === u) storeUnlock(wrapped);
+  } catch {
+    // the vault locks on reload
+  }
+}
+
+// On page start: reopens the vault this browser keeps unlocked, while the
+// server still hands out the session's unlock key.
+async function restoreUnlocked(): Promise<void> {
+  const w = storedUnlock();
+  if (!w || unlocked) return;
+  const accountId = parseAccountId(w.account);
+  const remembered = rememberedAccount();
+  if (!accountId || !remembered || accountIdEncode(remembered) !== w.account || w.expires_at <= Date.now() / 1000) {
+    dropUnlock();
+    return;
+  }
+  let res: Response;
+  try {
+    res = await fetch(UNLOCK_KEY_PATH, { headers: { "Hort-Account": w.account }, credentials: "same-origin" });
+  } catch {
+    return; // offline: locked for now, the stored unlock stays
+  }
+  if (res.status === 401 || res.status === 404 || res.status === 409) dropUnlock();
+  if (!res.ok) return;
+  try {
+    const { key } = (await res.json()) as { key: string };
+    const vk = await unwrapVaultKey(b64Decode(key)!, accountId, w);
+    const keys = await deriveAccountKeys(vk, accountId);
+    unlocked = { accountId, vk, keys };
+    signedIn = true;
+  } catch {
+    dropUnlock();
+  }
+}
+
+async function changeLock(choice: LockAfter): Promise<void> {
+  setLockSetting(choice);
+  if (choice !== "immediately") return keepUnlocked();
+  dropUnlock();
+  await api("DELETE", UNLOCK_KEY_PATH).catch(() => undefined);
+}
+
+function lockControl(): HTMLElement {
+  const select = h("select", { id: "lock-after" }, ...LOCK_CHOICES.map((c) => h("option", { value: c }, LOCK_LABEL[c])));
+  select.value = lockSetting();
+  select.addEventListener("change", () => void changeLock(select.value as LockAfter));
+  return h("label", { class: "lock-switch", htmlFor: "lock-after" }, "Lock", select);
+}
+
+// The server refused the session: the kept unlock is useless from here.
+function sessionEnded(): void {
+  signedIn = false;
+  dropUnlock();
 }
 
 // ---------------------------------------------------------------------------
@@ -304,6 +396,7 @@ async function kitUnlock(accountId: Uint8Array, secretKey: Uint8Array, passphras
 
 async function signOut(): Promise<void> {
   await api("DELETE", "/api/v1/session").catch(() => undefined);
+  dropUnlock();
   if (rememberedAccount() && confirm("Forget this device? Your next sign-in here then asks for the passkey twice again.")) forgetDevice();
   forget();
   location.assign("/login");
@@ -358,7 +451,13 @@ function unlockedPanel(): HTMLElement {
     { class: "panel" },
     h("h2", { class: "panel-h" }, "Vault unlocked"),
     h("p", {}, "Account ", h("code", {}, accountIdEncode(unlocked!.accountId))),
-    h("p", { class: "muted" }, "Your vault key stays in this tab only. Closing the tab or signing out locks it again."),
+    h(
+      "p",
+      { class: "muted" },
+      lockSetting() === "immediately" || !signedIn
+        ? "Your vault key stays in this tab only. Closing the tab or signing out locks it again."
+        : `This browser keeps your vault unlocked across reloads and tabs, and locks it ${LOCK_LABEL[lockSetting()]} or when you sign out.`,
+    ),
     h("div", { class: "actions" }, signedIn ? h("a", { class: "btn btn-primary", href: "/vault" }, "Open vault") : null, signedIn ? h("a", { class: "btn btn-ghost", href: "/devices" }, "Devices") : null, location.pathname === "/recover" ? null : h("a", { class: "btn btn-ghost", href: "/recover" }, "Set new passphrase"), signOutButton),
     out.el,
   );
@@ -513,7 +612,7 @@ async function devicesView(main: HTMLElement): Promise<void> {
   main.append(out.el);
   const res = await fetch("/api/v1/devices", { credentials: "same-origin" });
   if (res.status === 401) {
-    signedIn = false;
+    sessionEnded();
     out.set("");
     loginView(main, () => render("/devices"));
     return;
@@ -595,7 +694,7 @@ const routes: Record<string, { tag: string; title: string; view: (main: HTMLElem
         unlocked: () => unlocked,
         // The vault asks for sign-in only when the server refused the session (or there is none).
         login: (into) => {
-          signedIn = false;
+          sessionEnded();
           loginView(into, () => render("/vault"));
         },
       }),
@@ -616,9 +715,7 @@ const requestRoute = {
         api,
         ok,
         keys: () => (unlocked && signedIn ? unlocked.keys : null),
-        sessionLost: () => {
-          signedIn = false;
-        },
+        sessionLost: sessionEnded,
         login: (into, done) => loginView(into, done),
       },
       location.pathname,
@@ -655,7 +752,21 @@ document.addEventListener("click", (e) => {
   navigate(a.pathname);
 });
 window.addEventListener("popstate", () => routeFor(location.pathname) && render(location.pathname));
+// Wipes memory only; the kept unlock in browser storage is what lets a reload reopen the vault.
 window.addEventListener("pagehide", forget);
+
+// Reopens a kept unlock, then renders. "Unlocking …" shows while that runs.
+async function start(): Promise<void> {
+  const path = location.pathname;
+  if (!routeFor(path)) return;
+  if (storedUnlock()) {
+    document.querySelector("main")?.replaceChildren(h("p", { class: "status", role: "status" }, "Unlocking …"));
+    await restoreUnlocked();
+  }
+  if (location.pathname === path) render(path);
+}
+
 // A page restored from the back-forward cache shows the state it had, but its memory was dropped.
-window.addEventListener("pageshow", (e) => e.persisted && routeFor(location.pathname) && render(location.pathname));
-if (routeFor(location.pathname)) render(location.pathname);
+window.addEventListener("pageshow", (e) => e.persisted && void start());
+if (routeFor(location.pathname)) document.querySelector(".m-nav")?.append(lockControl());
+void start();
