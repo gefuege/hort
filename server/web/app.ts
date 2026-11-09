@@ -691,7 +691,7 @@ const routes: Record<string, { tag: string; title: string; view: (main: HTMLElem
     title: "Vault",
     view: (main) =>
       vaultView(main, {
-        h, field, status, action, messageOf, api, ok,
+        h, messageOf, api, ok,
         unlocked: () => unlocked,
         // The vault asks for sign-in only when the server refused the session (or there is none).
         login: (into) => {

@@ -1,9 +1,9 @@
-// The /vault data path against a fake server: refused sessions, and a write
-// that a fresh pull (another tab) reads back.
+// The /vault data path against a fake server (refused sessions, and a write
+// that a fresh pull reads back), the per-value rows and filter, and the keys.
 import { beforeEach, describe, expect, it } from "vitest";
 import { b64Decode } from "../src/wire";
-import { current, deriveAccountKeys, resolve } from "../web/vault-core";
-import { forgetVault, pull, SignInRequired, write, type Host } from "../web/vault-view";
+import { current, deriveAccountKeys, resolve, type Op, type Revision } from "../web/vault-core";
+import { command, forgetVault, pull, rowLabel, rows, SignInRequired, write, type Host } from "../web/vault-view";
 
 async function unlockedVault() {
   const accountId = crypto.getRandomValues(new Uint8Array(16));
@@ -72,5 +72,52 @@ describe("vault-view", () => {
     await expect(write(host, u, "has space", [{ op: "set", field: "", key: "*:*", value: "v" }])).rejects.toThrow("does not meet the rules");
     await expect(write(host, u, "db", [{ op: "set", field: "", key: "a:b:c", value: "v" }])).rejects.toThrow("env and context");
     expect(rows).toEqual([]);
+  });
+});
+
+let seq = 0n;
+const rev = (op: Op, field = "", key = "", value = ""): Revision => ({ id: `r${++seq}`, recordedAt: seq, op, field, key, value });
+
+describe("vault rows", () => {
+  const entries = new Map<string, Revision[]>([
+    ["stripe", [rev("set", "secret_key", "prod:tenant-a", "a"), rev("set", "secret_key", "staging:*", "s"), rev("describe", "", "", "Payments")]],
+    ["db", [rev("set", "password", "prod:*", "p"), rev("set", "username", "*:*", "u")]],
+    ["npm", [rev("set", "", "*:*", "n")]],
+    ["notes", [rev("describe", "", "", "only a description")]],
+    ["gone", [rev("set", "", "*:*", "x"), rev("delete-entry")]],
+  ]);
+
+  it("lists one row per value, the entry's name and description on its first row only", () => {
+    const r = rows(entries, "");
+    expect(r.secrets).toBe(4);
+    expect(r.values).toBe(5);
+    expect(r.rows.map(rowLabel)).toEqual(["db password · env prod", "db username", "notes", "npm", "stripe secret_key · env prod · context tenant-a", "stripe secret_key · env staging"]);
+    expect(r.rows.map((x) => x.first)).toEqual([true, false, true, true, true, false]);
+    expect(r.rows.find((x) => x.name === "notes")!.value).toBeNull();
+  });
+
+  it("matches individual values by their field, env or context, and every value by the entry's name or description", () => {
+    expect(rows(entries, "prod").rows.map(rowLabel)).toEqual(["db password · env prod", "stripe secret_key · env prod · context tenant-a"]);
+    expect(rows(entries, "payments staging").rows.map(rowLabel)).toEqual(["stripe secret_key · env staging"]);
+    expect(rows(entries, "DB").rows).toHaveLength(2);
+    expect(rows(entries, "default").rows.map(rowLabel)).toEqual(["npm"]);
+    const tenant = rows(entries, "tenant-a").rows;
+    expect(tenant.map((x) => [x.name, x.first])).toEqual([["stripe", true]]);
+    expect(rows(entries, "nothing-like-this").rows).toEqual([]);
+  });
+});
+
+describe("vault keys", () => {
+  it("maps keys by focus: list shortcuts, filter hand-off, editor typing, inline confirm", () => {
+    expect(["/", "ArrowDown", "ArrowUp", "Enter", "c", "e", "d", "n", "r"].map((k) => command(k, "list", false))).toEqual(["filter", "down", "up", "show", "copy", "edit", "delete", "new", "refresh"]);
+    expect(command("x", "list", false)).toBeNull();
+    expect(command("ArrowDown", "filter", false)).toBe("first");
+    expect(command("Enter", "filter", false)).toBe("first");
+    expect(command("n", "filter", false)).toBeNull();
+    expect(command("c", "editor", false)).toBeNull();
+    expect(command("Enter", "button", false)).toBeNull();
+    expect(command("c", "button", false)).toBe("copy");
+    expect([command("y", "list", true), command("n", "list", true), command("c", "list", true)]).toEqual(["yes", "no", null]);
+    for (const focus of ["list", "filter", "editor", "button"] as const) expect(command("Escape", focus, true)).toBe("close");
   });
 });

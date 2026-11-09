@@ -7,16 +7,12 @@ import { b64Decode, b64Encode } from "../src/wire";
 import { accountIdEncode, appendStamp, current, lookupKey, newId, nowNs, openRevision, sealRevision, validateWrite, type AccountKeys, type Op, type Revision } from "./vault-core";
 
 type Child = Node | string | null | false | undefined;
-type StatusOut = { el: HTMLElement; set: (text: string, kind?: "error" | "ok") => void };
 type Unlocked = { accountId: Uint8Array; keys: AccountKeys };
 type Api = Pick<Host, "api" | "ok">;
 
 // What the page needs from the app shell, which owns the unlocked vault.
 export type Host = {
   h: <K extends keyof HTMLElementTagNameMap>(tag: K, props?: Record<string, unknown>, ...children: Child[]) => HTMLElementTagNameMap[K];
-  field: (label: string, input: HTMLInputElement | HTMLTextAreaElement) => HTMLElement;
-  status: () => StatusOut;
-  action: (button: HTMLButtonElement, out: StatusOut, run: () => Promise<void>) => void;
   messageOf: (err: unknown) => string;
   // Session calls carry Hort-Account of the unlocked vault; the server answers
   // 409 when the session belongs to another account.
@@ -107,19 +103,27 @@ export async function write(host: Api, u: Unlocked, name: string, changes: Chang
   for (const r of built) if (stored.has(r.id)) remember(v, name, r);
 }
 
+
 // ---------------------------------------------------------------------------
 // Clipboard: cleared 30 s after a copy. Browsers may refuse a write without a
 // recent user action in the tab, so a clear that fails is retried on the next
-// pointer or key press here.
+// pointer or key press here. `cleared` hears whether each attempt worked.
 
+const CLIPBOARD_S = 30;
+const REVEAL_S = 30;
 let clearTimer: number | undefined;
+let onCleared: ((done: boolean) => void) | undefined;
 const RETRY_EVENTS = ["pointerdown", "keydown"] as const;
 
 function clearClipboard(): void {
   clearTimer = undefined;
-  navigator.clipboard.writeText("").catch(() => {
-    for (const t of RETRY_EVENTS) window.addEventListener(t, retryClear);
-  });
+  navigator.clipboard.writeText("").then(
+    () => onCleared?.(true),
+    () => {
+      for (const t of RETRY_EVENTS) window.addEventListener(t, retryClear);
+      onCleared?.(false);
+    },
+  );
 }
 
 function retryClear(): void {
@@ -127,37 +131,85 @@ function retryClear(): void {
   clearClipboard();
 }
 
-async function copy(value: string): Promise<void> {
+async function copy(value: string, cleared: (done: boolean) => void): Promise<void> {
   try {
     await navigator.clipboard.writeText(value);
   } catch {
-    throw new Error("This browser did not allow copying to the clipboard. Use Show and copy the value by hand.");
+    throw new Error("This browser did not allow copying to the clipboard. Show the value and copy it by hand.");
   }
   for (const t of RETRY_EVENTS) window.removeEventListener(t, retryClear);
   window.clearTimeout(clearTimer);
-  clearTimer = window.setTimeout(clearClipboard, 30_000);
+  onCleared = cleared;
+  clearTimer = window.setTimeout(clearClipboard, CLIPBOARD_S * 1000);
+}
+
+// ---------------------------------------------------------------------------
+// Rows: one per value, sorted by entry name, then field, env and context. An
+// entry without a value gets one row with value null. A row matches when every
+// filter term is in the entry's name or description or in that value's field
+// ("default" when empty), env or context. `first` marks the first shown row of
+// its entry, which alone carries name and description.
+
+export type Row = { id: string; name: string; description: string; first: boolean; field: string; key: string; env: string; context: string; value: string | null };
+
+const part = (s: string) => (s === "*" ? "" : s);
+const splitKey = (key: string) => {
+  const colon = key.indexOf(":");
+  return colon < 0 ? { env: part(key), context: "" } : { env: part(key.slice(0, colon)), context: part(key.slice(colon + 1)) };
+};
+const order = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
+
+export function rows(entries: Map<string, Revision[]>, filter: string): { rows: Row[]; secrets: number; values: number } {
+  const terms = filter.toLowerCase().split(/\s+/).filter(Boolean);
+  const out: Row[] = [];
+  let secrets = 0;
+  let values = 0;
+  for (const name of [...entries.keys()].sort(order)) {
+    const cur = current(entries.get(name)!);
+    if (!cur.visible) continue;
+    secrets++;
+    const variants = [...cur.values.values()].sort((a, b) => order(a.field, b.field) || order(a.key, b.key));
+    values += variants.length;
+    let first = true;
+    for (const x of variants.length ? variants : [{ field: "", key: "", value: null }]) {
+      const { env, context } = splitKey(x.key);
+      const hay = [name, cur.description, x.value === null ? "" : x.field || "default", env, context].join(" ").toLowerCase();
+      if (!terms.every((t) => hay.includes(t))) continue;
+      out.push({ id: JSON.stringify([name, x.field, x.key]), name, description: cur.description, first, field: x.field, key: x.key, env, context, value: x.value });
+      first = false;
+    }
+  }
+  return { rows: out, secrets, values };
+}
+
+export const rowLabel = (r: Pick<Row, "name" | "field" | "env" | "context">) =>
+  [r.name, r.field].filter(Boolean).join(" ") + (r.env ? ` · env ${r.env}` : "") + (r.context ? ` · context ${r.context}` : "");
+
+// ---------------------------------------------------------------------------
+// Keyboard: what a key does where the focus is. "list" is the console outside
+// any input; "button" is an action button in it, which handles Enter itself.
+
+export type Command = "filter" | "down" | "up" | "show" | "copy" | "edit" | "delete" | "new" | "refresh" | "close" | "yes" | "no" | "first";
+export type Focus = "filter" | "editor" | "list" | "button";
+const LIST_KEYS: Record<string, Command> = { "/": "filter", ArrowDown: "down", ArrowUp: "up", Enter: "show", c: "copy", e: "edit", d: "delete", n: "new", r: "refresh" };
+
+export function command(key: string, focus: Focus, confirming: boolean): Command | null {
+  if (key === "Escape") return "close";
+  if (focus === "filter") return key === "ArrowDown" || key === "Enter" ? "first" : null;
+  if (focus === "editor") return null;
+  if (confirming) return key === "y" ? "yes" : key === "n" ? "no" : null;
+  if (focus === "button" && key === "Enter") return null;
+  return LIST_KEYS[key] ?? null;
 }
 
 // ---------------------------------------------------------------------------
 // View
 
-const splitKey = (key: string) => {
-  const colon = key.indexOf(":");
-  return colon < 0 ? { env: key, context: "*" } : { env: key.slice(0, colon), context: key.slice(colon + 1) };
-};
-
-function variantLabel(fieldName: string, key: string): string {
-  const { env, context } = splitKey(key);
-  return [fieldName || "default", env !== "*" && `env ${env}`, context !== "*" && `context ${context}`].filter(Boolean).join(" · ");
-}
-
-// The add form and an open editor show the same labels, so ids come from a counter.
+// Editor input ids come from a counter, so each label points at its own input.
 let inputs = 0;
 
 export async function vaultView(main: HTMLElement, host: Host): Promise<void> {
-  const { h, field, status, action, messageOf } = host;
-  const textInput = (props: Record<string, unknown> = {}) => h("input", { id: `v-${++inputs}`, autocomplete: "off", spellcheck: false, ...props });
-  const valueInput = () => h("textarea", { id: `v-${++inputs}`, autocomplete: "off", spellcheck: false, rows: 3 });
+  const { h, messageOf } = host;
   const body = h("div", {});
   const signInPrompt = (text?: string) => {
     body.replaceChildren(text ? h("p", { class: "sec-intro" }, text) : "");
@@ -165,11 +217,12 @@ export async function vaultView(main: HTMLElement, host: Host): Promise<void> {
   };
   main.append(body);
 
-  const u = host.unlocked();
-  if (!u) {
+  const unlockedNow = host.unlocked();
+  if (!unlockedNow) {
     signInPrompt();
     return;
   }
+  const u: Unlocked = unlockedNow;
   // False once another view replaced this one or the tab locked or switched vaults.
   const live = () => body.isConnected && host.unlocked() === u;
   // Runs a pull or write; a refused session swaps the whole view for the sign-in prompt.
@@ -187,202 +240,423 @@ export async function vaultView(main: HTMLElement, host: Host): Promise<void> {
     }
   };
 
-  const out = status();
-  body.append(out.el);
-  out.set("Loading your vault …");
+  const loading = h("p", { class: "status", role: "status" }, "Loading your vault …");
+  body.append(loading);
   const loaded = await run(() => pull(host, u));
   if (!loaded) return;
   const v = loaded;
-  out.set("");
 
-  let open: string | null = null; // entry whose editor is shown
-  const search = h("input", { class: "search", type: "search", placeholder: "Search", "aria-label": "Search secrets", autocomplete: "off", spellcheck: false });
-  const addButton = h("button", { class: "btn btn-primary", type: "button" }, "Add secret");
-  const refreshButton = h("button", { class: "btn btn-ghost", type: "button" }, "Refresh");
-  const addArea = h("div", {});
-  const count = h("p", { class: "muted vault-count" });
-  const list = h("ul", { class: "entries" });
+  // State. Values stay in `shown` rows and in the DOM only while revealed.
+  let shown: Row[] = [];
+  let selected: string | null = null;
+  let confirming: string | null = null;
+  let editing: { name: string | null; el: HTMLElement } | null = null;
+  const revealed = new Map<string, { left: number; timer: number; ttl?: HTMLElement }>();
 
-  // Runs a write, then redraws from memory; errors stay next to the form.
-  const save = async (name: string, changes: Change[], done: string) => {
-    if ((await run(() => write(host, u, name, changes).then(() => true))) === null) return;
-    draw();
-    out.set(done, "ok");
+  const filter = h("input", { id: "vault-filter", type: "search", placeholder: "filter by name, field, env, context …", autocomplete: "off", spellcheck: false, "aria-label": "Filter secrets" });
+  const refreshButton = h("button", { class: "tbtn", type: "button", title: "Refresh (r)" }, h("kbd", {}, "r"), h("span", { class: "lbl" }, "refresh"), h("span", { class: "ico", "aria-hidden": "true" }, "↻"));
+  const newButton = h("button", { class: "tbtn tbtn-primary", type: "button", title: "New secret (n)" }, h("kbd", {}, "n"), h("span", { class: "lbl" }, "new"), h("span", { class: "ico", "aria-hidden": "true" }, "+ new"));
+  const count = h("span", {});
+  const synced = h("span", {});
+  const list = h("ul", { class: "v-list", "aria-label": "Secrets" });
+  const statusLine = h("p", { class: "v-status status", role: "status", "aria-live": "polite" });
+  const root = h(
+    "div",
+    { class: "console" },
+    h("div", { class: "prompt" }, h("label", { class: "ps1", htmlFor: filter.id }, "> ", h("span", { class: "cmd" }, "hort list")), filter, refreshButton, newButton),
+    h("div", { class: "meta" }, count, synced),
+    h("div", { class: "v-cols", "aria-hidden": "true" }, ...["name", "field", "env", "context", "value", "description"].map((c) => h("span", {}, c))),
+    list,
+    statusLine,
+    h(
+      "div",
+      { class: "hints", "aria-label": "Keyboard shortcuts" },
+      ...[["/", "filter"], ["↑ ↓", "select"], ["enter", "show"], ["c", "copy"], ["e", "edit"], ["d", "delete"], ["n", "new"], ["esc", "close"]].map(([k, what]) => h("span", {}, h("kbd", {}, k), what)),
+    ),
+  );
+  const markSynced = () => (synced.textContent = `synced ${new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`);
+  // Listeners on document stay active only while this console is on the page.
+  const active = () => root.isConnected && live();
+
+  // One status line. A copy counts down to the clipboard clear.
+  let countdown: number | undefined;
+  const show = (text: string, kind?: "error" | "ok") => {
+    statusLine.textContent = text;
+    statusLine.className = `v-status status${kind ? ` status-${kind}` : ""}`;
+  };
+  const say = (text: string, kind?: "error" | "ok") => {
+    window.clearInterval(countdown);
+    show(text, kind);
   };
 
-  function editor(name: string, description: string): HTMLElement {
-    const setOut = status();
-    const f = textInput({ placeholder: "default" });
-    const env = textInput({ placeholder: "any" });
-    const ctx = textInput({ placeholder: "any" });
-    const value = valueInput();
-    const setForm = h(
-      "form",
-      { class: "form" },
-      field("Field", f),
-      h("div", { class: "field-row" }, field("Env", env), field("Context", ctx)),
-      field("Value", value),
-      h("div", { class: "actions" }, h("button", { class: "btn btn-primary", type: "submit" }, "Save value")),
-      setOut.el,
-    );
-    submit(setForm, setOut, messageOf, () =>
-      save(name, [{ op: "set", field: f.value.trim(), key: lookupKey(env.value.trim(), ctx.value.trim()), value: value.value }], `Saved a value for ${name}.`),
-    );
-
-    const descOut = status();
-    const desc = textInput({ value: description });
-    const descForm = h("form", { class: "form" }, field("Description", desc), h("div", { class: "actions" }, h("button", { class: "btn btn-ghost", type: "submit" }, "Save description")), descOut.el);
-    submit(descForm, descOut, messageOf, () => save(name, [{ op: "describe", field: "", key: "", value: desc.value.trim() }], `Saved the description of ${name}.`));
-
-    const delOut = status();
-    const del = h("button", { class: "btn btn-ghost btn-danger", type: "button" }, "Delete secret");
-    action(del, delOut, async () => {
-      if (!confirm(`Delete ${name} with all its values? Earlier values stay in history.`)) return;
-      open = null;
-      await save(name, [{ op: "delete-entry", field: "", key: "", value: "" }], `Deleted ${name}.`);
-    });
-
-    return h(
-      "div",
-      { class: "editor" },
-      h("h4", { class: "panel-h" }, "Set a value"),
-      h("p", { class: "muted" }, "Leave field, env and context empty for the default value. A new value replaces the current one; earlier values stay in history."),
-      setForm,
-      h("h4", { class: "panel-h" }, "Description"),
-      descForm,
-      h("div", { class: "actions" }, del),
-      delOut.el,
-    );
-  }
-
-  function entryEl(name: string, revisions: Revision[]): HTMLElement {
-    const { values, description } = current(revisions);
-    const rowOut = status();
-    const variants = [...values.values()].sort((a, b) => (a.field === b.field ? (a.key < b.key ? -1 : 1) : a.field < b.field ? -1 : 1));
-    const rows = variants.map((x) => {
-      const shown = h("code", { class: "variant-value" });
-      let hideTimer: number | undefined;
-      const show = h("button", { class: "btn btn-ghost btn-small", type: "button" }, "Show");
-      show.addEventListener("click", () => {
-        window.clearTimeout(hideTimer);
-        if (shown.textContent) {
-          shown.textContent = "";
-          show.textContent = "Show";
-          return;
-        }
-        shown.textContent = x.value === "" ? "(empty)" : x.value;
-        show.textContent = "Hide";
-        hideTimer = window.setTimeout(() => {
-          shown.textContent = "";
-          show.textContent = "Show";
-        }, 30_000);
-      });
-      const copyButton = h("button", { class: "btn btn-ghost btn-small", type: "button" }, "Copy");
-      action(copyButton, rowOut, async () => {
-        await copy(x.value);
-        rowOut.set("Copied. Hort tries to clear the clipboard after 30 s; some browsers do not allow it.", "ok");
-      });
-      const del = h("button", { class: "btn btn-ghost btn-small", type: "button", "aria-label": `Delete ${variantLabel(x.field, x.key)}` }, "Delete");
-      action(del, rowOut, async () => {
-        if (!confirm(`Delete the value ${variantLabel(x.field, x.key)} of ${name}? Earlier values stay in history.`)) return;
-        await save(name, [{ op: "delete", field: x.field, key: x.key, value: "" }], `Deleted a value of ${name}.`);
-      });
-      return h("li", { class: "variant" }, h("span", { class: "variant-label" }, variantLabel(x.field, x.key)), h("span", { class: "variant-actions" }, show, copyButton, del), shown);
-    });
-    const edit = h("button", { class: "btn btn-ghost btn-small", type: "button", "aria-expanded": String(open === name) }, open === name ? "Close" : "Edit");
-    edit.addEventListener("click", () => {
-      open = open === name ? null : name;
-      draw();
-    });
-    return h(
-      "li",
-      { class: "entry" },
-      h("div", { class: "entry-head" }, h("h3", { class: "entry-name" }, name), edit),
-      description ? h("p", { class: "entry-desc muted" }, description) : null,
-      rows.length ? h("ul", { class: "variants" }, ...rows) : h("p", { class: "muted" }, "No value yet."),
-      rowOut.el,
-      open === name ? editor(name, description) : null,
-    );
-  }
+  const rowById = (id: string | null) => shown.find((r) => r.id === id);
+  const focusSelected = () => list.querySelector<HTMLElement>(".v-row.sel")?.focus();
 
   function draw(): void {
-    const terms = search.value.toLowerCase().split(/\s+/).filter(Boolean);
-    const visible = [...v.entries]
-      .map(([name, revisions]) => ({ name, revisions, cur: current(revisions) }))
-      .filter((e) => e.cur.visible)
-      .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
-    // Same haystack as `hort search`: name, description, fields, env and context.
-    const matches = visible.filter((e) => {
-      const words = [e.name, e.cur.description];
-      for (const x of e.cur.values.values()) words.push(x.field, ...Object.values(splitKey(x.key)));
-      const hay = words.join(" ").toLowerCase();
-      return terms.every((t) => hay.includes(t));
-    });
+    const result = rows(v.entries, filter.value);
+    shown = result.rows;
+    if (selected && !rowById(selected)) selected = null;
+    const matched = shown.filter((r) => r.first).length;
+    const values = shown.filter((r) => r.value !== null).length;
     count.textContent =
-      visible.length === 0 ? "No secrets yet." : terms.length ? `${matches.length} of ${visible.length} secrets` : `${visible.length} ${visible.length === 1 ? "secret" : "secrets"}`;
+      result.secrets === 0 ? "" : filter.value.trim() ? `${matched} of ${result.secrets} secrets · ${values} of ${result.values} values` : `${result.secrets} secrets · ${result.values} values`;
     if (v.skipped) count.textContent += ` · ${v.skipped} unreadable ${v.skipped === 1 ? "revision" : "revisions"} skipped`;
-    list.replaceChildren(...matches.map((e) => entryEl(e.name, e.revisions)));
+    const items: HTMLElement[] = [];
+    if (editing && editing.name === null) items.push(editing.el);
+    if (result.secrets === 0 && !(editing && editing.name === null)) {
+      const add = h("button", { class: "tbtn tbtn-primary", type: "button", onclick: () => openEditor(null) }, "+ new secret");
+      items.push(h("li", { class: "empty" }, h("p", {}, "No secrets yet."), h("p", {}, "Press ", h("code", {}, "n"), " or ", add, " to add the first one, or run ", h("code", {}, "hort set NAME --value …"), " in a terminal.")));
+    } else if (result.secrets && !shown.length) {
+      items.push(h("li", { class: "empty" }, h("p", {}, `No secret matches “${filter.value.trim()}”.`), h("p", {}, h("code", {}, "esc"), " clears the filter.")));
+    }
+    const tabbable = selected ?? shown[0]?.id;
+    shown.forEach((r, i) => {
+      items.push(rowEl(r, r.id === tabbable));
+      const last = shown[i + 1]?.name !== r.name;
+      if (last && editing?.name === r.name) items.push(editing.el);
+    });
+    list.replaceChildren(...items);
   }
 
-  function addForm(): HTMLElement {
-    const formOut = status();
-    const name = textInput({ required: true });
-    const f = textInput({ placeholder: "default" });
-    const env = textInput({ placeholder: "any" });
-    const ctx = textInput({ placeholder: "any" });
-    const value = valueInput();
-    const desc = textInput();
+  // One row; `tabbable` is the row that Tab reaches (the selected or first one).
+  function rowEl(r: Row, tabbable: boolean): HTMLLIElement {
+    const rev = revealed.get(r.id);
+    const sel = r.id === selected;
+    const li = h("li", {
+      class: `v-row${r.first ? " first" : " cont"}${sel ? " sel" : ""}${rev ? " revealed" : ""}`,
+      tabIndex: tabbable ? 0 : -1,
+      "aria-label": rowLabel(r),
+    });
+    const any = (text = "·") => h("span", { class: "any" }, text);
+    li.append(
+      h(
+        "span",
+        { class: "key" },
+        h("span", { class: "c-name" }, r.name),
+        h("span", { class: "c-field" }, r.value === null ? "" : r.field || any("default")),
+        h("span", { class: "c-env" }, r.env || any()),
+        h("span", { class: "c-ctx" }, r.context || any()),
+      ),
+    );
+    if (confirming === r.id) {
+      const yes = h("button", { class: "yes", type: "button", onclick: () => void deleteValue(r) }, h("u", {}, "y"), " delete");
+      const no = h("button", { class: "no", type: "button", onclick: () => closeConfirm() }, h("u", {}, "n"), " keep");
+      li.append(h("span", { class: "confirm" }, `delete ${rowLabel(r)}? `, yes, no));
+    } else {
+      const value = h("span", { class: `c-val${rev ? " shown" : ""}${r.value === null ? " none" : ""}` });
+      if (r.value === null) value.textContent = "no value yet";
+      else if (rev) {
+        rev.ttl = h("span", { class: "ttl" }, `hides in ${rev.left} s`);
+        value.append(r.value === "" ? "(empty)" : r.value, rev.ttl);
+      } else value.textContent = "••••••••••";
+      const button = (key: string, label: string, run: () => void, cls?: string) =>
+        h("button", { type: "button", class: cls, onclick: () => ((selected = r.id), run()) }, h("u", {}, key), ` ${label}`);
+      li.append(
+        value,
+        h("span", { class: "c-desc" }, r.first ? r.description : ""),
+        h(
+          "span",
+          { class: "act" },
+          r.value === null ? null : button("⏎", rev ? "hide" : "show", () => toggleShow(r)),
+          r.value === null ? null : button("c", "copy", () => void copyValue(r)),
+          button("e", "edit", () => openEditor(r)),
+          r.value === null ? null : button("d", "delete", () => askDelete(r), "danger"),
+        ),
+      );
+    }
+    li.addEventListener("click", (e) => {
+      if ((e.target as Element).closest("button") || selected === r.id) return;
+      select(r.id);
+    });
+    // Tab into the list selects the focused row without a redraw.
+    li.addEventListener("focus", () => {
+      if (selected === r.id || confirming) return;
+      selected = r.id;
+      for (const x of list.querySelectorAll(".v-row.sel")) x.classList.remove("sel");
+      li.classList.add("sel");
+    });
+    li.addEventListener("dblclick", (e) => {
+      if (!(e.target as Element).closest("button") && r.value !== null) toggleShow(r);
+    });
+    return li;
+  }
+
+  // Redraws one row in place, so an open editor keeps what was typed.
+  function redrawRow(r: Row): void {
+    const i = shown.findIndex((x) => x.id === r.id);
+    const old = list.querySelectorAll<HTMLElement>(".v-row")[i];
+    if (!old) return;
+    const focused = old.contains(document.activeElement);
+    const fresh = rowEl(r, old.tabIndex === 0);
+    old.replaceWith(fresh);
+    if (focused) fresh.focus();
+  }
+
+  function select(id: string | null): void {
+    selected = id;
+    confirming = null;
+    draw();
+    focusSelected();
+  }
+
+  function toggleShow(r: Row): void {
+    const rec = revealed.get(r.id);
+    if (rec) {
+      window.clearInterval(rec.timer);
+      revealed.delete(r.id);
+    } else {
+      const next = { left: REVEAL_S, timer: 0 } as { left: number; timer: number; ttl?: HTMLElement };
+      next.timer = window.setInterval(() => {
+        if (!active() || --next.left <= 0) {
+          window.clearInterval(next.timer);
+          revealed.delete(r.id);
+          if (active()) redrawRow(r);
+          return;
+        }
+        if (next.ttl) next.ttl.textContent = `hides in ${next.left} s`;
+      }, 1000);
+      revealed.set(r.id, next);
+    }
+    redrawRow(r);
+  }
+
+  async function copyValue(r: Row): Promise<void> {
+    draw();
+    focusSelected();
+    try {
+      await copy(r.value ?? "", (done) => {
+        if (!active()) return;
+        say(done ? "Clipboard cleared." : "This browser kept the value on the clipboard; Hort clears it on your next click or key press here.", done ? "ok" : "error");
+      });
+    } catch (err) {
+      say(messageOf(err), "error");
+      return;
+    }
+    let left = CLIPBOARD_S;
+    const tick = () => show(`copied ${rowLabel(r)} · clipboard clears in ${left} s`, "ok");
+    say("");
+    tick();
+    countdown = window.setInterval(() => {
+      if (--left > 0 && active()) tick();
+      else window.clearInterval(countdown);
+    }, 1000);
+  }
+
+  function askDelete(r: Row): void {
+    selected = r.id;
+    confirming = r.id;
+    draw();
+    list.querySelector<HTMLElement>(".confirm .no")?.focus();
+  }
+
+  function closeConfirm(): void {
+    confirming = null;
+    draw();
+    focusSelected();
+  }
+
+  async function deleteValue(r: Row): Promise<void> {
+    const index = shown.findIndex((x) => x.id === r.id);
+    try {
+      if (!(await run(() => write(host, u, r.name, [{ op: "delete", field: r.field, key: r.key, value: "" }]).then(() => true)))) return;
+    } catch (err) {
+      say(messageOf(err), "error");
+      return;
+    }
+    confirming = null;
+    window.clearInterval(revealed.get(r.id)?.timer);
+    revealed.delete(r.id);
+    draw();
+    select(shown[Math.min(index, shown.length - 1)]?.id ?? null);
+    say(`Deleted ${rowLabel(r)}. Earlier values stay in history.`, "ok");
+  }
+
+  function openEditor(r: Row | null): void {
+    confirming = null;
+    editing = { name: r?.name ?? null, el: editorEl(r) };
+    draw();
+    editing.el.querySelector<HTMLElement>(r ? "textarea" : "input")?.focus();
+  }
+
+  function closeEditor(): void {
+    editing = null;
+    draw();
+    focusSelected();
+  }
+
+  // The one inline editor: a new secret, or a value and the description of an entry.
+  function editorEl(r: Row | null): HTMLElement {
+    const input = (label: string, el: HTMLInputElement | HTMLTextAreaElement, cls?: string) => {
+      el.id = `v-${++inputs}`;
+      return h("div", { class: cls }, h("label", { htmlFor: el.id }, label), el);
+    };
+    const text = (value = "", placeholder = "") => h("input", { autocomplete: "off", spellcheck: false, value, placeholder });
+    const name = r ? null : text("", "e.g. db");
+    if (name) name.required = true;
+    const field = text(r?.field, "default");
+    const env = text(r?.env, "any");
+    const ctx = text(r?.context, "any");
+    const value = h("textarea", { autocomplete: "off", spellcheck: false, rows: 1, placeholder: r ? "unchanged" : "" });
+    const desc = text(r?.description);
+    const err = h("span", { class: "err", role: "status" });
+    const saveButton = h("button", { class: "tbtn tbtn-primary", type: "submit" }, "save");
+    const cancel = h("button", { class: "tbtn", type: "button", onclick: closeEditor }, h("kbd", {}, "esc"), "cancel");
+    let deleteEntry: HTMLButtonElement | null = null;
+    if (r) {
+      const entry = r.name;
+      const b = h("button", { class: "tbtn danger", type: "button" }, "delete secret");
+      b.addEventListener("click", async () => {
+        if (!b.classList.contains("armed")) {
+          b.classList.add("armed");
+          b.textContent = `confirm: delete ${entry} and all its values`;
+          return;
+        }
+        b.disabled = true;
+        try {
+          if (!(await run(() => write(host, u, entry, [{ op: "delete-entry", field: "", key: "", value: "" }]).then(() => true)))) return;
+          editing = null;
+          select(null);
+          say(`Deleted ${entry} with all its values. Earlier values stay in history.`, "ok");
+        } catch (e) {
+          err.textContent = messageOf(e);
+        } finally {
+          b.disabled = false;
+        }
+      });
+      deleteEntry = b;
+    }
     const form = h(
       "form",
-      { class: "form panel" },
-      h("h2", { class: "panel-h" }, "Add secret"),
-      field("Name", name),
-      field("Field", f),
-      h("div", { class: "field-row" }, field("Env", env), field("Context", ctx)),
-      field("Value", value),
-      field("Description", desc),
-      h("div", { class: "actions" }, h("button", { class: "btn btn-primary", type: "submit" }, "Save"), h("button", { class: "btn btn-ghost", type: "button", onclick: () => addArea.replaceChildren() }, "Cancel")),
-      formOut.el,
+      { novalidate: true },
+      h(
+        "div",
+        { class: "grid" },
+        name ? input("Name", name) : null,
+        input("Field", field, r ? "wide" : undefined),
+        input("Env", env),
+        input("Context", ctx),
+        input(r ? "New value" : "Value", value, "full"),
+        input("Description", desc, "full"),
+      ),
+      h("p", { class: "e-note" }, "Leave field, env and context empty for the default value. A new value replaces the current one; earlier values stay in history."),
+      h("div", { class: "e-foot" }, saveButton, cancel, err, h("span", { class: "grow" }), deleteEntry),
     );
-    submit(form, formOut, messageOf, async () => {
-      const n = name.value.trim();
-      const changes: Change[] = [{ op: "set", field: f.value.trim(), key: lookupKey(env.value.trim(), ctx.value.trim()), value: value.value }];
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const entry = r?.name ?? name!.value.trim();
+      if (!entry) {
+        err.textContent = "Name is required.";
+        name?.focus();
+        return;
+      }
+      const set = { op: "set" as const, field: field.value.trim(), key: lookupKey(env.value.trim(), ctx.value.trim()), value: value.value };
+      const changes: Change[] = r && set.value === "" ? [] : [set];
       const d = desc.value.trim();
-      if (d && d !== current(v.entries.get(n) ?? []).description) changes.push({ op: "describe", field: "", key: "", value: d });
-      await save(n, changes, `Saved ${n}.`);
-      addArea.replaceChildren();
+      if (d !== current(v.entries.get(entry) ?? []).description && (r || d)) changes.push({ op: "describe", field: "", key: "", value: d });
+      if (!changes.length) return closeEditor();
+      saveButton.disabled = true;
+      err.textContent = "";
+      try {
+        if (!(await run(() => write(host, u, entry, changes).then(() => true)))) return;
+        editing = null;
+        const savedKey = { name: entry, ...splitKey(set.key), field: set.field };
+        selected = changes[0].op === "set" ? JSON.stringify([entry, set.field, set.key]) : selected;
+        draw();
+        focusSelected();
+        say(`Saved ${changes[0].op === "set" ? rowLabel(savedKey) : entry}.`, "ok");
+      } catch (e) {
+        err.textContent = messageOf(e);
+      } finally {
+        saveButton.disabled = false;
+      }
     });
-    return form;
+    return h("li", { class: "editor" }, h("h3", {}, r ? `> edit ${r.name}` : "> new secret"), form);
   }
 
-  search.addEventListener("input", draw);
-  addButton.addEventListener("click", () => {
-    addArea.replaceChildren(addForm());
-    addArea.querySelector("input")?.focus();
-  });
-  action(refreshButton, out, async () => {
-    if ((await run(() => pull(host, u))) === null) return;
-    draw();
-    out.set("");
-  });
-
-  body.append(h("div", { class: "vault-bar" }, search, addButton, refreshButton), addArea, count, list);
-  draw();
-}
-
-// Form submit with the submit button disabled and errors shown in place.
-function submit(form: HTMLFormElement, out: StatusOut, messageOf: Host["messageOf"], run: () => Promise<void>): void {
-  form.addEventListener("submit", async (e) => {
-    e.preventDefault();
-    const button = form.querySelector<HTMLButtonElement>("button[type=submit]");
-    if (button) button.disabled = true;
-    out.set("");
+  async function refresh(): Promise<void> {
+    refreshButton.disabled = true;
+    synced.textContent = "refreshing …";
     try {
-      await run();
+      if ((await run(() => pull(host, u))) === null) return;
+      draw();
+      markSynced();
     } catch (err) {
-      out.set(messageOf(err), "error");
+      synced.textContent = "";
+      say(messageOf(err), "error");
     } finally {
-      if (button) button.disabled = false;
+      refreshButton.disabled = false;
     }
+  }
+
+  // Esc closes the innermost open thing: confirm, editor, filter, selection.
+  function close(inFilter: boolean): void {
+    if (confirming) return closeConfirm();
+    if (editing) return closeEditor();
+    if (inFilter && filter.value) {
+      filter.value = "";
+      draw();
+    } else if (inFilter) filter.blur();
+    else if (selected) select(null);
+  }
+
+  function onKey(e: KeyboardEvent): void {
+    if (!active()) return document.removeEventListener("keydown", onKey);
+    if (e.metaKey || e.ctrlKey || e.altKey || e.defaultPrevented) return;
+    const t = e.target as HTMLElement;
+    if (t !== document.body && !root.contains(t)) return;
+    const focus: Focus = t === filter ? "filter" : t.closest(".editor") ? "editor" : t.closest("button") ? "button" : t.matches("input, textarea, select") ? "editor" : "list";
+    const cmd = command(e.key, focus, confirming !== null);
+    if (!cmd) return;
+    e.preventDefault();
+    const i = shown.findIndex((r) => r.id === selected);
+    const sel = rowById(selected);
+    switch (cmd) {
+      case "close":
+        return close(focus === "filter");
+      case "first":
+        return shown[0] ? select(shown[0].id) : undefined;
+      case "filter":
+        filter.focus();
+        return filter.select();
+      case "down":
+        return shown.length ? select(shown[Math.min(i + 1, shown.length - 1)].id) : undefined;
+      case "up":
+        return i <= 0 ? filter.focus() : select(shown[i - 1].id);
+      case "new":
+        return openEditor(null);
+      case "refresh":
+        return void refresh();
+      case "yes":
+        return void (sel && deleteValue(sel));
+      case "no":
+        return closeConfirm();
+    }
+    if (!sel) return;
+    if (cmd === "edit") return openEditor(sel);
+    if (sel.value === null) return;
+    if (cmd === "show") toggleShow(sel);
+    else if (cmd === "copy") void copyValue(sel);
+    else if (cmd === "delete") askDelete(sel);
+  }
+
+  function onLockChange(e: Event): void {
+    if (!active()) return document.removeEventListener("change", onLockChange);
+    const select = e.target as HTMLSelectElement;
+    if (select.id !== "lock-after") return;
+    say(select.value === "immediately" ? "The vault locks when you close or reload this tab." : `The vault locks ${select.selectedOptions[0]?.text ?? select.value}.`, "ok");
+  }
+
+  filter.addEventListener("input", () => {
+    selected = null;
+    confirming = null;
+    draw();
   });
+  newButton.addEventListener("click", () => openEditor(null));
+  refreshButton.addEventListener("click", () => void refresh());
+  document.addEventListener("keydown", onKey);
+  document.addEventListener("change", onLockChange);
+
+  body.replaceChildren(root);
+  markSynced();
+  draw();
 }
