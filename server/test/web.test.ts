@@ -28,9 +28,9 @@ describe("assets", () => {
     const loaded = /(?:<(?:link|script|img|iframe|source)\b[^>]*?\s(?:src|href)=|url\(|@import\s+)["']?(?:https?:)?\/\/([^/"')\s]+)/gi;
     for (const [file, text] of files) {
       for (const m of text.matchAll(loaded)) expect(m[1], `${file}: ${m[0]}`).toBe("hort.pm");
-      // The only script is the app bundle from this origin; nothing inline.
+      // The only scripts are the theme script and the app bundle from this origin; nothing inline.
       for (const tag of text.match(/<script\b[^>]*>[^<]*<\/script>|<script\b/gi) ?? []) {
-        expect(tag, file).toBe('<script type="module" src="/js/app.js"></script>');
+        expect(['<script src="/theme.js"></script>', '<script type="module" src="/js/app.js"></script>'], file).toContain(tag);
       }
     }
   });
