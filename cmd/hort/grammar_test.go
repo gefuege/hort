@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"os"
 	"os/exec"
 	"strings"
@@ -19,10 +20,12 @@ func hortStdin(t *testing.T, home, stdin string, args ...string) cliResult {
 	cmd.Stdin = strings.NewReader(stdin)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
-	if err := cmd.Run(); err != nil {
-		t.Fatalf("hort %v: %v, stderr %q", args, err, stderr.String())
+	err := cmd.Run()
+	var exit *exec.ExitError
+	if err != nil && !errors.As(err, &exit) {
+		t.Fatal(err)
 	}
-	return cliResult{stdout.String(), stderr.String(), 0}
+	return cliResult{stdout.String(), stderr.String(), cmd.ProcessState.ExitCode()}
 }
 
 func newVault(t *testing.T) string {
@@ -42,7 +45,7 @@ func TestCLIGetSetDeleteWithFields(t *testing.T) {
 	if set.stdout != "" || !strings.Contains(set.stderr, "Abruf: `hort get db password --env prod --context heine`") {
 		t.Fatalf("set with field: %+v", set)
 	}
-	if got := hortStdin(t, home, "from-stdin", "set", "db", "token", "--value-stdin"); got.stdout != "" {
+	if got := hortStdin(t, home, "from-stdin", "set", "db", "token", "--value-stdin"); got.code != 0 || got.stdout != "" {
 		t.Fatalf("set --value-stdin: %+v", got)
 	}
 	wantStdout(t, hort(t, home, "get", "db"), "default")
@@ -129,16 +132,21 @@ func TestCLIValidatesNewWrites(t *testing.T) {
 		{"set", "ok", "--value", "v", "--env", "a:b"},
 		{"set", "ok", "--value", "v", "--context", "a b"},
 		{"set", "ok", "--value", "v", "--env", "pr*"},
-		{"set", "ok", "--value", strings.Repeat("x", 48<<10+1)},
 	} {
 		got := hort(t, home, args...)
 		if got.code != 1 || got.stdout != "" || got.stderr == "" || len(got.stderr) > 200 {
 			t.Errorf("%.40v: %+v", args, got)
 		}
 	}
+	// Values near the limit go through stdin: Windows caps a command line at 32767 characters.
+	if got := hortStdin(t, home, strings.Repeat("x", 48<<10+1), "set", "ok", "--value-stdin"); got.code != 1 || got.stdout != "" || got.stderr == "" || len(got.stderr) > 200 {
+		t.Errorf("value over the limit: %+v", got)
+	}
 	// A name starting with - needs the -- separator, and is still refused as a name.
 	wantError(t, hort(t, home, "set", "--value", "v", "--", "-lead"), 1, "must not start with -")
-	hortOK(t, home, "set", "ok", "--value", strings.Repeat("x", 48<<10))
+	if got := hortStdin(t, home, strings.Repeat("x", 48<<10), "set", "ok", "--value-stdin"); got.code != 0 {
+		t.Fatalf("set at the limit: %+v", got)
+	}
 	if got := hortOK(t, home, "get", "ok"); len(got.stdout) != 48<<10 {
 		t.Fatalf("value at the limit: %d bytes", len(got.stdout))
 	}

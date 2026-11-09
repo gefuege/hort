@@ -286,7 +286,7 @@ type VaultInfo struct {
 
 // ReadInfo parses the header without any key.
 func ReadInfo(ref VaultRef) (VaultInfo, error) {
-	raw, err := os.ReadFile(ref.Path)
+	raw, err := readFile(ref.Path)
 	if err != nil {
 		return VaultInfo{}, fmt.Errorf("reading vault: %w", err)
 	}
@@ -298,7 +298,7 @@ func ReadInfo(ref VaultRef) (VaultInfo, error) {
 }
 
 func loadV4(ref VaultRef, vk []byte) (*VaultData, v4File, AccountKeys, error) {
-	raw, err := os.ReadFile(ref.Path)
+	raw, err := readFile(ref.Path)
 	if err != nil {
 		return nil, v4File{}, AccountKeys{}, fmt.Errorf("reading vault: %w", err)
 	}
@@ -324,7 +324,7 @@ func openRaw(ref VaultRef, raw, vk []byte) (*VaultData, v4File, AccountKeys, err
 // LoadVault reads and decrypts the vault with VK from the session. It returns
 // the raw file bytes, which SaveVault needs to keep the header.
 func LoadVault(ref VaultRef, vk []byte) (*VaultData, []byte, error) {
-	raw, err := os.ReadFile(ref.Path)
+	raw, err := readFile(ref.Path)
 	if err != nil {
 		return nil, nil, fmt.Errorf("reading vault: %w", err)
 	}
@@ -384,7 +384,7 @@ func UpdateVault(ref VaultRef, vk []byte, mutate func(data *VaultData) error) er
 // body. The caller parses the Secret Key first, so a mistyped one never
 // reaches Argon2id.
 func UnlockVault(ref VaultRef, passphrase, secretKey []byte) ([]byte, error) {
-	raw, err := os.ReadFile(ref.Path)
+	raw, err := readFile(ref.Path)
 	if err != nil {
 		return nil, fmt.Errorf("reading vault: %w", err)
 	}

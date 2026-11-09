@@ -12,7 +12,7 @@ func BackupPathFor(ref VaultRef) string {
 }
 
 func backupFile(path string, perm os.FileMode) error {
-	current, err := os.ReadFile(path)
+	current, err := readFile(path)
 	if os.IsNotExist(err) {
 		return nil
 	}
@@ -58,7 +58,7 @@ func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
 		cleanup()
 		return fmt.Errorf("closing temp file: %w", err)
 	}
-	if err := os.Rename(tmpPath, path); err != nil {
+	if err := replaceFile(tmpPath, path); err != nil {
 		cleanup()
 		return fmt.Errorf("renaming temp file: %w", err)
 	}
