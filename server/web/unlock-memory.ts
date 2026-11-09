@@ -2,9 +2,10 @@
 // user picks, counted from the last use. Browser storage holds the vault key
 // only wrapped with the session's unlock key K, which the server hands out
 // while the session and K are valid (GET /api/v1/session/unlock-key). The
-// server alone tracks when K expires: each session request moves it. The server never sees the vault
-// key; the stored blob alone and K alone open nothing. Every storage access is
-// guarded: without usable storage the vault locks on reload as before.
+// server alone tracks when K expires: each session request moves it. The
+// server never sees the vault key; the stored blob alone and K alone open
+// nothing. Every storage access is guarded: without usable storage the vault
+// locks on reload as before.
 import { b64Decode, b64Encode, concat, str } from "../src/wire";
 import { accountIdEncode } from "./vault-core";
 
