@@ -39,7 +39,6 @@
     <div class="ctas"><a class="btn btn-primary" href="#install">Install the CLI →</a><a class="btn btn-ghost" href="https://github.com/gefuege/hort">View on GitHub</a><a class="btn btn-ghost" href="/vault">Sign in</a></div>
     <p class="hero-note">The CLI works without an account. Registering on hort.pm still needs an invitation token.</p>
   </div>
-  <div class="hero-side">
   <div class="win term hero-term">
     <div class="win-bar"><i></i><i></i><i></i><span>zsh — ~/shop</span></div>
 <pre tabindex="0"><span class="t-p">$</span> hort list
@@ -47,7 +46,13 @@
 <span class="t-v">db-password</span>    <span class="t-m">PostgreSQL password</span>   <span class="t-m">[env: *, prod]</span>
 
 <span class="t-p">$</span> hort get db-password --env prod
-<span class="t-a">••••••••••••</span></pre>
+<span class="t-a">••••••••••••</span>
+
+<span class="t-m"># your agent needs one that is missing</span>
+<span class="t-a">agent</span> › request_secret stripe
+<span class="t-p">hort</span>  › open hort.pm, type it there
+<span class="t-p">hort</span>  › stored
+<span class="t-a">agent</span> › $ hort get stripe</pre>
   </div>
   <div class="plat">
     <ul class="plat-list">
@@ -57,7 +62,6 @@
       <li><svg aria-hidden="true"><use href="#g-globe"/></svg>Web</li>
     </ul>
     <p class="plat-line">One vault, synced across all of them.</p>
-  </div>
   </div>
 </div>
 

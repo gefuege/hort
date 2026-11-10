@@ -68,8 +68,7 @@ code{font-family:var(--f-mono);font-size:.92em}
 .say{font:500 .8em var(--f-mono);color:var(--accent2);margin-right:2px;white-space:nowrap}
 .t-p{color:var(--accent2)} .t-m{color:var(--muted)} .t-a{color:var(--accent-ink)} .t-v{color:var(--ink);font-weight:500}
 
-.hero{display:grid;grid-template-columns:1fr 1.1fr;grid-template-areas:"eyebrow eyebrow" "text side" "actions side";gap:28px clamp(28px,5vw,64px);align-items:start}
-.hero-side{grid-area:side;display:grid;gap:28px;min-width:0}
+.hero{display:grid;grid-template-columns:1fr 1.1fr;grid-template-areas:"eyebrow eyebrow" "text term" "actions plat";gap:28px clamp(28px,5vw,64px);align-items:start}
 .sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
 .hero-text{grid-area:text}
 .hero-actions{grid-area:actions}
@@ -87,11 +86,13 @@ code{font-family:var(--f-mono);font-size:.92em}
 .hero-note{color:var(--muted);font-size:14px;margin:14px 0 0;max-width:46ch}
 .hero-copy{max-width:52ch}
 .ctas .btn-ghost{background:var(--win)}
-.hero-term{box-shadow:8px 8px 0 var(--accent2)}
+.hero-term{grid-area:term;align-self:stretch;display:flex;flex-direction:column;min-width:0;box-shadow:8px 8px 0 var(--accent2)}
 /* Platform row under the hero terminal; the glyphs are <symbol>s drawn once at the top of the page */
 .glyphs{position:absolute;width:0;height:0;overflow:hidden}
 .plat-list{list-style:none;margin:0;padding:0;display:flex;flex-wrap:wrap;gap:8px}
-.plat-list li{display:flex;align-items:center;gap:8px;padding:7px 12px;background:var(--win);border:1px solid var(--line-strong);font:500 13px var(--f-mono)}
+.plat{grid-area:plat}
+.hero-term pre{flex:1}
+.plat-list li{display:flex;align-items:center;gap:8px;padding:11px 14px;background:var(--win);border:1px solid var(--line-strong);font:500 13px var(--f-mono)}
 .plat svg,.reach svg{width:20px;height:20px;flex:none;fill:none;stroke:currentColor;stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round}
 .plat-line{margin:10px 0 0;font:500 13px var(--f-mono);color:var(--muted)}
 
@@ -167,7 +168,7 @@ code{font-family:var(--f-mono);font-size:.92em}
 @media (max-width:760px){
   .m-links{display:none}
   .hero,.cols,.examples{grid-template-columns:1fr}
-  .hero{grid-template-areas:"eyebrow" "text" "actions" "side"}
+  .hero{grid-template-areas:"eyebrow" "text" "actions" "term" "plat"}
   .reach{grid-template-columns:1fr 1fr}
   .reach li{border-right:0;border-bottom:1px solid var(--line-strong);padding:16px 18px}
   .reach li:nth-child(odd){border-right:1px solid var(--line-strong)}
