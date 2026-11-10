@@ -14,12 +14,14 @@
       { "name": "ACCOUNT", "class_name": "Account" },
       { "name": "RATE_LIMITER", "class_name": "RateLimiter" },
       { "name": "CHALLENGE", "class_name": "Challenge" },
-      { "name": "SHARE", "class_name": "Share" }
+      { "name": "SHARE", "class_name": "Share" },
+      { "name": "INVITATIONS", "class_name": "Invitations" }
     ]
   },
   "migrations": [
     { "tag": "v1", "new_sqlite_classes": ["Account", "RateLimiter"] },
     { "tag": "v2", "new_sqlite_classes": ["Challenge"] },
-    { "tag": "v3", "new_sqlite_classes": ["Share"] }
+    { "tag": "v3", "new_sqlite_classes": ["Share"] },
+    { "tag": "v4", "new_sqlite_classes": ["Invitations"] }
   ]
 }

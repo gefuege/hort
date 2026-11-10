@@ -161,11 +161,13 @@ func main() {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			server, _ := cmd.Flags().GetString("server")
 			name, _ := cmd.Flags().GetString("name")
-			return cli.CmdInit(server, name)
+			invite, _ := cmd.Flags().GetString("invite")
+			return cli.CmdInit(server, name, invite)
 		},
 	}
 	initCmd.Flags().String("server", "", "Sync server URL (default https://hort.pm)")
 	initCmd.Flags().String("name", "", "Name of this device (default <os>-<4 random chars>)")
+	initCmd.Flags().String("invite", "", "Invitation code from your invite link, for a server that needs one")
 	root.AddCommand(initCmd)
 
 	root.AddCommand(&cobra.Command{
@@ -220,10 +222,12 @@ func main() {
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			j, _ := cmd.Flags().GetBool("json")
-			return cli.CmdSync(j)
+			invite, _ := cmd.Flags().GetString("invite")
+			return cli.CmdSync(j, invite)
 		},
 	}
 	jsonFlag(syncCmd, "JSON output {pulled, pushed, skipped_invalid, cursor}")
+	syncCmd.Flags().String("invite", "", "Invitation code, when this first sync registers on a server that needs one")
 	root.AddCommand(syncCmd)
 
 	enrollCmd := &cobra.Command{
@@ -239,6 +243,39 @@ func main() {
 	enrollCmd.Flags().String("server", "", "Sync server URL (default https://hort.pm)")
 	enrollCmd.Flags().String("name", "", "Name of this device (default <os>-<4 random chars>)")
 	root.AddCommand(enrollCmd)
+
+	inviteCmd := &cobra.Command{
+		Use:   "invite",
+		Short: "Invite people to a server you operate (needs HORT_ADMIN_TOKEN, no vault)",
+	}
+	inviteCmd.PersistentFlags().String("server", "", "Server URL (default https://hort.pm)")
+	inviteServer := func(cmd *cobra.Command) string {
+		server, _ := cmd.Flags().GetString("server")
+		return server
+	}
+	inviteCmd.AddCommand(&cobra.Command{
+		Use:   "create",
+		Short: "Create a single-use invitation and print its invite link",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return cli.CmdInviteCreate(inviteServer(cmd))
+		},
+	}, &cobra.Command{
+		Use:   "list",
+		Short: "List invitations: ID, created, open or used, and the account that used it",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return cli.CmdInviteList(inviteServer(cmd))
+		},
+	}, &cobra.Command{
+		Use:   "revoke ID",
+		Short: "Revoke an open invitation; its link stops working",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return cli.CmdInviteRevoke(inviteServer(cmd), args[0])
+		},
+	})
+	root.AddCommand(inviteCmd)
 
 	devicesCmd := &cobra.Command{
 		Use:   "devices",

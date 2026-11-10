@@ -10,12 +10,23 @@ All paths start with `/api/v1`. Signed requests carry `Hort-Account` (lowercase 
 
 | Method and path | Auth | Body → response |
 |---|---|---|
-| `POST /accounts` | AK, plus `Hort-Registration-Token` while `REGISTRATION_TOKEN` is set | `{account_id, ak_pub, slot: {id: "passphrase", version, bytes, ak_sig}, device: {id, pub, name}}` → 201 `{devices_version}`; a replay with the same AK → 200 |
+| `POST /accounts` | AK, plus `Hort-Invite` while `ADMIN_TOKEN` is set | `{account_id, ak_pub, slot: {id: "passphrase", version, bytes, ak_sig}, device: {id, pub, name}}` → 201 `{devices_version}`; a replay with the same AK → 200 |
 | `GET /accounts/{id}/slot` | none | → `{ak_pub, slot: {id, version, bytes, ak_sig}}` |
 | `POST /devices` | AK | `{device_id, pub, name}` → 201 `{devices_version}`; a replay → 200; a revoked ID → 409 |
 | `GET /devices` | device or session | → `{devices: [{id, name, created_at, last_seen_at, revoked_at}], passkeys: [{id, prf, created_at, last_used_at, revoked_at}], devices_version}`; a session also gets `last_visit_at` (its previous call, `null` the first time) and moves it to now |
 | `DELETE /devices/{id}` | device, or session + CSRF | `id` is a device ID (16 bytes hex) or a passkey ID (64 hex) → `{devices_version}`; revoking a passkey deletes its slot and ends its sessions |
 | `PUT /slots/passphrase` | AK | `{version, bytes, ak_sig}` → `{version}`; the version must be higher than the stored one |
+
+Invitations. With the Worker secret `ADMIN_TOKEN` set, registration is invite-only; without it anyone can register and the invitation endpoints answer 404. An invitation code is 16 random bytes as lowercase hex. The `Invitations` Durable Object, one instance for the whole server in the EU jurisdiction, stores per invitation its 8-hex-character `id`, SHA-256 of the code, `created_at`, `used_at` and the `account_id` that used it; create, list, consume and revoke are each one atomic step there. The invite link `https://<origin>/invite#<code>` carries the code only in its fragment, so it never reaches the server; `public/invite.html` puts it into the `hort init --invite` command.
+
+| Method and path | Auth | Body → response |
+|---|---|---|
+| `POST /invitations` | `Hort-Admin-Token`, rate-limited per IP | empty body → 201 `{id, code}`; the code is returned only here |
+| `GET /invitations` | `Hort-Admin-Token`, rate-limited per IP | → `{invitations: [{id, created_at, used_at, account_id}]}`, oldest first; `used_at` and `account_id` are `null` while open; never a code |
+| `POST /invitations/{id}/revoke` | `Hort-Admin-Token`, rate-limited per IP | → `{id}`; the open invitation is deleted; used → 409; unknown → 404 |
+
+- `Hort-Admin-Token` is compared with `ADMIN_TOKEN` in constant time; missing or wrong → 403. Operator calls count against 30 per minute per IP before the comparison.
+- `POST /accounts` while `ADMIN_TOKEN` is set: without `Hort-Invite` → 403 naming `--invite`; a malformed, unknown, used or revoked code → 403 `this invitation is not valid or was already used; ask the person who invited you for a new invite link`. The account DO spends the code only after the AK signature verified, so an unauthenticated request cannot burn it. Spending binds the code to the account ID: the same account may spend it again (a retried registration), any other account gets the 403. A replay of an existing account with the same AK answers 200 and spends nothing.
 
 Revisions (contract §6.3, §6.6). The server stores each revision as an opaque envelope `ct` (nonce, AES-256-GCM ciphertext and tag under a key only devices hold) and orders them by `seq`, which is transport only.
 
@@ -77,11 +88,11 @@ Passkeys and sessions (contract §5.4, §5.5):
 
 `slot.bytes` is `slot_bytes` from the vectors: `canon("hort/v4/slot-bytes\n", slot_params, wrap_nonce, wrapped_vk)`. The server stores a slot only if `ak_sig` verifies against the account's `ak_pub`.
 
-Errors are an HTTP status and one plain-text line. Rate limits (fixed windows, per Durable Object `RateLimiter`): 5 account creations per hour per IP, 10 slot fetches per minute per IP and account, 60 writes per minute per device (AK and sessions count as one device each), 30 passkey login calls per minute per IP, 30 recipient share calls per minute per IP. They answer 429 with `Retry-After`.
+Errors are an HTTP status and one plain-text line. Rate limits (fixed windows, per Durable Object `RateLimiter`): 5 account creations per hour per IP, 10 slot fetches per minute per IP and account, 60 writes per minute per device (AK and sessions count as one device each), 30 passkey login calls per minute per IP, 30 recipient share calls per minute per IP, 30 operator calls per minute per IP. They answer 429 with `Retry-After`.
 
 ### Schema
 
-The account DO schema is contract §6.5 plus three additions from S6.2: `passkeys.id` (hex SHA-256 of the credential ID, the passkey ID in `/devices`), `account.devices_seen_at` (for `last_visit_at`) and the table `sessions (token_hash, credential_id, created_at, expires_at)`. No account DO existed in production when they were added, so there is no migration. Once accounts exist, a schema change needs one. Wrangler migration `v2` adds the `Challenge` class, `v3` the `Share` class.
+The account DO schema is contract §6.5 plus three additions from S6.2: `passkeys.id` (hex SHA-256 of the credential ID, the passkey ID in `/devices`), `account.devices_seen_at` (for `last_visit_at`) and the table `sessions (token_hash, credential_id, created_at, expires_at)`. No account DO existed in production when they were added, so there is no migration. Once accounts exist, a schema change needs one. Wrangler migration `v2` adds the `Challenge` class, `v3` the `Share` class, `v4` the `Invitations` class.
 
 ## Develop
 
@@ -106,7 +117,14 @@ npx wrangler dev -c wrangler.dev.jsonc --port 8788 --persist-to "$(mktemp -d)"
 HORT_TEST_SERVER=http://localhost:8788 go test ./internal/cli -run TestServerSync -count=1 -v
 ```
 
-The CLI speaks https only; the test puts a local TLS proxy in front of the Worker, which also simulates a refused push and a lost push answer. A fresh `--persist-to` directory resets the rate limits (locally every request shares the IP bucket `unknown`).
+The CLI speaks https only; the test puts a local TLS proxy in front of the Worker, which also simulates a refused push and a lost push answer.
+
+Invitations end to end (operator commands, `init` and `sync` with `--invite`):
+
+```bash
+npx wrangler dev -c wrangler.dev.jsonc --port 8788 --persist-to "$(mktemp -d)" --var ADMIN_TOKEN:synthetic-admin-token
+HORT_TEST_INVITE_SERVER=http://localhost:8788 go test ./internal/cli -run TestInvitations -count=1 -v
+``` A fresh `--persist-to` directory resets the rate limits (locally every request shares the IP bucket `unknown`).
 
 ## Web app and landing page
 
@@ -146,9 +164,9 @@ Rollback before step 5: remove the domain from `hort-api` and bind it to `hort-s
 
 ```bash
 npx wrangler deploy
-npx wrangler secret put REGISTRATION_TOKEN   # optional: invite-only registration
+npx wrangler secret put ADMIN_TOKEN   # optional: invite-only registration
 ```
 
 Replace the `routes` entry in `wrangler.jsonc` with your own domain, or remove it and set `"workers_dev": true` to use the `workers.dev` address. The full guide is [docs/self-hosting.md](../docs/self-hosting.md).
 
-Without `REGISTRATION_TOKEN`, anyone can create an account. Point the CLI at your Worker with `--server`.
+Without `ADMIN_TOKEN`, anyone can create an account. With it, create invitations with `HORT_ADMIN_TOKEN=... hort invite create --server <url>`. Point the CLI at your Worker with `--server`.

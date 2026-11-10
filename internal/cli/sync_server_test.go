@@ -43,7 +43,7 @@ func TestServerSync(t *testing.T) {
 
 	a, b, c := t.TempDir(), t.TempDir(), t.TempDir()
 	use(t, a)
-	if err := CmdInit(srv.URL, "dev-a"); err != nil {
+	if err := CmdInit(srv.URL, "dev-a", ""); err != nil {
 		t.Fatal(err)
 	}
 	if !body(t, a).Sync.Registered {
@@ -104,7 +104,7 @@ func TestServerSync(t *testing.T) {
 	// stays pending, and the next sync pushes it once.
 	setLocal(t, "gamma", "g-value")
 	p.fail("POST /api/v1/revisions", "refuse")
-	if _, err := syncVault(primary(t), session(t)); err == nil {
+	if _, err := syncVault(primary(t), session(t), ""); err == nil {
 		t.Fatal("sync with a refused push succeeded")
 	}
 	if len(body(t, a).Sync.Pending) != 1 {
@@ -118,7 +118,7 @@ func TestServerSync(t *testing.T) {
 	// Push without an answer: the server stored delta but a never heard so.
 	setLocal(t, "delta", "d-value")
 	p.fail("POST /api/v1/revisions", "drop")
-	if _, err := syncVault(primary(t), session(t)); err == nil {
+	if _, err := syncVault(primary(t), session(t), ""); err == nil {
 		t.Fatal("sync with a lost push answer succeeded")
 	}
 	if len(body(t, a).Sync.Pending) != 1 {
@@ -187,7 +187,7 @@ func TestServerSync(t *testing.T) {
 		t.Fatalf("notices for dev-c: %s", got)
 	}
 	use(t, c)
-	if _, err := syncVault(primary(t), session(t)); err == nil || !strings.Contains(err.Error(), "device revoked") {
+	if _, err := syncVault(primary(t), session(t), ""); err == nil || !strings.Contains(err.Error(), "device revoked") {
 		t.Fatalf("revoked device synced: %v", err)
 	}
 
@@ -335,7 +335,7 @@ func body(t *testing.T, home string) *vault.VaultData {
 
 func syncOK(t *testing.T) SyncReport {
 	t.Helper()
-	report, err := syncVault(primary(t), session(t))
+	report, err := syncVault(primary(t), session(t), "")
 	must(t, err)
 	return report
 }
@@ -410,32 +410,47 @@ func captureStderr(t *testing.T) *stderrLog {
 	return log
 }
 
-// TestRegistrationToken needs a Worker that was started with a registration token:
+// TestInvitations needs a Worker that was started with an admin token:
 //
-//	cd server && npx wrangler dev -c wrangler.dev.jsonc --persist-to "$(mktemp -d)" --var REGISTRATION_TOKEN:synthetic-registration-token
-//	HORT_TEST_TOKEN_SERVER=http://localhost:8787 go test ./internal/cli -run TestRegistrationToken -count=1 -v
-func TestRegistrationToken(t *testing.T) {
-	target := os.Getenv("HORT_TEST_TOKEN_SERVER")
+//	cd server && npx wrangler dev -c wrangler.dev.jsonc --persist-to "$(mktemp -d)" --var ADMIN_TOKEN:synthetic-admin-token
+//	HORT_TEST_INVITE_SERVER=http://localhost:8787 go test ./internal/cli -run TestInvitations -count=1 -v
+func TestInvitations(t *testing.T) {
+	target := os.Getenv("HORT_TEST_INVITE_SERVER")
 	if target == "" {
-		t.Skip("HORT_TEST_TOKEN_SERVER is not set")
+		t.Skip("HORT_TEST_INVITE_SERVER is not set")
 	}
-	const token = "synthetic-registration-token"
+	const admin = "synthetic-admin-token"
 	srv := httptest.NewTLSServer(&faultProxy{target: strings.TrimRight(target, "/")})
 	defer srv.Close()
 	defer func(c *http.Client) { api.HTTPClient = c }(api.HTTPClient)
 	api.HTTPClient = srv.Client()
 	errs := captureStderr(t)
 	t.Setenv("HORT_PASSPHRASE", "synthetic-remote-passphrase")
-	t.Setenv("HORT_REGISTRATION_TOKEN", "")
 
-	// Without the variable init warns with the server message and the vault stays usable.
+	// The operator commands need HORT_ADMIN_TOKEN, and the right one.
+	t.Setenv("HORT_ADMIN_TOKEN", "")
+	if err := CmdInviteCreate(srv.URL); err == nil || !strings.Contains(err.Error(), "HORT_ADMIN_TOKEN is not set") {
+		t.Fatalf("create without token: %v", err)
+	}
+	t.Setenv("HORT_ADMIN_TOKEN", "synthetic-wrong-token")
+	if err := CmdInviteList(srv.URL); err == nil || !strings.Contains(err.Error(), "invalid admin token") {
+		t.Fatalf("list with a wrong token: %v", err)
+	}
+	t.Setenv("HORT_ADMIN_TOKEN", admin)
+	link := strings.TrimSpace(stdout(t, func() error { return CmdInviteCreate(srv.URL) }))
+	code, ok := strings.CutPrefix(link, srv.URL+"/invite#")
+	if !ok || len(code) != 32 {
+		t.Fatalf("invite link %q", link)
+	}
+
+	// Without a code init warns with the server message and the vault stays usable.
 	a := t.TempDir()
 	use(t, a)
-	must(t, CmdInit(srv.URL, "dev-a"))
+	must(t, CmdInit(srv.URL, "dev-a", ""))
 	if body(t, a).Sync.Registered {
-		t.Fatal("registered without a token")
+		t.Fatal("registered without an invitation")
 	}
-	if out := errs.since(0); !strings.Contains(out, "a registration token is required") {
+	if out := errs.since(0); !strings.Contains(out, "needs an invitation") {
 		t.Fatalf("server message missing: %s", out)
 	}
 	must(t, CmdSet("alpha", "", "a-value", "", "", ""))
@@ -443,36 +458,46 @@ func TestRegistrationToken(t *testing.T) {
 		t.Fatalf("local read: %q %v", got, err)
 	}
 
-	// A wrong token is refused the same way.
-	t.Setenv("HORT_REGISTRATION_TOKEN", "synthetic-wrong-token")
-	if err := CmdSync(false); err == nil {
-		t.Fatal("sync registered with a wrong token")
-	}
-	if body(t, a).Sync.Registered {
-		t.Fatal("registered with a wrong token")
+	// A wrong code is refused.
+	if err := CmdSync(false, strings.Repeat("0", 32)); err == nil || !strings.Contains(err.Error(), "not valid or was already used") {
+		t.Fatalf("sync with a wrong code: %v", err)
 	}
 
-	// The first sync with the right token registers.
-	t.Setenv("HORT_REGISTRATION_TOKEN", token)
-	must(t, CmdSync(false))
+	// The first sync with the code registers; the code works only once.
+	must(t, CmdSync(false, code))
 	if !body(t, a).Sync.Registered {
-		t.Fatal("sync did not register with the token")
+		t.Fatal("sync did not register with the code")
 	}
-
-	// init registers with the token as well.
 	b := t.TempDir()
 	use(t, b)
-	must(t, CmdInit(srv.URL, "dev-b"))
-	if !body(t, b).Sync.Registered {
-		t.Fatalf("init did not register: %s", errs.text())
+	must(t, CmdInit(srv.URL, "dev-b", code))
+	if body(t, b).Sync.Registered {
+		t.Fatal("a second account registered with a used code")
 	}
 
-	// The token reaches neither stderr nor any file under a home.
-	for _, secret := range []string{token, "synthetic-wrong-token"} {
+	// init registers with a fresh code; revoke refuses a used one.
+	fresh := strings.TrimPrefix(strings.TrimSpace(stdout(t, func() error { return CmdInviteCreate(srv.URL) })), srv.URL+"/invite#")
+	c := t.TempDir()
+	use(t, c)
+	must(t, CmdInit(srv.URL, "dev-c", fresh))
+	if !body(t, c).Sync.Registered {
+		t.Fatalf("init did not register: %s", errs.text())
+	}
+	listed := stdout(t, func() error { return CmdInviteList(srv.URL) })
+	if strings.Count(listed, " used ") < 2 || strings.Contains(listed, code) || strings.Contains(listed, fresh) {
+		t.Fatalf("list: %s", listed)
+	}
+	id := strings.Fields(listed)[0]
+	if err := CmdInviteRevoke(srv.URL, id); err == nil || !strings.Contains(err.Error(), "already used") {
+		t.Fatalf("revoke of a used invitation: %v", err)
+	}
+
+	// Codes and the admin token reach neither stderr nor any file under a home.
+	for _, secret := range []string{code, fresh, admin} {
 		if strings.Contains(errs.since(0), secret) {
 			t.Fatalf("%q on stderr", secret)
 		}
-		for _, home := range []string{a, b} {
+		for _, home := range []string{a, b, c} {
 			_ = filepath.Walk(home, func(p string, info os.FileInfo, err error) error {
 				if err != nil || info.IsDir() {
 					return nil

@@ -3,10 +3,8 @@ import { runInDurableObject } from "cloudflare:test";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import keyVectors from "../../spec/vectors/keys.json";
 import slotVectors from "../../spec/vectors/slot.json";
-import worker from "../src/index";
 import { jurisdictionCalls } from "./setup";
 import {
-  TOKEN,
   hex,
   random,
   nowSeconds,
@@ -67,20 +65,8 @@ describe("POST /api/v1/accounts", () => {
     expect(await res.text()).toBe("account already exists\n");
   });
 
-  it("requires the registration token while it is set", async () => {
-    const f = await randomFixture();
-    const missing = await call(createCall(f, { headers: {} }));
-    expect(missing.status).toBe(403);
-    expect(await missing.text()).toBe("registration is invite-only; a registration token is required\n");
-    const wrong = await call(createCall(f, { headers: { "Hort-Registration-Token": "nope" } }));
-    expect(wrong.status).toBe(403);
-    expect(await wrong.text()).toBe("invalid registration token\n");
-  });
-
-  it("is open without a configured registration token", async () => {
-    const f = await randomFixture();
-    const req = await signedRequest(createCall(f, { headers: {} }));
-    const res = await worker.fetch(req as Parameters<typeof worker.fetch>[0], { ...env, REGISTRATION_TOKEN: undefined } as Env);
+  it("is open without ADMIN_TOKEN, and an invitation header changes nothing", async () => {
+    const res = await call(createCall(await randomFixture(), { headers: { "Hort-Invite": hexEncode(random(16)) } }));
     expect(res.status).toBe(201);
   });
 
@@ -107,10 +93,10 @@ describe("POST /api/v1/accounts", () => {
   it("limits account creation to 5 per hour per IP", async () => {
     const ip = randomIp();
     for (let i = 0; i < 5; i++) {
-      const res = await call(createCall(await randomFixture(), { headers: { "Hort-Registration-Token": TOKEN, "CF-Connecting-IP": ip } }));
+      const res = await call(createCall(await randomFixture(), { headers: { "CF-Connecting-IP": ip } }));
       expect(res.status).toBe(201);
     }
-    const res = await call(createCall(await randomFixture(), { headers: { "Hort-Registration-Token": TOKEN, "CF-Connecting-IP": ip } }));
+    const res = await call(createCall(await randomFixture(), { headers: { "CF-Connecting-IP": ip } }));
     expect(res.status).toBe(429);
     expect(Number(res.headers.get("Retry-After"))).toBeGreaterThan(3500);
   });

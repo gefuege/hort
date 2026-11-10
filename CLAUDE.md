@@ -58,7 +58,7 @@ One local vault at `~/.hort/vault.enc`; session key in `~/.hort/.session`, locks
 
 ## Sync
 
-Sync runs through the Hort server (`server/`): hort.pm or a self-hosted one (`docs/self-hosting.md`). The server stores ciphertext only. `hort sync` registers the account on first use (a server with `REGISTRATION_TOKEN` needs `HORT_REGISTRATION_TOKEN`); `hort enroll` adds a device. Folder sync is removed.
+Sync runs through the Hort server (`server/`): hort.pm or a self-hosted one (`docs/self-hosting.md`). The server stores ciphertext only. `hort sync` registers the account on first use (a server with `ADMIN_TOKEN` needs `--invite CODE` on `init` or that first `sync`; its operator creates codes with `hort invite`); `hort enroll` adds a device. Folder sync is removed.
 
 ## Release
 

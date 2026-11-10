@@ -91,7 +91,8 @@ func defaultDeviceName() string {
 
 // CmdInit creates a new v4 vault and registers the account when the server
 // answers within syncLimit; otherwise the first `hort sync` registers it.
-func CmdInit(server, name string) error {
+// invite is the invitation code a server with invitations needs.
+func CmdInit(server, name, invite string) error {
 	ref, err := vault.PrimaryRef()
 	if err != nil {
 		return err
@@ -128,7 +129,7 @@ func CmdInit(server, name string) error {
 	if err := confirmKit(created.Server, created.AccountID, created.SecretKey); err != nil {
 		return err
 	}
-	if _, err := limitSync(syncLimit, func() (SyncReport, error) { return syncVault(ref, created.VK) }); err != nil {
+	if _, err := limitSync(syncLimit, func() (SyncReport, error) { return syncVault(ref, created.VK, invite) }); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: not registered on %s yet (%v); `hort sync` registers it later\n", created.Server, err)
 	}
 	return nil

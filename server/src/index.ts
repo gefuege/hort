@@ -3,12 +3,14 @@ import npmPackage from "../../npm/package.json";
 import { MAX_ENVELOPE_BYTES, SESSION_COOKIE, SHARE_GONE, type RelyingParty, type SessionAuth } from "./account";
 import { issueChallenge } from "./challenge";
 import { fail, json } from "./http";
+import { INVITE_INVALID, invitationsStub } from "./invitations";
 import { rateLimit } from "./rate-limiter";
 import { shareStub } from "./share";
 import { accountIdDecode, accountIdEncode, b64Decode, b64urlDecode, hexDecode, hexEncode, sha256, type Signed } from "./wire";
 
 export { Account } from "./account";
 export { Challenge } from "./challenge";
+export { Invitations } from "./invitations";
 export { RateLimiter } from "./rate-limiter";
 export { Share } from "./share";
 
@@ -26,7 +28,7 @@ const MAX_PUSH_BODY_BYTES = 4 * 1024 * 1024;
 // A share create carries a ciphertext of up to 64 KiB and meta_ct, base64 in JSON.
 const MAX_SHARE_BODY_BYTES = 128 * 1024;
 
-type Bindings = Env & { REGISTRATION_TOKEN?: string };
+type Bindings = Env & { ADMIN_TOKEN?: string };
 
 function accountStub(env: Env, accountId: string) {
   return env.ACCOUNT.jurisdiction("eu").getByName(accountId);
@@ -138,6 +140,18 @@ function deviceOrSession(request: Request, url: URL, write: boolean): Promise<Si
   return request.headers.has("Hort-Signature") ? readSigned(request, url, "device") : readSession(request, url, write);
 }
 
+// Operator calls (README "Invitations"): Hort-Admin-Token equal to the
+// ADMIN_TOKEN secret, rate-limited per IP before the comparison. Without the
+// secret, registration is open and there are no invitations.
+async function checkAdmin(request: Request, env: Bindings): Promise<Response | null> {
+  const limited = await rateLimit(env, "admin", clientIp(request));
+  if (limited) return limited;
+  if (!env.ADMIN_TOKEN) return fail(404, "this server has no ADMIN_TOKEN; registration is open to anyone");
+  const token = request.headers.get("Hort-Admin-Token");
+  if (!token || !(await constantTimeEqual(token, env.ADMIN_TOKEN))) return fail(403, "invalid admin token");
+  return null;
+}
+
 const relyingParty = (url: URL): RelyingParty => ({ origin: url.origin, id: url.hostname });
 
 async function route(request: Request, env: Bindings): Promise<Response> {
@@ -159,16 +173,35 @@ async function route(request: Request, env: Bindings): Promise<Response> {
 
   if (path === "/api/v1/accounts") {
     if (method !== "POST") return fail(405, "method not allowed");
-    if (env.REGISTRATION_TOKEN) {
-      const token = request.headers.get("Hort-Registration-Token");
-      if (!token) return fail(403, "registration is invite-only; a registration token is required");
-      if (!(await constantTimeEqual(token, env.REGISTRATION_TOKEN))) return fail(403, "invalid registration token");
+    // With ADMIN_TOKEN set, registration needs an invitation code; the
+    // account DO spends it only after the AK signature verified.
+    let invite: Uint8Array | null = null;
+    if (env.ADMIN_TOKEN) {
+      const code = request.headers.get("Hort-Invite");
+      if (!code) return fail(403, "registration on this server needs an invitation; run hort init or hort sync with --invite CODE from your invite link");
+      invite = hexDecode(code, 16);
+      if (!invite) return fail(403, INVITE_INVALID);
     }
     const req = await readSigned(request, url, "ak");
     if (req instanceof Response) return req;
     const limited = await rateLimit(env, "create", clientIp(request));
     if (limited) return limited;
-    return accountStub(env, req.accountId).createAccount(req);
+    return accountStub(env, req.accountId).createAccount(req, invite && (await sha256(invite)));
+  }
+
+  if (path === "/api/v1/invitations") {
+    if (method !== "POST" && method !== "GET") return fail(405, "method not allowed");
+    const denied = await checkAdmin(request, env);
+    if (denied) return denied;
+    return method === "POST" ? invitationsStub(env).create() : invitationsStub(env).list();
+  }
+
+  if ((m = path.match(/^\/api\/v1\/invitations\/([^/]+)\/revoke$/))) {
+    if (method !== "POST") return fail(405, "method not allowed");
+    const denied = await checkAdmin(request, env);
+    if (denied) return denied;
+    if (!hexDecode(m[1], 4)) return fail(404, "invitation not found");
+    return invitationsStub(env).revoke(m[1]);
   }
 
   if ((m = path.match(/^\/api\/v1\/accounts\/([^/]+)\/slot$/))) {

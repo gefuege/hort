@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="robots" content="noindex">
+<title>You're invited – Hort</title>
+<link rel="icon" type="image/png" href="/favicon.png">
+<link rel="stylesheet" href="/style.css">
+<link rel="stylesheet" href="/invite.css">
+<script src="/theme.js"></script>
+<script src="/home.js" defer></script>
+<script src="/invite.js" defer></script>
+</head>
+<body>
+<nav class="m-nav"><a class="brand" href="/"><span class="chev">&lt;</span><img src="/img/logo.png" alt="" width="28" height="28"><span class="chev">&gt;</span>Hort</a></nav>
+<main class="section legal invite">
+<h1>You're invited to Hort.</h1>
+<p>Three steps to your own vault. Your keys stay on your devices.</p>
+
+<h2>1. Install Hort</h2>
+<div class="win term install" id="install-term">
+  <div class="win-bar"><i></i><i></i><i></i>
+    <div class="tabs" role="tablist" aria-label="Operating system">
+      <button type="button" class="tab" role="tab" id="os-macos" aria-controls="os-macos-panel" aria-selected="true">macOS</button>
+      <button type="button" class="tab" role="tab" id="os-windows" aria-controls="os-windows-panel" aria-selected="false" tabindex="-1">Windows</button>
+      <button type="button" class="tab" role="tab" id="os-linux" aria-controls="os-linux-panel" aria-selected="false" tabindex="-1">Linux</button>
+      <button type="button" class="tab" role="tab" id="os-npm" aria-controls="os-npm-panel" aria-selected="false" tabindex="-1">npm</button>
+    </div>
+  </div>
+<pre role="tabpanel" id="os-macos-panel" aria-labelledby="os-macos" tabindex="0"><span class="t-m"># Homebrew</span>
+<span class="t-p">$</span> brew install sebastian-breitzke/tap/hort</pre>
+<pre role="tabpanel" id="os-windows-panel" aria-labelledby="os-windows" tabindex="0" hidden><span class="t-m"># Scoop</span>
+<span class="t-p">&gt;</span> scoop bucket add sebastian-breitzke https://github.com/sebastian-breitzke/scoop-bucket
+<span class="t-p">&gt;</span> scoop install hort</pre>
+<pre role="tabpanel" id="os-linux-panel" aria-labelledby="os-linux" tabindex="0" hidden><span class="t-m"># npm, or a .deb, .rpm or plain binary from github.com/gefuege/hort/releases</span>
+<span class="t-p">$</span> npm install -g @s16e/hort</pre>
+<pre role="tabpanel" id="os-npm-panel" aria-labelledby="os-npm" tabindex="0" hidden><span class="t-m"># any OS with Node.js</span>
+<span class="t-p">$</span> npm install -g @s16e/hort</pre>
+</div>
+
+<h2>2. Create your vault</h2>
+<div class="win term install invite-cmd">
+<pre id="invite-cmd" tabindex="0"></pre>
+  <p class="win-foot">Choose a passphrase. Keep the Emergency Kit it prints somewhere safe, apart from the passphrase. The invitation works once.</p>
+</div>
+
+<h2>3. Add a passkey</h2>
+<p>Open <a id="vault-link" href="/vault">hort.pm/vault</a>, unlock with your Emergency Kit and register a passkey. From then on the passkey signs you in, in the browser and when your agent asks you for a secret.</p>
+</main>
+</body>
+</html>

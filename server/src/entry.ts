@@ -2,6 +2,7 @@ import api from "./index";
 
 export { Account } from "./account";
 export { Challenge } from "./challenge";
+export { Invitations } from "./invitations";
 export { RateLimiter } from "./rate-limiter";
 export { Share } from "./share";
 

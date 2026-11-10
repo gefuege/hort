@@ -109,7 +109,7 @@ curl -H "Authorization: Bearer $TOKEN" https://monitoring.example.com
 
 `hort init` prints your **Emergency Kit** (account ID and Secret Key). Keep it somewhere safe and apart from the passphrase: your vault opens only with passphrase plus Secret Key, and nobody, including us, can recover either. `hort help recovery` lists what can and cannot be recovered.
 
-**Registration.** The hosted service at hort.pm is not open to everyone yet: registration opens soon. Until then, creating an account on hort.pm needs an invitation token, passed as `HORT_REGISTRATION_TOKEN` for `hort init` or the first `hort sync`. The token is only sent while registering and never stored. Your own server decides its own rule; see [Self-hosting](docs/self-hosting.md).
+**Registration.** The hosted service at hort.pm is not open to everyone yet: registration opens soon. Until then, creating an account on hort.pm needs a personal invite link. It shows the command to run, `hort init --invite <code>`; if init could not reach the server, `hort sync --invite <code>` registers later. The code works for one account, is only sent while registering and is never stored. Your own server decides its own rule; see [Self-hosting](docs/self-hosting.md).
 
 ## Usage
 

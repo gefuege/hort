@@ -37,24 +37,32 @@ npx wrangler deploy     # builds the web app, then uploads the Worker and public
 
 ## 4. Optional: invite-only registration
 
-Without a registration token anyone who can reach your server can create accounts. To require one, set the secret `REGISTRATION_TOKEN`:
+Without the secret `ADMIN_TOKEN` anyone who can reach your server can create accounts. To make registration invite-only, set it:
 
 ```bash
-npx wrangler secret put REGISTRATION_TOKEN     # wrangler asks for the value; pick a long random string
+npx wrangler secret put ADMIN_TOKEN     # wrangler asks for the value; pick a long random string
 ```
 
-While it is set, account creation needs the header `Hort-Registration-Token` with that value. The CLI sends it from the environment variable `HORT_REGISTRATION_TOKEN` and never stores or prints it.
+While it is set, every new account needs a single-use invitation. Create one per person; the operator commands read the secret from `HORT_ADMIN_TOKEN` and need no vault:
+
+```bash
+export HORT_ADMIN_TOKEN=...
+hort invite create --server https://hort.example.com   # prints the invite link, valid once
+hort invite list --server https://hort.example.com     # ID, created, open or used, account ID
+hort invite revoke <id> --server https://hort.example.com
+```
+
+The link `https://hort.example.com/invite#<code>` opens a page with the install steps and the `hort init --invite <code> --server https://hort.example.com` command. The code sits in the link's fragment, so it never reaches the server's logs; the server stores only its hash. Once an account used it, the code works for no other account.
 
 ## 5. Point the CLI at your server
 
 The server URL must be `https`. It is chosen when the vault is created and stored in the vault file's header; there is no `hort sync --server`.
 
 ```bash
-export HORT_REGISTRATION_TOKEN=...      # only if you set REGISTRATION_TOKEN
-hort init --server https://hort.example.com
+hort init --server https://hort.example.com    # add --invite <code> if you set ADMIN_TOKEN
 ```
 
-`hort init` creates the account, prints the Emergency Kit (Secret Key and account ID; keep it apart from the passphrase) and registers the account when the server answers. If the server was unreachable, init warns that the account is not registered yet; `hort sync` registers it later (the token must be set for that first run too).
+`hort init` creates the account, prints the Emergency Kit (Secret Key and account ID; keep it apart from the passphrase) and registers the account when the server answers. If the server was unreachable, init warns that the account is not registered yet; `hort sync --invite <code>` registers it later.
 
 ```bash
 hort sync          # sync now, without time limit

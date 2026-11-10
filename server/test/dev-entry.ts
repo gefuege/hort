@@ -5,9 +5,9 @@
 import { env } from "cloudflare:workers";
 import worker from "../src/entry";
 
-export { Account, Challenge, RateLimiter, Share } from "../src/entry";
+export { Account, Challenge, Invitations, RateLimiter, Share } from "../src/entry";
 
-for (const ns of [env.ACCOUNT, env.RATE_LIMITER, env.CHALLENGE, env.SHARE]) {
+for (const ns of [env.ACCOUNT, env.RATE_LIMITER, env.CHALLENGE, env.SHARE, env.INVITATIONS]) {
   Object.getPrototypeOf(ns).jurisdiction = function (this: DurableObjectNamespace) {
     return this;
   };

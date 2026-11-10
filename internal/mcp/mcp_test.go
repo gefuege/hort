@@ -74,7 +74,7 @@ func TestRequestSecret(t *testing.T) {
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
 	t.Setenv("HORT_PASSPHRASE", "synthetic-mcp-passphrase")
-	if err := cli.CmdInit(srv.URL, "dev-mcp"); err != nil {
+	if err := cli.CmdInit(srv.URL, "dev-mcp", ""); err != nil {
 		t.Fatal(err)
 	}
 	ref, err := vault.PrimaryRef()
@@ -538,7 +538,7 @@ func (r *rig) connect(c *client) session {
 		if r.syncFails.Load() {
 			return errors.New("synthetic sync failure")
 		}
-		return cli.CmdSync(false)
+		return cli.CmdSync(false, "")
 	}, Version: "9.9.9"})
 	ss, err := server.Connect(ctx, st, nil)
 	if err != nil {

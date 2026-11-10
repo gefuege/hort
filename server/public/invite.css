@@ -1,0 +1,3 @@
+/* Invite page: the init command wraps between its words instead of scrolling, so the whole code stays visible. */
+.invite-cmd pre{white-space:pre-wrap}
+.invite-cmd pre span{white-space:nowrap}

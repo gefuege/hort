@@ -29,7 +29,7 @@ MANAGE:
   hort delete <name> [<field>] [--env <env>] [--context <ctx>]
                                          Without field, env and context: delete the whole entry.
                                          Otherwise delete that one value.
-  hort init [--server <url>] [--name <n>]
+  hort init [--server <url>] [--name <n>] [--invite <code>]
                                          Create a new vault: account, Secret Key and passphrase.
                                          Prints the Emergency Kit and, on a terminal, waits until
                                          you type the last group of the Secret Key back.
@@ -45,11 +45,11 @@ MANAGE:
                                          read 'hort migrate --help' first
 
 SYNC AND DEVICES:
-  hort sync [--json]                     Sync with the server now, without a time limit. The
+  hort sync [--json] [--invite <code>]   Sync with the server now, without a time limit. The
                                          first run registers the account (init does it when
                                          the server answers). A server that only takes
-                                         invited accounts needs HORT_REGISTRATION_TOKEN
-                                         set for that first run.
+                                         invited accounts needs --invite with the code from
+                                         your invite link on init or that first run.
   hort enroll <account-id> [--server <url>] [--name <n>]
                                          Add this device to an existing account. Asks for the
                                          Secret Key and the passphrase, then pulls the vault.
@@ -71,6 +71,14 @@ AGENT REQUESTS:
                                          It asks the user to enter a secret in the Hort web
                                          app; the value never enters the chat. See 'hort mcp --help'.
 
+SERVER OPERATORS:
+  hort invite create [--server <url>]    Create a single-use invitation and print its invite
+                                         link. Needs HORT_ADMIN_TOKEN (the server's
+                                         ADMIN_TOKEN secret), no vault.
+  hort invite list [--server <url>]      List invitations: ID, created, open or used, account
+  hort invite revoke <id> [--server <url>]
+                                         Revoke an open invitation; its link stops working
+
 TOPICS:
   hort help recovery                     What can and cannot be recovered
 
@@ -86,8 +94,8 @@ FLAGS:
   HORT_PASSPHRASE and HORT_SECRET_KEY replace the passphrase prompt and the
   Secret Key file for automation. Without a terminal, init prints the
   Emergency Kit and skips the typed-back confirmation.
-  HORT_REGISTRATION_TOKEN is sent only when init or the first sync registers
-  the account; it is never stored or printed.
+  The --invite code is sent only when init or the first sync registers the
+  account; it works for one account and is never stored.
 
 KEYS:
   Your vault opens only with your passphrase plus your Secret Key. The Secret

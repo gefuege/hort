@@ -8,6 +8,7 @@ export const LIMITS = {
   write: [60, 60], // writes per device (or "ak" or "session") and account
   login: [30, 60], // passkey login options and verify calls per IP
   share: [30, 60], // recipient share calls (open, delete) per IP
+  admin: [30, 60], // operator calls (invitations) per IP
 } as const;
 
 // Fixed-window counter, one instance per bucket and key. The key (which may

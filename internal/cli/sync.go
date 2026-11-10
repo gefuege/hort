@@ -101,12 +101,13 @@ func readLastSync(ref vault.VaultRef) string {
 }
 
 // register creates the account on the server, signed with AK (§5.1), and
-// records it with this device as the only known one.
-func register(ref vault.VaultRef, vk []byte, data *vault.VaultData, acct vault.Account) error {
+// records it with this device as the only known one. invite is the
+// invitation code a server with invitations needs; it is never stored.
+func register(ref vault.VaultRef, vk []byte, data *vault.VaultData, acct vault.Account, invite string) error {
 	d := data.Device
 	slot := api.Slot{Version: acct.Slot.Version, Bytes: acct.Slot.Bytes, AKSig: acct.Slot.AKSig}
 	c := akClient(acct)
-	c.RegistrationToken = os.Getenv("HORT_REGISTRATION_TOKEN")
+	c.Invite = invite
 	version, err := c.CreateAccount(publicKey(acct.Keys.AK), slot, api.NewDevice{ID: d.ID, Pub: publicKey(d.Key()), Name: d.Name})
 	if err != nil {
 		return fmt.Errorf("registering the account on %s: %w", acct.Server, err)
@@ -326,14 +327,15 @@ func pushAll(c api.Client, acct vault.Account, revs []vault.Pulled) (acked []str
 // cursor. Network I/O stays outside the lock. An interrupted sync loses
 // nothing: merged revisions are union-idempotent, pending leaves only on the
 // server's answer, and the cursor moves only after the merge is stored.
-func syncVault(ref vault.VaultRef, vk []byte) (SyncReport, error) {
+// invite is used only when this sync registers the account.
+func syncVault(ref vault.VaultRef, vk []byte, invite string) (SyncReport, error) {
 	var report SyncReport
 	data, acct, err := vault.OpenAccount(ref, vk)
 	if err != nil {
 		return report, err
 	}
 	if !data.Sync.Registered {
-		if err := register(ref, vk, data, acct); err != nil {
+		if err := register(ref, vk, data, acct, invite); err != nil {
 			return report, err
 		}
 		if data, acct, err = vault.OpenAccount(ref, vk); err != nil {
@@ -423,15 +425,16 @@ func autoSync(ref vault.VaultRef, vk []byte) {
 	if err != nil || !data.Sync.Registered {
 		return
 	}
-	if _, err := limitSync(syncLimit, func() (SyncReport, error) { return syncVault(ref, vk) }); err != nil {
+	if _, err := limitSync(syncLimit, func() (SyncReport, error) { return syncVault(ref, vk, "") }); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: sync: %v\n", err)
 	}
 }
 
-// CmdSync syncs without a time limit; the first run registers the account.
-func CmdSync(jsonOutput bool) error {
+// CmdSync syncs without a time limit; the first run registers the account,
+// with invite when the server needs an invitation.
+func CmdSync(jsonOutput bool, invite string) error {
 	ref, key := requireKey()
-	report, err := syncVault(ref, key)
+	report, err := syncVault(ref, key, invite)
 	if err != nil {
 		return err
 	}

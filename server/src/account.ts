@@ -7,6 +7,7 @@ import {
 import { DurableObject } from "cloudflare:workers";
 import { consumeChallenge, issueChallenge } from "./challenge";
 import { asObject, fail, json, parseObject } from "./http";
+import { INVITE_INVALID, invitationsStub } from "./invitations";
 import { rateLimit } from "./rate-limiter";
 import { shareStub } from "./share";
 import {
@@ -239,8 +240,9 @@ export class Account extends DurableObject<Env> {
   }
 
   // POST /api/v1/accounts (contract §5.1). The Worker has checked the
-  // registration token and the creation rate limit.
-  async createAccount(req: Signed): Promise<Response> {
+  // creation rate limit; invite is the SHA-256 of the invitation code when
+  // registration needs one, otherwise null.
+  async createAccount(req: Signed, invite: Uint8Array | null): Promise<Response> {
     const body = parseObject(req.body, ["account_id", "ak_pub", "slot", "device"]);
     if (!body) return fail(400, "body must be {account_id, ak_pub, slot, device}");
     if (body.account_id !== req.accountId) return fail(400, "account_id does not match Hort-Account");
@@ -256,6 +258,12 @@ export class Account extends DurableObject<Env> {
     if (!devObj) return fail(400, "device must be {id, pub, name}");
     const device = await parseDevice(devObj.id, devObj.pub, devObj.name);
     if (typeof device === "string") return fail(400, device);
+
+    // The signature verified, so only the AK holder spends the invitation,
+    // bound to this account ID. A replay of an existing account spends none.
+    if (invite && !this.account() && !(await invitationsStub(this.env).consume(invite, req.accountId))) {
+      return fail(403, INVITE_INVALID);
+    }
 
     // No await below: check and insert are one atomic step.
     const existing = this.account();

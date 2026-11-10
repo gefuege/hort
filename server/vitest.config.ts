@@ -8,7 +8,6 @@ export default defineConfig({
         plugins: [
           cloudflareTest({
             wrangler: { configPath: "./wrangler.jsonc" },
-            miniflare: { bindings: { REGISTRATION_TOKEN: "test-registration-token" } },
           }),
         ],
         test: { name: "worker", include: ["test/**/*.test.ts"], setupFiles: ["./test/setup.ts"] },

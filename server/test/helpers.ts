@@ -5,7 +5,6 @@ import keyVectors from "../../spec/vectors/keys.json";
 import slotVectors from "../../spec/vectors/slot.json";
 import { accountIdEncode, b64Encode, canon, concat, hexDecode, hexEncode, requestMessage, slotSigMessage, str, u32, accountIdDecode } from "../src/wire";
 
-export const TOKEN = "test-registration-token";
 export const hex = (s: string) => hexDecode(s, s.length / 2)!;
 export const random = (n: number) => crypto.getRandomValues(new Uint8Array(n));
 export const nowSeconds = () => Math.floor(Date.now() / 1000);
@@ -91,7 +90,6 @@ export function createCall(f: Fixture, extra: Partial<Call> = {}): Call {
     method: "POST",
     path: "/api/v1/accounts",
     body: createBody(f),
-    headers: { "Hort-Registration-Token": TOKEN },
     ...extra,
   };
 }

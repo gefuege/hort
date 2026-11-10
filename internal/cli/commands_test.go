@@ -24,7 +24,7 @@ func TestInitRefusesExistingVaultWithoutChanges(t *testing.T) {
 	if err := os.WriteFile(path, want, 0600); err != nil {
 		t.Fatal(err)
 	}
-	if err := CmdInit("", ""); err == nil || !strings.Contains(err.Error(), "already exists") {
+	if err := CmdInit("", "", ""); err == nil || !strings.Contains(err.Error(), "already exists") {
 		t.Errorf("init over an existing vault: got %v", err)
 	}
 	got, readErr := os.ReadFile(path)

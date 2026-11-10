@@ -5,7 +5,7 @@ import { env } from "cloudflare:workers";
 // the tests record each call and continue on the plain namespace.
 export const jurisdictionCalls: string[] = [];
 
-for (const ns of [env.ACCOUNT, env.RATE_LIMITER, env.CHALLENGE, env.SHARE]) {
+for (const ns of [env.ACCOUNT, env.RATE_LIMITER, env.CHALLENGE, env.SHARE, env.INVITATIONS]) {
   Object.getPrototypeOf(ns).jurisdiction = function (this: DurableObjectNamespace, j: string) {
     jurisdictionCalls.push(j);
     return this;
