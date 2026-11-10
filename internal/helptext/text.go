@@ -13,6 +13,8 @@ READ:
 WRITE:
   hort set <name> [<field>] (--value <v> | --value-stdin) [--env <env>] [--context <ctx>]
            [--description <d>]           Store one value
+  hort take <link> [--as <name>]         Save a secret shared by link, then delete the link;
+                                         read 'hort take --help'
 
 DISCOVER (metadata only, never values):
   hort list [--json]                     List all entries
@@ -216,4 +218,19 @@ and keeps every revision unchanged. The v3 file stays as
 too large for one sync envelope. Afterwards migrate prints the Emergency Kit;
 run 'hort sync' to register the vault on the server. A v2 vault must first be
 migrated with Hort 0.4.1.
+`
+
+// TakeText is the help of 'hort take'.
+const TakeText = `Save a secret shared by link into your vault, then delete the link.
+
+take asks "Who are you?"; type your name as the sender knows you. Without a
+terminal it reads one line from stdin. Each wrong name counts: take prints
+the tries left, and the fifth wrong name ends the link for good.
+
+Every shared field is saved as the default value (env *, context *) under the
+shared name, or under --as <name>, with the shared description. A secret of
+that name is never overwritten: take refuses, writes nothing and the link
+stays open, so run it again with --as. Values are never printed.
+
+The vault must be unlocked ('hort unlock').
 `

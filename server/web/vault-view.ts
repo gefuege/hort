@@ -6,10 +6,11 @@
 import { b64Decode, b64Encode } from "../src/wire";
 import { formatTime } from "./format-time";
 import { notALogin } from "./not-a-login";
-import { accountIdEncode, appendStamp, current, lookupKey, newId, nowNs, openRevision, sealRevision, validateWrite, type AccountKeys, type Op, type Revision } from "./vault-core";
+import { accountIdEncode, appendStamp, current, lookupKey, newId, nowNs, openRevision, resolve, sealRevision, validateWrite, type AccountKeys, type Op, type Revision } from "./vault-core";
+import { deriveShareKeys, formatShareLink, normalizeShareName, openShareMeta, sealShare, sealShareMeta, SHARE_LINK_KEY_BYTES, type SharedField, type SharedSecret } from "./share-core";
 
 type Child = Node | string | null | false | undefined;
-type Unlocked = { accountId: Uint8Array; keys: AccountKeys };
+export type Unlocked = { accountId: Uint8Array; keys: AccountKeys };
 type Api = Pick<Host, "api" | "ok">;
 
 // What the page needs from the app shell, which owns the unlocked vault.
@@ -83,7 +84,7 @@ export async function pull(host: Api, u: Unlocked): Promise<Vault> {
   }
 }
 
-type Change = { op: Op; field: string; key: string; value: string };
+export type Change = { op: Op; field: string; key: string; value: string };
 
 // Pulls deltas first, so the Append rule sees writes from other devices,
 // then stamps, validates, seals and pushes the changes as one batch.
@@ -107,14 +108,90 @@ export async function write(host: Api, u: Unlocked, name: string, changes: Chang
   for (const r of built) if (stored.has(r.id)) remember(v, name, r);
 }
 
+// ---------------------------------------------------------------------------
+// Shares: a snapshot of one secret for one recipient, opened by link (share-core.ts).
+
+export type Expiry = 3600 | 86400 | 604800;
+const EXPIRY_LABEL: Record<Expiry, string> = { 3600: "1 hour", 86400: "1 day", 604800: "7 days" };
+
+// What a share of the secret carries for the row's env and context: each field
+// with the value it resolves to there (hort get NAME FIELD --env E --context C).
+export function shareFields(revisions: Revision[], env: string, context: string): SharedField[] {
+  const fields = [...new Set([...current(revisions).values.values()].map((x) => x.field))].sort(order);
+  const out: SharedField[] = [];
+  for (const field of fields) {
+    const value = resolve(revisions, field, env, context);
+    if (value !== null) out.push({ field, value });
+  }
+  return out;
+}
+
+// Seals the snapshot for `recipient`, stores it with POST /shares and returns
+// the link. The link key exists only in this call and in the returned link.
+export async function createShare(host: Api, u: Unlocked, origin: string, secret: SharedSecret, recipient: string, expiresIn: Expiry): Promise<string> {
+  const id = newId();
+  const linkKey = crypto.getRandomValues(new Uint8Array(SHARE_LINK_KEY_BYTES));
+  try {
+    const keys = await deriveShareKeys(recipient, linkKey, id);
+    const ct = await sealShare(keys, id, secret);
+    const metaCt = await sealShareMeta(u.keys, id, { name: secret.name, recipient: recipient.trim(), fields: secret.fields.map((f) => f.field) });
+    const body = { id, expires_in: expiresIn, ct: b64Encode(ct), meta_ct: b64Encode(metaCt), token_hash: b64Encode(keys.tokenHash) };
+    const res = await host.api("POST", "/api/v1/shares", { body: JSON.stringify(body) });
+    const refused = sessionRefused(res);
+    if (refused) throw refused;
+    await host.ok(res);
+    return formatShareLink(origin, id, linkKey);
+  } finally {
+    linkKey.fill(0);
+  }
+}
+
+export type OwnShare = { id: string; state: string; name: string; recipient: string; expiresAt: number };
+
+// The account's shares by secret name, from GET /shares. A share whose
+// metadata does not open with this vault key is left out.
+export async function ownShares(host: Api, u: Unlocked): Promise<Map<string, OwnShare[]>> {
+  const res = await host.api("GET", "/api/v1/shares");
+  const refused = sessionRefused(res);
+  if (refused) throw refused;
+  const { shares } = await host.ok<{ shares: { id: string; state: string; meta_ct: string; expires_at: number }[] }>(res);
+  const out = new Map<string, OwnShare[]>();
+  for (const s of shares) {
+    try {
+      const m = await openShareMeta(u.keys, s.id, b64Decode(s.meta_ct) ?? new Uint8Array());
+      out.set(m.name, [...(out.get(m.name) ?? []), { id: s.id, state: s.state, name: m.name, recipient: m.recipient, expiresAt: s.expires_at }]);
+    } catch {
+      console.warn(`skipped share ${s.id}: its metadata does not open`);
+    }
+  }
+  return out;
+}
+
+export async function revokeShare(host: Api, id: string): Promise<void> {
+  const res = await host.api("POST", `/api/v1/shares/${id}/revoke`);
+  const refused = sessionRefused(res);
+  if (refused) throw refused;
+  await host.ok(res);
+}
+
+const ENDED: Record<string, string> = { taken: "picked up", revoked: "revoked", destroyed: "destroyed" };
+
+// The row's line for a share: the time left while open, else how it ended.
+// Null from the expiry on, when the server keeps nothing of it.
+export function shareTag(s: Pick<OwnShare, "state" | "recipient" | "expiresAt">, nowS: number): string | null {
+  const left = s.expiresAt - nowS;
+  if (left <= 0) return null;
+  const open = left >= 86400 ? `${Math.floor(left / 86400)}d` : left >= 3600 ? `${Math.floor(left / 3600)}h` : `${Math.max(1, Math.floor(left / 60))}m`;
+  return `shared → ${s.recipient} · ${s.state === "open" ? open : (ENDED[s.state] ?? s.state)}`;
+}
 
 // ---------------------------------------------------------------------------
 // Clipboard: cleared 30 s after a copy. Browsers may refuse a write without a
 // recent user action in the tab, so a clear that fails is retried on the next
 // pointer or key press here. `cleared` hears whether each attempt worked.
 
-const CLIPBOARD_S = 30;
-const REVEAL_S = 30;
+export const CLIPBOARD_S = 30;
+export const REVEAL_S = 30;
 
 // Whole seconds until a deadline, so sleep or timer throttling cannot stretch it.
 export const secondsLeft = (deadline: number, now = Date.now()): number => Math.max(0, Math.ceil((deadline - now) / 1000));
@@ -138,7 +215,7 @@ function retryClear(): void {
   clearClipboard();
 }
 
-async function copy(value: string, cleared: (done: boolean) => void): Promise<void> {
+export async function copy(value: string, cleared: (done: boolean) => void): Promise<void> {
   try {
     await navigator.clipboard.writeText(value);
   } catch {
@@ -236,9 +313,9 @@ function nameNodes(name: string, prefix: number): Array<string | HTMLElement> {
 // Keyboard: what a key does where the focus is. "list" is the console outside
 // any input; "button" is an action button in it, which handles Enter itself.
 
-export type Command = "filter" | "down" | "up" | "show" | "copy" | "edit" | "delete" | "new" | "refresh" | "close" | "yes" | "all" | "no" | "first";
+export type Command = "filter" | "down" | "up" | "show" | "copy" | "edit" | "share" | "delete" | "new" | "refresh" | "close" | "yes" | "all" | "no" | "first";
 export type Focus = "filter" | "editor" | "list" | "button";
-const LIST_KEYS: Record<string, Command> = { "/": "filter", ArrowDown: "down", ArrowUp: "up", Enter: "show", c: "copy", e: "edit", d: "delete", n: "new", r: "refresh" };
+const LIST_KEYS: Record<string, Command> = { "/": "filter", ArrowDown: "down", ArrowUp: "up", Enter: "show", c: "copy", e: "edit", s: "share", d: "delete", n: "new", r: "refresh" };
 
 export function command(key: string, focus: Focus, confirming: boolean): Command | null {
   if (key === "Escape") return "close";
@@ -297,7 +374,9 @@ export async function vaultView(main: HTMLElement, host: Host): Promise<void> {
   let shown: Row[] = [];
   let selected: string | null = null;
   let confirming: string | null = null;
+  // The one inline panel under an entry: the editor or the share panel.
   let editing: { name: string | null; el: HTMLElement } | null = null;
+  let shares = new Map<string, OwnShare[]>();
   const revealed = new Map<string, { deadline: number; timer: number; ttl?: HTMLElement }>();
   let deleting = false;
 
@@ -321,7 +400,7 @@ export async function vaultView(main: HTMLElement, host: Host): Promise<void> {
       h(
         "div",
         { class: "hints", "aria-label": "Keyboard shortcuts" },
-        ...[["/", "filter"], ["↑ ↓", "select"], ["enter", "show"], ["c", "copy"], ["e", "edit"], ["d", "delete"], ["n", "new"], ["esc", "close"], ["g v·d·a", "switch"], ["?", "help"]].map(([k, what]) => h("span", {}, h("kbd", {}, k), what)),
+        ...[["/", "filter"], ["↑ ↓", "select"], ["enter", "show"], ["c", "copy"], ["e", "edit"], ["s", "share"], ["d", "delete"], ["n", "new"], ["esc", "close"], ["g v·d·a", "switch"], ["?", "help"]].map(([k, what]) => h("span", {}, h("kbd", {}, k), what)),
       ),
     ),
   );
@@ -340,7 +419,18 @@ export async function vaultView(main: HTMLElement, host: Host): Promise<void> {
     show(text, kind);
   };
 
+  // Share states degrade alone: when they do not load, the vault still works.
+  const loadShares = async (): Promise<void> => {
+    try {
+      const got = await run(() => ownShares(host, u));
+      if (got) shares = got;
+    } catch (err) {
+      say(messageOf(err), "error");
+    }
+  };
+
   const rowById = (id: string | null) => shown.find((r) => r.id === id);
+  const shareable = (r: Row) => shareFields(v.entries.get(r.name) ?? [], r.env, r.context).length > 0;
   const focusSelected = () => list.querySelector<HTMLElement>(".v-row.sel")?.focus();
 
   function draw(): void {
@@ -414,6 +504,7 @@ export async function vaultView(main: HTMLElement, host: Host): Promise<void> {
         h("button", { type: "button", class: cls, onclick: () => ((selected = r.id), run()) }, h("u", {}, key), ` ${label}`);
       li.append(
         h("span", { class: "c-desc", title: r.first && r.description ? r.description : undefined }, r.first ? r.description : ""),
+        ...(r.first ? shareLine(r.name) : []),
         ...(value ? [value] : []),
         h(
           "span",
@@ -421,6 +512,7 @@ export async function vaultView(main: HTMLElement, host: Host): Promise<void> {
           r.value === null ? null : button("⏎", rev ? "hide" : "show", () => toggleShow(r)),
           r.value === null ? null : button("c", "copy", () => void copyValue(r)),
           button("e", "edit", () => openEditor(r)),
+          shareable(r) ? button("s", "share", () => openShare(r)) : null,
           button("d", "delete", () => askDelete(r), "danger"),
         ),
       );
@@ -440,6 +532,30 @@ export async function vaultView(main: HTMLElement, host: Host): Promise<void> {
       if (!(e.target as Element).closest("button") && r.value !== null) toggleShow(r);
     });
     return li;
+  }
+
+  // The entry's shares until their expiry, with revoke while open.
+  function shareLine(name: string): HTMLElement[] {
+    const nowS = Date.now() / 1000;
+    const items = (shares.get(name) ?? []).flatMap((s) => {
+      const text = shareTag(s, nowS);
+      if (!text) return [];
+      const open = s.state === "open";
+      return [h("span", { class: open ? "on" : undefined }, text, open ? h("button", { class: "tlink", type: "button", onclick: () => void revoke(s) }, "revoke") : null)];
+    });
+    return items.length ? [h("span", { class: "c-share" }, ...items)] : [];
+  }
+
+  async function revoke(s: OwnShare): Promise<void> {
+    try {
+      if ((await run(() => revokeShare(host, s.id).then(() => true))) === null) return;
+    } catch (err) {
+      say(messageOf(err), "error");
+      return;
+    }
+    await loadShares();
+    draw();
+    say(`Revoked the link for ${s.recipient}. It no longer opens.`, "ok");
   }
 
   // Redraws one row in place, so an open editor keeps what was typed.
@@ -572,6 +688,14 @@ export async function vaultView(main: HTMLElement, host: Host): Promise<void> {
     editing.el.querySelector<HTMLElement>(r ? "textarea" : "input")?.focus();
   }
 
+  function openShare(r: Row): void {
+    confirming = null;
+    selected = r.id;
+    editing = { name: r.name, el: shareEl(r) };
+    draw();
+    editing.el.querySelector<HTMLElement>("input")?.focus();
+  }
+
   function closeEditor(): void {
     editing = null;
     draw();
@@ -667,11 +791,84 @@ export async function vaultView(main: HTMLElement, host: Host): Promise<void> {
     return h("li", { class: "editor" }, h("h3", {}, r ? `> edit ${r.name}` : "> new secret"), form);
   }
 
+  // The share panel: who it is for, which fields, how long; then the link, once.
+  function shareEl(r: Row): HTMLElement {
+    const revisions = v.entries.get(r.name) ?? [];
+    const all = shareFields(revisions, r.env, r.context);
+    // A secret without named fields shares its default value and shows no choice.
+    const named = all.some((f) => f.field !== "");
+    const recipient = h("input", { id: `v-${++inputs}`, autocomplete: "off", spellcheck: false, placeholder: "e.g. Lars", ...notALogin });
+    const expiry = h("select", { id: `v-${++inputs}` }, ...([3600, 86400, 604800] as Expiry[]).map((s) => h("option", { value: String(s), selected: s === 86400 }, EXPIRY_LABEL[s])));
+    const boxes = named ? all.map((f) => h("input", { type: "checkbox", checked: true, "aria-label": f.field || "default" })) : [];
+    const err = h("span", { class: "err", role: "status" });
+    const create = h("button", { class: "tbtn tbtn-primary", type: "submit" }, "create link");
+    const cancel = h("button", { class: "tbtn", type: "button", onclick: closeEditor }, h("kbd", {}, "esc"), "cancel");
+    const scope = envContext(r) ? `Values for env ${r.env || "any"} · context ${r.context || "any"}. ` : "";
+    const form = h(
+      "form",
+      { novalidate: true, ...notALogin },
+      h(
+        "div",
+        { class: "grid" },
+        h("div", { class: "wide" }, h("label", { htmlFor: recipient.id }, "For"), recipient),
+        h("div", {}, h("label", { htmlFor: expiry.id }, "Expires in"), expiry),
+        named ? h("div", { class: "full" }, h("label", {}, "Fields"), ...boxes.map((b, i) => h("label", { class: "check" }, b, all[i].field || "(default)"))) : null,
+      ),
+      h("p", { class: "e-note" }, `${scope}The link opens only for this name. Five wrong names destroy it.`),
+      h("div", { class: "e-foot" }, create, cancel, err),
+    );
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const fields = named ? all.filter((_, i) => boxes[i].checked) : all;
+      const name = normalizeShareName(recipient.value);
+      err.textContent = !name ? "Type who this is for." : !fields.length ? "Pick at least one field." : "";
+      if (err.textContent) return;
+      create.disabled = true;
+      say("Creating link …");
+      try {
+        const secret = { name: r.name, description: current(revisions).description, fields };
+        const link = await run(() => createShare(host, u, location.origin, secret, recipient.value, Number(expiry.value) as Expiry));
+        if (link === null) return;
+        say("");
+        form.replaceWith(createdEl(link, name));
+        await loadShares();
+        draw();
+      } catch (e) {
+        say("");
+        err.textContent = messageOf(e);
+      } finally {
+        create.disabled = false;
+      }
+    });
+    return h("li", { class: "editor" }, h("h3", {}, `> share ${r.name}`), form);
+  }
+
+  function createdEl(link: string, name: string): HTMLElement {
+    const copyLink = h("button", { class: "tbtn tbtn-primary", type: "button" }, "copy link");
+    copyLink.addEventListener("click", async () => {
+      try {
+        await copy(link, (done) => active() && say(done ? "Clipboard cleared." : "This browser kept the link on the clipboard; Hort clears it on your next click or key press here.", done ? "ok" : "error"));
+        say(`Link copied. The clipboard clears in ${CLIPBOARD_S} s.`, "ok");
+      } catch (err) {
+        say(messageOf(err), "error");
+      }
+    });
+    const done = h("button", { class: "tbtn", type: "button", onclick: closeEditor }, h("kbd", {}, "esc"), "done");
+    return h(
+      "div",
+      {},
+      h("p", { class: "c-val" }, link),
+      h("p", { class: "e-note" }, "They type ", h("code", {}, name), " to open it. This link is shown only now."),
+      h("div", { class: "e-foot" }, copyLink, done),
+    );
+  }
+
   async function refresh(): Promise<void> {
     refreshButton.disabled = true;
     synced.textContent = "refreshing …";
     try {
       if ((await run(() => pull(host, u))) === null) return;
+      await loadShares();
       draw();
       markSynced();
     } catch (err) {
@@ -730,6 +927,7 @@ export async function vaultView(main: HTMLElement, host: Host): Promise<void> {
     if (!sel) return;
     if (cmd === "edit") return openEditor(sel);
     if (cmd === "delete") return askDelete(sel);
+    if (cmd === "share") return shareable(sel) ? openShare(sel) : undefined;
     if (sel.value === null) return;
     if (cmd === "show") toggleShow(sel);
     else if (cmd === "copy") void copyValue(sel);
@@ -748,4 +946,6 @@ export async function vaultView(main: HTMLElement, host: Host): Promise<void> {
   markSynced();
   draw();
   if (host.notice) say(host.notice.text, host.notice.kind);
+  await loadShares();
+  if (active()) draw();
 }

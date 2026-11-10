@@ -72,6 +72,19 @@ func main() {
 	setCmd.Flags().StringP("description", "d", "", "Description of the whole entry, for discovery")
 	root.AddCommand(setCmd)
 
+	takeCmd := &cobra.Command{
+		Use:   "take LINK",
+		Short: "Save a secret shared by link, then delete the link",
+		Long:  helptext.TakeText,
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			as, _ := cmd.Flags().GetString("as")
+			return cli.CmdTake(args[0], as)
+		},
+	}
+	takeCmd.Flags().String("as", "", "Save under this name instead of the shared one")
+	root.AddCommand(takeCmd)
+
 	deleteCmd := &cobra.Command{
 		Use:   "delete NAME [FIELD]",
 		Short: "Delete an entry, or one value of it",

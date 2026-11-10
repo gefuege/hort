@@ -54,7 +54,7 @@ export async function ed25519FromSeed(seed: Uint8Array): Promise<{ key: CryptoKe
 // helpers return plain Uint8Array, so WebCrypto arguments carry a cast.
 const gcm = (iv: Uint8Array, aad: Uint8Array): AesGcmParams => ({ name: "AES-GCM", iv: iv as BufferSource, additionalData: aad as BufferSource });
 
-async function aesKey(raw: Uint8Array): Promise<CryptoKey> {
+export async function aesKey(raw: Uint8Array): Promise<CryptoKey> {
   return crypto.subtle.importKey("raw", raw as BufferSource, { name: "AES-GCM" }, false, ["encrypt", "decrypt"]);
 }
 
@@ -318,7 +318,7 @@ export function envelopePlaintext(name: string, r: Revision): Uint8Array {
   return utf8.encode(JSON.stringify({ name, revision: revisionJSON(r) }));
 }
 
-function exactKeys(o: unknown, required: string[], optional: string[] = []): o is Record<string, unknown> {
+export function exactKeys(o: unknown, required: string[], optional: string[] = []): o is Record<string, unknown> {
   if (typeof o !== "object" || o === null || Array.isArray(o)) return false;
   const keys = Object.keys(o);
   return required.every((k) => keys.includes(k)) && keys.every((k) => required.includes(k) || optional.includes(k));
@@ -354,12 +354,12 @@ function decodeRevision(o: unknown): Revision | string {
   return { id, recordedAt, op, field, key, value };
 }
 
-async function seal(key: CryptoKey, plaintext: Uint8Array, aad: Uint8Array, nonce: Uint8Array): Promise<Uint8Array> {
+export async function seal(key: CryptoKey, plaintext: Uint8Array, aad: Uint8Array, nonce: Uint8Array): Promise<Uint8Array> {
   const ct = await crypto.subtle.encrypt(gcm(nonce, aad), key, plaintext as BufferSource);
   return concat([nonce, new Uint8Array(ct)]);
 }
 
-async function open(key: CryptoKey, envelope: Uint8Array, aad: Uint8Array): Promise<Uint8Array> {
+export async function open(key: CryptoKey, envelope: Uint8Array, aad: Uint8Array): Promise<Uint8Array> {
   if (envelope.length < NONCE + TAG) throw new Error("envelope too short");
   const pt = await crypto.subtle.decrypt(gcm(envelope.subarray(0, NONCE), aad), key, envelope.subarray(NONCE) as BufferSource);
   return new Uint8Array(pt);

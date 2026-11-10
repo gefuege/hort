@@ -1,6 +1,7 @@
 package store
 
 import (
+	"errors"
 	"fmt"
 	"sort"
 	"time"
@@ -73,29 +74,79 @@ func holdsKey(entry vault.Entry, key vault.LookupKey) bool {
 	return false
 }
 
+func newSet(field, value, env, context string) (vault.Revision, error) {
+	revision, err := vault.NewRevision("set", vault.MakeLookupKey(env, context), value)
+	revision.Field = field
+	return revision, err
+}
+
+// describeIfChanged is the describe revision when description is given and
+// differs from the entry's current one.
+func describeIfChanged(entry vault.Entry, description string) ([]vault.Revision, error) {
+	if _, current, _ := entry.Current(); description == "" || description == current {
+		return nil, nil
+	}
+	desc, err := vault.NewRevision("describe", "", description)
+	if err != nil {
+		return nil, err
+	}
+	return []vault.Revision{desc}, nil
+}
+
 func (s *Store) SetSecret(name, field, value, env, context, description string) error {
 	data, err := s.load()
 	if err != nil {
 		return err
 	}
 	entry, exists := data.Secrets[name]
-	revision, err := vault.NewRevision("set", vault.MakeLookupKey(env, context), value)
+	revision, err := newSet(field, value, env, context)
 	if err != nil {
 		return err
 	}
-	revision.Field = field
-	revisions := []vault.Revision{revision}
-	if _, current, _ := entry.Current(); description != "" && description != current {
-		desc, err := vault.NewRevision("describe", "", description)
-		if err != nil {
-			return err
-		}
-		revisions = append(revisions, desc)
+	desc, err := describeIfChanged(entry, description)
+	if err != nil {
+		return err
 	}
+	revisions := append([]vault.Revision{revision}, desc...)
 	if err := validated(name, entry, exists, revisions...); err != nil {
 		return err
 	}
 	return vault.UpdateVault(s.ref, s.key, func(data *vault.VaultData) error {
+		for _, r := range revisions {
+			data.Append(name, r)
+		}
+		return nil
+	})
+}
+
+// ErrNameTaken refuses SaveShared under a name that holds a secret.
+var ErrNameTaken = errors.New("a secret of that name exists")
+
+// SaveShared writes every field as its default value (env *, context *) plus
+// the description under a name that holds no secret, in one update: either
+// everything is written or nothing.
+func (s *Store) SaveShared(name, description string, fields []vault.SharedField) error {
+	return vault.UpdateVault(s.ref, s.key, func(data *vault.VaultData) error {
+		entry, exists := data.Secrets[name]
+		if _, _, visible := entry.Current(); visible {
+			return fmt.Errorf("%w: %q", ErrNameTaken, name)
+		}
+		revisions := []vault.Revision{}
+		for _, f := range fields {
+			revision, err := newSet(f.Field, f.Value, "", "")
+			if err != nil {
+				return err
+			}
+			revisions = append(revisions, revision)
+		}
+		desc, err := describeIfChanged(entry, description)
+		if err != nil {
+			return err
+		}
+		revisions = append(revisions, desc...)
+		if err := validated(name, entry, exists, revisions...); err != nil {
+			return err
+		}
 		for _, r := range revisions {
 			data.Append(name, r)
 		}

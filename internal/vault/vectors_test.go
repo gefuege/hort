@@ -40,6 +40,7 @@ func TestVectors(t *testing.T) {
 		{"request.json", requestVectors},
 		{"secret-key.json", secretKeyVectors},
 		{"reduction.json", reductionVectors},
+		{"share.json", shareVectors},
 	}
 	for _, f := range files {
 		t.Run(f.name, func(t *testing.T) {
@@ -654,6 +655,199 @@ func reductionVectors(t *testing.T) any {
 		Vectors: map[string]any{
 			"reduce": cases,
 			"append": appends,
+		},
+	}
+}
+
+func shareVectors(t *testing.T) any {
+	keys := must(DeriveAccountKeys(vecVK, vecAccountID))
+	shareID := hex.EncodeToString(fixed("share-id", 16))
+	idBytes, _ := hex.DecodeString(shareID)
+	linkKey := fixed("link-key", ShareLinkKeySize)
+
+	type normVec struct {
+		Name       string `json:"name"`
+		Input      string `json:"input"`
+		Normalized string `json:"normalized"`
+	}
+	normCase := func(name, input, want string) normVec {
+		if got := NormalizeShareName(input); got != want {
+			t.Fatalf("%s: NormalizeShareName(%q) = %q, want %q", name, input, got, want)
+		}
+		if again := NormalizeShareName(want); again != want {
+			t.Fatalf("%s: normalization is not idempotent: %q", name, again)
+		}
+		return normVec{name, input, want}
+	}
+	normalize := []normVec{
+		normCase("plain name", "Lars", "lars"),
+		normCase("umlaut, precomposed", "Jörg Müller", "jörg müller"),
+		normCase("umlaut, decomposed (NFD)", "Jo\u0308rg Mu\u0308ller", "jörg müller"),
+		normCase("sharp s", "Strauß", "strauss"),
+		normCase("capital sharp s", "STRAUẞ", "strauss"),
+		normCase("ss spelled out", "STRAUSS", "strauss"),
+		normCase("dotted capital I", "İlker", "i\u0307lker"),
+		normCase("dotless i stays", "Işık", "işık"),
+		normCase("capital sigma", "ΟΔΥΣΣΕΥΣ", "οδυσσευσ"),
+		normCase("final sigma", "Οδυσσευς", "οδυσσευσ"),
+		normCase("whitespace: trim and collapse, tab, no-break and ideographic space", " \tLars\u00a0 \u3000Müller\n", "lars müller"),
+		normCase("fullwidth letters (NFKC)", "Ｌａｒｓ", "lars"),
+		normCase("whitespace only", " \t\u00a0", ""),
+	}
+	if _, err := DeriveShareKeys("  \t", linkKey, shareID); err == nil {
+		t.Fatal("empty name derived keys")
+	}
+
+	type keyVec struct {
+		Name       string    `json:"name"`
+		TestParams bool      `json:"test_params_only"`
+		Input      string    `json:"input"`
+		Normalized string    `json:"normalized"`
+		NormHex    hexBytes  `json:"normalized_utf8_hex"`
+		ShareID    string    `json:"share_id"`
+		LinkKey    hexBytes  `json:"link_key_hex"`
+		Argon      argonJSON `json:"argon"`
+		A          hexBytes  `json:"argon_output_hex"`
+		K          hexBytes  `json:"share_key_hex"`
+		Enc        hexBytes  `json:"enc_key_hex"`
+		Token      hexBytes  `json:"token_hex"`
+		TokenB64   string    `json:"token_base64"`
+		TokenHash  hexBytes  `json:"token_hash_hex"`
+		HashB64    string    `json:"token_hash_base64"`
+	}
+	keyCase := func(name, input string, p ArgonParams, test bool) keyVec {
+		a, k := func() ([]byte, []byte) {
+			a, k, err := shareKey(input, linkKey, shareID, p)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return a, k
+		}()
+		sk := must(deriveShareKeys(input, linkKey, shareID, p))
+		sum := sha256.Sum256(sk.Token)
+		n := NormalizeShareName(input)
+		return keyVec{name, test, input, n, []byte(n), shareID, linkKey, argonOf(p), a, k, sk.Enc, sk.Token,
+			base64.StdEncoding.EncodeToString(sk.Token), sum[:], base64.StdEncoding.EncodeToString(sum[:])}
+	}
+	keyVecs := []keyVec{
+		keyCase("production parameters", "Jörg Müller", DefaultArgonParams(), false),
+		keyCase("test parameters", "Jörg Müller", testArgon, true),
+		keyCase("test parameters, another spelling of the same name gives the same keys", "  JO\u0308RG   müller ", testArgon, true),
+	}
+	if !bytes.Equal(keyVecs[1].Token, keyVecs[2].Token) || !bytes.Equal(keyVecs[1].Enc, keyVecs[2].Enc) {
+		t.Fatal("two spellings of one name derive different keys")
+	}
+	if !bytes.Equal(must(DeriveShareKeys("Jörg Müller", linkKey, shareID)).Token, keyVecs[0].Token) {
+		t.Fatal("DeriveShareKeys does not use production parameters")
+	}
+	if other := must(deriveShareKeys("Jörg Mueller", linkKey, shareID, testArgon)); bytes.Equal(other.Token, keyVecs[1].Token) {
+		t.Fatal("another name derived the same token")
+	}
+
+	type ctVec struct {
+		Name      string       `json:"name"`
+		ShareID   string       `json:"share_id"`
+		Secret    SharedSecret `json:"secret"`
+		Enc       hexBytes     `json:"enc_key_hex"`
+		AAD       hexBytes     `json:"aad_hex"`
+		Nonce     hexBytes     `json:"nonce_hex"`
+		Plaintext string       `json:"plaintext"`
+		CT        hexBytes     `json:"ct_hex"`
+		Base64    string       `json:"ct_base64"`
+	}
+	enc := keyVecs[1].Enc
+	ctCase := func(i int, name string, s SharedSecret) ctVec {
+		nonce := fixed(fmt.Sprintf("nonce/share/%d", i), NonceSize)
+		ct := must(sealShare(enc, shareID, s, nonce))
+		got := must(OpenShare(enc, shareID, ct))
+		if got.Name != s.Name || got.Description != s.Description || len(got.Fields) != len(s.Fields) {
+			t.Fatalf("%s: share does not round-trip", name)
+		}
+		if _, err := OpenShare(enc, fmt.Sprintf("%032x", 99), ct); err == nil {
+			t.Fatalf("%s: share opened under another share ID", name)
+		}
+		if _, err := OpenShare(keyVecs[0].Enc, shareID, ct); err == nil {
+			t.Fatalf("%s: share opened with another key", name)
+		}
+		return ctVec{name, shareID, s, enc, shareAAD(idBytes), nonce, string(must(json.Marshal(s))), ct, base64.StdEncoding.EncodeToString(ct)}
+	}
+	cts := []ctVec{
+		ctCase(0, "default field only, empty description", SharedSecret{Name: "github-token", Fields: []SharedField{{"", "ghp_example"}}}),
+		ctCase(1, "default and named fields", SharedSecret{Name: "db", Description: "Postgres of tenant heine",
+			Fields: []SharedField{{"", "postgres://db"}, {"user", "heine"}, {"password", "s3cr3t ä"}}}),
+	}
+	for _, bad := range []SharedSecret{
+		{Name: "db"},
+		{Name: "", Fields: []SharedField{{"", "v"}}},
+		{Name: "db", Fields: []SharedField{{"user", "a"}, {"user", "b"}}},
+		{Name: "db", Fields: []SharedField{{"User", "a"}}},
+	} {
+		if _, err := sealShare(enc, shareID, bad, fixed("nonce/share/bad", NonceSize)); err == nil {
+			t.Fatalf("sealed invalid share %+v", bad)
+		}
+	}
+
+	type metaVec struct {
+		ShareID   string    `json:"share_id"`
+		Meta      shareMeta `json:"meta"`
+		RK        hexBytes  `json:"rk_hex"`
+		AccountID hexBytes  `json:"account_id_hex"`
+		AAD       hexBytes  `json:"aad_hex"`
+		Nonce     hexBytes  `json:"nonce_hex"`
+		Plaintext string    `json:"plaintext"`
+		MetaCT    hexBytes  `json:"meta_ct_hex"`
+		Base64    string    `json:"meta_ct_base64"`
+	}
+	meta := shareMeta{Name: "db", Recipient: "Jörg Müller", Fields: []string{"", "user", "password"}}
+	metaNonce := fixed("nonce/share-meta", NonceSize)
+	metaCT := must(sealShareMeta(keys.RK, vecAccountID, shareID, meta, metaNonce))
+	if got := must(openShareMeta(keys.RK, vecAccountID, shareID, metaCT)); got.Name != meta.Name || got.Recipient != meta.Recipient || len(got.Fields) != 3 {
+		t.Fatal("share meta does not round-trip")
+	}
+
+	type linkVec struct {
+		Name    string   `json:"name"`
+		Link    string   `json:"link"`
+		Origin  string   `json:"origin,omitempty"`
+		ShareID string   `json:"share_id,omitempty"`
+		LinkKey hexBytes `json:"link_key_hex,omitempty"`
+		Error   string   `json:"error,omitempty"`
+	}
+	fragment := base64.RawURLEncoding.EncodeToString(linkKey)
+	good := func(name, link, origin string) linkVec {
+		o, id, key, err := ParseShareLink(link)
+		if err != nil || o != origin || id != shareID || !bytes.Equal(key, linkKey) {
+			t.Fatalf("%s: %q does not parse: %v", name, link, err)
+		}
+		return linkVec{Name: name, Link: link, Origin: origin, ShareID: shareID, LinkKey: linkKey}
+	}
+	bad := func(name, link string) linkVec {
+		if _, _, _, err := ParseShareLink(link); err == nil {
+			t.Fatalf("%s: %q accepted", name, link)
+		}
+		return linkVec{Name: name, Link: link, Error: errShareLink.Error()}
+	}
+	links := []linkVec{
+		good("hort.pm", "https://hort.pm/s/"+shareID+"#"+fragment, "https://hort.pm"),
+		good("self-hosted with port", "https://vault.example.com:8443/s/"+shareID+"#"+fragment, "https://vault.example.com:8443"),
+		bad("http", "http://hort.pm/s/"+shareID+"#"+fragment),
+		bad("query string", "https://hort.pm/s/"+shareID+"?x=1#"+fragment),
+		bad("no fragment", "https://hort.pm/s/"+shareID),
+		bad("padded fragment", "https://hort.pm/s/"+shareID+"#"+fragment+"="),
+		bad("short key", "https://hort.pm/s/"+shareID+"#"+fragment[:42]),
+		bad("uppercase share ID", "https://hort.pm/s/"+strings.ToUpper(shareID)+"#"+fragment),
+		bad("other path", "https://hort.pm/r/"+shareID+"#"+fragment),
+	}
+
+	return vectorFile{
+		Description: "Share by link. Link: https://<origin>/s/<share ID, 16 bytes lowercase hex>#<link key, 32 bytes unpadded base64url>. normalize: NFKC, lowercase per code point (U+0130 -> i + U+0307), ς -> σ, ß and ẞ -> ss, NFKC, Unicode White_Space runs collapsed to one space and trimmed. A = Argon2id(UTF-8 normalized name, salt = share ID bytes, t, m, p, 32); K = HKDF(A XOR link key, share ID bytes, hort/v4/share); enc = HKDF(K, share ID bytes, hort/v4/share-enc); token = HKDF(K, share ID bytes, hort/v4/share-token); token_hash = SHA-256(token). ct = nonce(12) || AES-256-GCM(enc, JSON {name, description, fields: [{field, value}]}, aad = canon(\"hort/v4/share-ct\\n\", share ID bytes)). meta_ct = nonce(12) || AES-256-GCM(RK, JSON {name, recipient, fields: [field]}, aad = canon(\"hort/v4/share-meta\\n\", account_id, share ID bytes)).",
+		Vectors: map[string]any{
+			"normalize": normalize,
+			"keys":      keyVecs,
+			"ct":        cts,
+			"meta": []metaVec{{shareID, meta, keys.RK, vecAccountID, shareMetaAAD(vecAccountID, idBytes), metaNonce,
+				string(must(json.Marshal(meta))), metaCT, base64.StdEncoding.EncodeToString(metaCT)}},
+			"link": links,
 		},
 	}
 }

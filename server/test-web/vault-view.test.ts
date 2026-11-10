@@ -155,7 +155,9 @@ describe("vault rows", () => {
 
 describe("vault keys", () => {
   it("maps keys by focus: list shortcuts, filter hand-off, editor typing, inline confirm", () => {
-    expect(["/", "ArrowDown", "ArrowUp", "Enter", "c", "e", "d", "n", "r"].map((k) => command(k, "list", false))).toEqual(["filter", "down", "up", "show", "copy", "edit", "delete", "new", "refresh"]);
+    expect(["/", "ArrowDown", "ArrowUp", "Enter", "c", "e", "s", "d", "n", "r"].map((k) => command(k, "list", false))).toEqual(["filter", "down", "up", "show", "copy", "edit", "share", "delete", "new", "refresh"]);
+    expect(command("s", "editor", false)).toBeNull();
+    expect(command("s", "list", true)).toBeNull();
     expect(command("x", "list", false)).toBeNull();
     expect(command("ArrowDown", "filter", false)).toBe("first");
     expect(command("Enter", "filter", false)).toBe("first");

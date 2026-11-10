@@ -8,6 +8,7 @@ import { DurableObject } from "cloudflare:workers";
 import { consumeChallenge, issueChallenge } from "./challenge";
 import { asObject, fail, json, parseObject } from "./http";
 import { rateLimit } from "./rate-limiter";
+import { shareStub } from "./share";
 import {
   accountIdDecode,
   b64Decode,
@@ -71,6 +72,16 @@ const REQUEST_TTL_SECONDS = 24 * 60 * 60;
 const UNLOCK_KEY_TTLS = [900, 3600, 28800, 604800];
 const UNLOCK_KEY_PREFIX = "unlock:";
 const NO_UNLOCK_KEY = "no unlock key for this session";
+// Shares (README "Shares"): a record under share:<id> and, while the share is
+// open, its ciphertext under share-ct:<id>, both in the DO key-value store
+// next to the SQL tables and outside the schema.
+const MAX_OPEN_SHARES = 50;
+const SHARE_EXPIRIES = [3600, 86400, 604800];
+const SHARE_TRIES = 5;
+const SHARE_PREFIX = "share:";
+const SHARE_CT_PREFIX = "share-ct:";
+// One answer for unknown, ended and expired shares, here and in the Worker.
+export const SHARE_GONE = "this link no longer opens";
 
 type AccountRow = { id: string; ak_pub: ArrayBuffer; devices_version: number };
 type DeviceRow = { id: string; pub: ArrayBuffer; name: string; created_at: number; last_seen_at: number | null; revoked_at: number | null };
@@ -89,6 +100,8 @@ export type RelyingParty = { origin: string; id: string };
 // A session's unlock key in the DO key-value store under unlock:<token_hash>.
 // Entries written before the lock time slid carry no ttl and do not slide.
 type UnlockKey = { key: string; ttl?: number; expires_at: number };
+type ShareState = "open" | "taken" | "revoked" | "destroyed";
+type ShareRecord = { state: ShareState; meta_ct: Uint8Array; token_hash: Uint8Array; tries: number; created_at: number; expires_at: number };
 type RequestRow = { id: string; status: string; meta_ct: ArrayBuffer; from_device: string; created_at: number; revision_ids: string | null };
 
 const now = () => Math.floor(Date.now() / 1000);
@@ -736,5 +749,136 @@ export class Account extends DurableObject<Env> {
     });
     if (result instanceof Response) return result;
     return json(200, result);
+  }
+
+  // Deletes every share past its expiry, record and ciphertext. Runs before
+  // each share operation.
+  private sweepShares(): void {
+    const t = now();
+    const kv = this.ctx.storage.kv;
+    for (const [name, rec] of kv.list<ShareRecord>({ prefix: SHARE_PREFIX })) {
+      if (rec.expires_at > t) continue;
+      kv.delete(name);
+      kv.delete(SHARE_CT_PREFIX + name.slice(SHARE_PREFIX.length));
+    }
+  }
+
+  // Ends an open share: the state stays for the owner, the ciphertext goes.
+  private endShare(id: string, rec: ShareRecord, state: ShareState): void {
+    this.ctx.storage.transactionSync(() => {
+      this.ctx.storage.kv.put(SHARE_PREFIX + id, { ...rec, state });
+      this.ctx.storage.kv.delete(SHARE_CT_PREFIX + id);
+    });
+  }
+
+  // The answer to a create of share id if it cannot simply be inserted: a
+  // replay (same meta_ct and token_hash) gets the current state, other
+  // content a 409, a full account a 429. Synchronous, so the caller can
+  // repeat it after its last await.
+  private shareCreateAnswer(id: string, metaCt: Uint8Array, tokenHash: Uint8Array): Response | null {
+    this.sweepShares();
+    const existing = this.ctx.storage.kv.get<ShareRecord>(SHARE_PREFIX + id);
+    if (existing) {
+      if (!equal(existing.meta_ct, metaCt) || !equal(existing.token_hash, tokenHash)) return fail(409, "share ID exists with different content");
+      return json(200, { state: existing.state, expires_at: existing.expires_at });
+    }
+    let open = 0;
+    for (const [, rec] of this.ctx.storage.kv.list<ShareRecord>({ prefix: SHARE_PREFIX })) if (rec.state === "open") open++;
+    if (open >= MAX_OPEN_SHARES) return fail(429, `too many open shares (${MAX_OPEN_SHARES}); revoke one or wait for expiry`);
+    return null;
+  }
+
+  // POST /api/v1/shares {id, expires_in, ct, meta_ct, token_hash}, device or
+  // session (the Worker checked Hort-CSRF and Origin).
+  async createShare(req: Auth, body: Uint8Array): Promise<Response> {
+    const auth = await this.authenticate(req, true);
+    if (auth instanceof Response) return auth;
+    const o = parseObject(body, ["id", "expires_in", "ct", "meta_ct", "token_hash"]);
+    if (!o) return fail(400, "body must be {id, expires_in, ct, meta_ct, token_hash}");
+    if (typeof o.id !== "string" || !hexDecode(o.id, 16)) return fail(400, "share ID must be 16 bytes of lowercase hex");
+    const id = o.id;
+    if (typeof o.expires_in !== "number" || !SHARE_EXPIRIES.includes(o.expires_in)) return fail(400, "expires_in must be 3600, 86400 or 604800");
+    const ct = ciphertext(o.ct, MAX_ENVELOPE_BYTES);
+    if (!ct) return fail(400, `ct must be base64 of ${MIN_CT_BYTES} bytes to 64 KiB`);
+    const metaCt = ciphertext(o.meta_ct, MAX_META_BYTES);
+    if (!metaCt) return fail(400, `meta_ct must be base64 of ${MIN_CT_BYTES} to ${MAX_META_BYTES} bytes`);
+    const tokenHash = typeof o.token_hash === "string" ? b64Decode(o.token_hash) : null;
+    if (!tokenHash || tokenHash.length !== 32) return fail(400, "token_hash must be base64 of 32 bytes");
+
+    const early = this.shareCreateAnswer(id, metaCt, tokenHash);
+    if (early) return early;
+    const t = now();
+    // The pointer's expiry is authoritative; a retry under an ID bound
+    // earlier keeps the expiry of that first bind.
+    const expiresAt = await shareStub(this.env, id).bind(id, req.accountId, t + o.expires_in);
+    if (expiresAt === null) return fail(409, "share ID is taken");
+    // No await below: the checks repeat and the insert follows atomically.
+    const late = this.shareCreateAnswer(id, metaCt, tokenHash);
+    if (late) return late;
+    const rec: ShareRecord = { state: "open", meta_ct: metaCt, token_hash: tokenHash, tries: 0, created_at: t, expires_at: expiresAt };
+    this.ctx.storage.transactionSync(() => {
+      this.ctx.storage.kv.put(SHARE_PREFIX + id, rec);
+      this.ctx.storage.kv.put(SHARE_CT_PREFIX + id, ct);
+    });
+    return json(201, { state: "open", expires_at: expiresAt });
+  }
+
+  // GET /api/v1/shares, device or session: every share until its expiry, oldest first.
+  async listShares(req: Auth): Promise<Response> {
+    const auth = await this.authenticate(req, false);
+    if (auth instanceof Response) return auth;
+    this.sweepShares();
+    const shares = [...this.ctx.storage.kv.list<ShareRecord>({ prefix: SHARE_PREFIX })]
+      .map(([name, r]) => ({ id: name.slice(SHARE_PREFIX.length), state: r.state, meta_ct: b64Encode(r.meta_ct), created_at: r.created_at, expires_at: r.expires_at }))
+      .sort((a, b) => a.created_at - b.created_at || (a.id < b.id ? -1 : 1));
+    return json(200, { shares });
+  }
+
+  // POST /api/v1/shares/{id}/revoke, device or session + CSRF. Revoking twice is idempotent.
+  async revokeShare(req: Auth, id: string): Promise<Response> {
+    const auth = await this.authenticate(req, true);
+    if (auth instanceof Response) return auth;
+    this.sweepShares();
+    const rec = this.ctx.storage.kv.get<ShareRecord>(SHARE_PREFIX + id);
+    if (!rec) return fail(404, "share not found");
+    if (rec.state === "revoked") return json(200, { state: "revoked" });
+    if (rec.state !== "open") return fail(409, `share is ${rec.state}`);
+    this.endShare(id, rec, "revoked");
+    return json(200, { state: "revoked" });
+  }
+
+  // POST /api/v1/shares/{id}/open (take = false) and DELETE /api/v1/shares/{id}
+  // (take = true), unauthenticated: the Worker found this account through the
+  // share's pointer, rate-limited by IP and hashed Hort-Share-Token. A wrong
+  // token counts on both; the fifth destroys the share. No await: the count
+  // is one atomic step.
+  openShare(id: string, tokenHash: Uint8Array, take: boolean): Response {
+    this.sweepShares();
+    const rec = this.ctx.storage.kv.get<ShareRecord>(SHARE_PREFIX + id);
+    if (!rec || rec.state !== "open") return fail(404, SHARE_GONE);
+    if (!equal(rec.token_hash, tokenHash)) {
+      const tries = rec.tries + 1;
+      if (tries >= SHARE_TRIES) {
+        this.endShare(id, rec, "destroyed");
+        return fail(404, SHARE_GONE);
+      }
+      this.ctx.storage.kv.put(SHARE_PREFIX + id, { ...rec, tries });
+      return json(403, { tries_left: SHARE_TRIES - tries });
+    }
+    if (take) {
+      this.endShare(id, rec, "taken");
+      return new Response(null, { status: 204 });
+    }
+    return json(200, { ct: b64Encode(this.ctx.storage.kv.get<Uint8Array>(SHARE_CT_PREFIX + id)!) });
+  }
+
+  // Called by the share's alarm at its expiry: deletes that share whatever
+  // this DO's clock says, then any other expired ones.
+  expireShare(id: string): void {
+    this.ctx.storage.transactionSync(() => {
+      this.ctx.storage.kv.delete(SHARE_PREFIX + id);
+      this.ctx.storage.kv.delete(SHARE_CT_PREFIX + id);
+    });
+    this.sweepShares();
   }
 }

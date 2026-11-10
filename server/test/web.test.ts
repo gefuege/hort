@@ -57,6 +57,7 @@ describe("console routes", () => {
       "/devices": "/console 200",
       "/access": "/console 200",
       "/r/*": "/console 200",
+      "/s/*": "/console 200",
     });
   });
 });

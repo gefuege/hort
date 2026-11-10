@@ -1,0 +1,259 @@
+{
+  "description": "Share by link. Link: https://<origin>/s/<share ID, 16 bytes lowercase hex>#<link key, 32 bytes unpadded base64url>. normalize: NFKC, lowercase per code point (U+0130 -> i + U+0307), ς -> σ, ß and ẞ -> ss, NFKC, Unicode White_Space runs collapsed to one space and trimmed. A = Argon2id(UTF-8 normalized name, salt = share ID bytes, t, m, p, 32); K = HKDF(A XOR link key, share ID bytes, hort/v4/share); enc = HKDF(K, share ID bytes, hort/v4/share-enc); token = HKDF(K, share ID bytes, hort/v4/share-token); token_hash = SHA-256(token). ct = nonce(12) || AES-256-GCM(enc, JSON {name, description, fields: [{field, value}]}, aad = canon(\"hort/v4/share-ct\\n\", share ID bytes)). meta_ct = nonce(12) || AES-256-GCM(RK, JSON {name, recipient, fields: [field]}, aad = canon(\"hort/v4/share-meta\\n\", account_id, share ID bytes)).",
+  "vectors": {
+    "ct": [
+      {
+        "name": "default field only, empty description",
+        "share_id": "f7e378be5e1360ac446b6dbd3b643873",
+        "secret": {
+          "name": "github-token",
+          "description": "",
+          "fields": [
+            {
+              "field": "",
+              "value": "ghp_example"
+            }
+          ]
+        },
+        "enc_key_hex": "e173f0c955b611037a5a6baec3d65f1a333a6e20165cb65b70c39aee4c38c0d9",
+        "aad_hex": "686f72742f76342f73686172652d63740a00000010f7e378be5e1360ac446b6dbd3b643873",
+        "nonce_hex": "b594a07d6c6675e01cd3ceac",
+        "plaintext": "{\"name\":\"github-token\",\"description\":\"\",\"fields\":[{\"field\":\"\",\"value\":\"ghp_example\"}]}",
+        "ct_hex": "b594a07d6c6675e01cd3ceac8311c488c348d6b5a478620fbbada3474927b350db9f17c6eb412744d44d0deb70197b58d5a0afe75392e53359dcf19b52584369e6bd3eb675f4cfb646be8f8fdf63f479ffe9ed8f9924f4528155cd1f2605f802a4ac4ef98bb39f77afa744524b3545cf4e58",
+        "ct_base64": "tZSgfWxmdeAc086sgxHEiMNI1rWkeGIPu62jR0kns1DbnxfG60EnRNRNDetwGXtY1aCv51OS5TNZ3PGbUlhDaea9PrZ19M+2Rr6Pj99j9Hn/6e2PmST0UoFVzR8mBfgCpKxO+Yuzn3evp0RSSzVFz05Y"
+      },
+      {
+        "name": "default and named fields",
+        "share_id": "f7e378be5e1360ac446b6dbd3b643873",
+        "secret": {
+          "name": "db",
+          "description": "Postgres of tenant heine",
+          "fields": [
+            {
+              "field": "",
+              "value": "postgres://db"
+            },
+            {
+              "field": "user",
+              "value": "heine"
+            },
+            {
+              "field": "password",
+              "value": "s3cr3t ä"
+            }
+          ]
+        },
+        "enc_key_hex": "e173f0c955b611037a5a6baec3d65f1a333a6e20165cb65b70c39aee4c38c0d9",
+        "aad_hex": "686f72742f76342f73686172652d63740a00000010f7e378be5e1360ac446b6dbd3b643873",
+        "nonce_hex": "24dc92ed50817fc798e202f9",
+        "plaintext": "{\"name\":\"db\",\"description\":\"Postgres of tenant heine\",\"fields\":[{\"field\":\"\",\"value\":\"postgres://db\"},{\"field\":\"user\",\"value\":\"heine\"},{\"field\":\"password\",\"value\":\"s3cr3t ä\"}]}",
+        "ct_hex": "24dc92ed50817fc798e202f9b0a5fe202b27de8f86a21c90a81e510c250b6b4481721b87750b3885ba08ee26903394c40a5a57d125314da4cc55d995e740a06bd55e0ecd51b20db9581a4d0ec3219e617fc10c00d279a6873eb038dc0ded93aa6d9471963fcf4585a6556f037f7c4fb7d8e172befee9a098d276ebe6069229b1b001ecd80e94d29d5a55ab246c780a7cb0ffb1b0f2bdf79120994e97b1d0abcd9ab5dd1839c36daef2b9ca624274eb1de06418aa12c7aa8de1e402b340090bdcbf3abe9de8915ff81c439176",
+        "ct_base64": "JNyS7VCBf8eY4gL5sKX+ICsn3o+GohyQqB5RDCULa0SBchuHdQs4hboI7iaQM5TEClpX0SUxTaTMVdmV50Cga9VeDs1Rsg25WBpNDsMhnmF/wQwA0nmmhz6wONwN7ZOqbZRxlj/PRYWmVW8Df3xPt9jhcr7+6aCY0nbr5gaSKbGwAezYDpTSnVpVqyRseAp8sP+xsPK995EgmU6XsdCrzZq13Rg5w22u8rnKYkJ06x3gZBiqEseqjeHkArNACQvcvzq+neiRX/gcQ5F2"
+      }
+    ],
+    "keys": [
+      {
+        "name": "production parameters",
+        "test_params_only": false,
+        "input": "Jörg Müller",
+        "normalized": "jörg müller",
+        "normalized_utf8_hex": "6ac3b67267206dc3bc6c6c6572",
+        "share_id": "f7e378be5e1360ac446b6dbd3b643873",
+        "link_key_hex": "7d1a6a155d9d1f35be80091afb3939dcef64e23086466808bc780913513c57a0",
+        "argon": {
+          "t": 3,
+          "m_kib": 65536,
+          "p": 4
+        },
+        "argon_output_hex": "b2f69688187d6209370eed620049e5058c1a203edda6e87b286322456d0da9cd",
+        "share_key_hex": "fc838ffc2a010c5e3ccf04f3b84b0fe6d1b7318c043b80effe86290aa1d6870b",
+        "enc_key_hex": "cfe11c346f13f468250163e9361776ca5f6ae9a5b8288574fbda814c4e28d1ae",
+        "token_hex": "6f3d2b465b84ff166c99b9fd872c344a90842988b6725824072db510303d5fef",
+        "token_base64": "bz0rRluE/xZsmbn9hyw0SpCEKYi2clgkBy21EDA9X+8=",
+        "token_hash_hex": "b9d5b2c9d0c2c4f4dd2e46ae06f31330493bbe04cbe8b11cb5c5182cabea29d6",
+        "token_hash_base64": "udWyydDCxPTdLkauBvMTMEk7vgTL6LEctcUYLKvqKdY="
+      },
+      {
+        "name": "test parameters",
+        "test_params_only": true,
+        "input": "Jörg Müller",
+        "normalized": "jörg müller",
+        "normalized_utf8_hex": "6ac3b67267206dc3bc6c6c6572",
+        "share_id": "f7e378be5e1360ac446b6dbd3b643873",
+        "link_key_hex": "7d1a6a155d9d1f35be80091afb3939dcef64e23086466808bc780913513c57a0",
+        "argon": {
+          "t": 1,
+          "m_kib": 256,
+          "p": 1
+        },
+        "argon_output_hex": "5ec8b0257b855f41255ca324243e8016a948e1110c5573776505dc2be37c1b51",
+        "share_key_hex": "07daec05189612782909020fa3d5991092a7eb180ec1549558ec1e23925eccec",
+        "enc_key_hex": "e173f0c955b611037a5a6baec3d65f1a333a6e20165cb65b70c39aee4c38c0d9",
+        "token_hex": "93cc733c84007b29d4d47fc9b76e5c1c766082fdb7b369e80ef7a3da10107021",
+        "token_base64": "k8xzPIQAeynU1H/Jt25cHHZggv23s2noDvej2hAQcCE=",
+        "token_hash_hex": "217e0d10df29eb472c332ee2d12a745f130d95e1962eb51f2de36be62de87316",
+        "token_hash_base64": "IX4NEN8p60csMy7i0Sp0XxMNleGWLrUfLeNr5i3ocxY="
+      },
+      {
+        "name": "test parameters, another spelling of the same name gives the same keys",
+        "test_params_only": true,
+        "input": "  JÖRG   müller ",
+        "normalized": "jörg müller",
+        "normalized_utf8_hex": "6ac3b67267206dc3bc6c6c6572",
+        "share_id": "f7e378be5e1360ac446b6dbd3b643873",
+        "link_key_hex": "7d1a6a155d9d1f35be80091afb3939dcef64e23086466808bc780913513c57a0",
+        "argon": {
+          "t": 1,
+          "m_kib": 256,
+          "p": 1
+        },
+        "argon_output_hex": "5ec8b0257b855f41255ca324243e8016a948e1110c5573776505dc2be37c1b51",
+        "share_key_hex": "07daec05189612782909020fa3d5991092a7eb180ec1549558ec1e23925eccec",
+        "enc_key_hex": "e173f0c955b611037a5a6baec3d65f1a333a6e20165cb65b70c39aee4c38c0d9",
+        "token_hex": "93cc733c84007b29d4d47fc9b76e5c1c766082fdb7b369e80ef7a3da10107021",
+        "token_base64": "k8xzPIQAeynU1H/Jt25cHHZggv23s2noDvej2hAQcCE=",
+        "token_hash_hex": "217e0d10df29eb472c332ee2d12a745f130d95e1962eb51f2de36be62de87316",
+        "token_hash_base64": "IX4NEN8p60csMy7i0Sp0XxMNleGWLrUfLeNr5i3ocxY="
+      }
+    ],
+    "link": [
+      {
+        "name": "hort.pm",
+        "link": "https://hort.pm/s/f7e378be5e1360ac446b6dbd3b643873#fRpqFV2dHzW-gAka-zk53O9k4jCGRmgIvHgJE1E8V6A",
+        "origin": "https://hort.pm",
+        "share_id": "f7e378be5e1360ac446b6dbd3b643873",
+        "link_key_hex": "7d1a6a155d9d1f35be80091afb3939dcef64e23086466808bc780913513c57a0"
+      },
+      {
+        "name": "self-hosted with port",
+        "link": "https://vault.example.com:8443/s/f7e378be5e1360ac446b6dbd3b643873#fRpqFV2dHzW-gAka-zk53O9k4jCGRmgIvHgJE1E8V6A",
+        "origin": "https://vault.example.com:8443",
+        "share_id": "f7e378be5e1360ac446b6dbd3b643873",
+        "link_key_hex": "7d1a6a155d9d1f35be80091afb3939dcef64e23086466808bc780913513c57a0"
+      },
+      {
+        "name": "http",
+        "link": "http://hort.pm/s/f7e378be5e1360ac446b6dbd3b643873#fRpqFV2dHzW-gAka-zk53O9k4jCGRmgIvHgJE1E8V6A",
+        "error": "not a Hort share link (https://<host>/s/<id>#<key>)"
+      },
+      {
+        "name": "query string",
+        "link": "https://hort.pm/s/f7e378be5e1360ac446b6dbd3b643873?x=1#fRpqFV2dHzW-gAka-zk53O9k4jCGRmgIvHgJE1E8V6A",
+        "error": "not a Hort share link (https://<host>/s/<id>#<key>)"
+      },
+      {
+        "name": "no fragment",
+        "link": "https://hort.pm/s/f7e378be5e1360ac446b6dbd3b643873",
+        "error": "not a Hort share link (https://<host>/s/<id>#<key>)"
+      },
+      {
+        "name": "padded fragment",
+        "link": "https://hort.pm/s/f7e378be5e1360ac446b6dbd3b643873#fRpqFV2dHzW-gAka-zk53O9k4jCGRmgIvHgJE1E8V6A=",
+        "error": "not a Hort share link (https://<host>/s/<id>#<key>)"
+      },
+      {
+        "name": "short key",
+        "link": "https://hort.pm/s/f7e378be5e1360ac446b6dbd3b643873#fRpqFV2dHzW-gAka-zk53O9k4jCGRmgIvHgJE1E8V6",
+        "error": "not a Hort share link (https://<host>/s/<id>#<key>)"
+      },
+      {
+        "name": "uppercase share ID",
+        "link": "https://hort.pm/s/F7E378BE5E1360AC446B6DBD3B643873#fRpqFV2dHzW-gAka-zk53O9k4jCGRmgIvHgJE1E8V6A",
+        "error": "not a Hort share link (https://<host>/s/<id>#<key>)"
+      },
+      {
+        "name": "other path",
+        "link": "https://hort.pm/r/f7e378be5e1360ac446b6dbd3b643873#fRpqFV2dHzW-gAka-zk53O9k4jCGRmgIvHgJE1E8V6A",
+        "error": "not a Hort share link (https://<host>/s/<id>#<key>)"
+      }
+    ],
+    "meta": [
+      {
+        "share_id": "f7e378be5e1360ac446b6dbd3b643873",
+        "meta": {
+          "name": "db",
+          "recipient": "Jörg Müller",
+          "fields": [
+            "",
+            "user",
+            "password"
+          ]
+        },
+        "rk_hex": "01e4bceae0b33dfbdf7526ac1e23852c865f7964464a83557816481941858767",
+        "account_id_hex": "02bbde121c1c4b97706161d94fba838d",
+        "aad_hex": "686f72742f76342f73686172652d6d6574610a0000001002bbde121c1c4b97706161d94fba838d00000010f7e378be5e1360ac446b6dbd3b643873",
+        "nonce_hex": "f7c5cf0ba766d29947e722dc",
+        "plaintext": "{\"name\":\"db\",\"recipient\":\"Jörg Müller\",\"fields\":[\"\",\"user\",\"password\"]}",
+        "meta_ct_hex": "f7c5cf0ba766d29947e722dc6eb759aa3cc4388699c2d8c2211074fa1c15cbc0587d4d4287cc3397d78dac4f6025a7a94c9df7aa98e2340465b5ba9681a0b0a52cbd243cf8ec2e7a60d234059577cdf3fe9820a87e8e51927d11e42ff40d7fa09c9b22fea4",
+        "meta_ct_base64": "98XPC6dm0plH5yLcbrdZqjzEOIaZwtjCIRB0+hwVy8BYfU1Ch8wzl9eNrE9gJaepTJ33qpjiNARltbqWgaCwpSy9JDz47C56YNI0BZV3zfP+mCCofo5Rkn0R5C/0DX+gnJsi/qQ="
+      }
+    ],
+    "normalize": [
+      {
+        "name": "plain name",
+        "input": "Lars",
+        "normalized": "lars"
+      },
+      {
+        "name": "umlaut, precomposed",
+        "input": "Jörg Müller",
+        "normalized": "jörg müller"
+      },
+      {
+        "name": "umlaut, decomposed (NFD)",
+        "input": "Jörg Müller",
+        "normalized": "jörg müller"
+      },
+      {
+        "name": "sharp s",
+        "input": "Strauß",
+        "normalized": "strauss"
+      },
+      {
+        "name": "capital sharp s",
+        "input": "STRAUẞ",
+        "normalized": "strauss"
+      },
+      {
+        "name": "ss spelled out",
+        "input": "STRAUSS",
+        "normalized": "strauss"
+      },
+      {
+        "name": "dotted capital I",
+        "input": "İlker",
+        "normalized": "i̇lker"
+      },
+      {
+        "name": "dotless i stays",
+        "input": "Işık",
+        "normalized": "işık"
+      },
+      {
+        "name": "capital sigma",
+        "input": "ΟΔΥΣΣΕΥΣ",
+        "normalized": "οδυσσευσ"
+      },
+      {
+        "name": "final sigma",
+        "input": "Οδυσσευς",
+        "normalized": "οδυσσευσ"
+      },
+      {
+        "name": "whitespace: trim and collapse, tab, no-break and ideographic space",
+        "input": " \tLars  　Müller\n",
+        "normalized": "lars müller"
+      },
+      {
+        "name": "fullwidth letters (NFKC)",
+        "input": "Ｌａｒｓ",
+        "normalized": "lars"
+      },
+      {
+        "name": "whitespace only",
+        "input": " \t ",
+        "normalized": ""
+      }
+    ]
+  }
+}

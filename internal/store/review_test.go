@@ -1,6 +1,7 @@
 package store
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -94,5 +95,49 @@ func TestSetRefusesInvalidUTF8Scope(t *testing.T) {
 		if err := s.SetSecret("ok", "", "v", w.env, w.ctx, ""); err == nil {
 			t.Errorf("accepted %q/%q", w.env, w.ctx)
 		}
+	}
+}
+
+func TestSaveSharedWritesAllOrNothing(t *testing.T) {
+	primarySetup(t)
+	s, err := NewFromSession()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetSecret("taken", "", "old", "", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	revisions := func() int {
+		data, err := s.load()
+		if err != nil {
+			t.Fatal(err)
+		}
+		n := 0
+		for _, e := range data.Secrets {
+			n += len(e.Revisions)
+		}
+		return n
+	}
+	before := revisions()
+	ok := vault.SharedField{Field: "", Value: "v"}
+	for name, fields := range map[string][]vault.SharedField{
+		"taken": {ok},
+		"fresh": {ok, {Field: "Bad_Field", Value: "v"}},
+	} {
+		if err := s.SaveShared(name, "desc", fields); err == nil {
+			t.Fatalf("%s: refused write accepted", name)
+		}
+		if got := revisions(); got != before {
+			t.Fatalf("%s: %d revisions, want %d", name, got, before)
+		}
+	}
+	if err := s.SaveShared("taken", "", []vault.SharedField{ok}); !errors.Is(err, ErrNameTaken) {
+		t.Fatalf("existing name: %v", err)
+	}
+	if err := s.SaveShared("fresh", "desc", []vault.SharedField{ok, {Field: "user", Value: "u"}}); err != nil {
+		t.Fatal(err)
+	}
+	if got := revisions(); got != before+3 {
+		t.Fatalf("%d revisions after saving, want %d", got, before+3)
 	}
 }

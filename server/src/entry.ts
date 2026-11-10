@@ -3,6 +3,7 @@ import api from "./index";
 export { Account } from "./account";
 export { Challenge } from "./challenge";
 export { RateLimiter } from "./rate-limiter";
+export { Share } from "./share";
 
 // Contract §8.3. Static assets get the same headers from public/_headers
 // (Cloudflare does not apply that file to Worker responses); a test keeps

@@ -151,7 +151,7 @@ code{font-family:var(--f-mono);font-size:.92em}
   .win{box-shadow:4px 4px 0 var(--win-shadow)}
   .hero-term{box-shadow:5px 5px 0 var(--accent2)}
 }
-/* Console: /vault, /devices, /access and /r/<id> in one window; the session sits in the menubar */
+/* Console: /vault, /devices, /access, /r/<id> and /s/<id> in one window; the session sits in the menubar */
 .btn-ghost{background:transparent}
 .session{display:flex;align-items:center;gap:10px;flex-wrap:wrap;font:500 12px var(--f-mono);color:var(--muted)}
 .status-line{display:flex;align-items:center;gap:8px;flex-wrap:wrap;min-height:var(--ctl-h)}
@@ -239,6 +239,9 @@ main.console{padding:40px clamp(16px,4vw,48px) 64px}
 .any{color:var(--line-strong)}
 .c-val{grid-column:1 / -1;font:13px/1.5 var(--f-mono);color:var(--accent2);white-space:pre-wrap;overflow-wrap:anywhere;user-select:text;padding:2px 0 3px}
 .c-val .ttl{color:var(--muted);font-size:11px;margin-left:8px;white-space:nowrap;user-select:none}
+.c-share{grid-column:1 / -1;display:flex;flex-wrap:wrap;gap:2px 16px;font-size:12px;color:var(--muted);padding:1px 0 2px}
+.c-share .on{color:var(--accent2)}
+.c-share .tlink{margin-left:8px}
 .c-desc{font:14px/1.5 var(--f-sans);color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .s-list .v-row.sel .c-desc:not(:empty){grid-column:1 / -1;grid-row:2;white-space:normal;padding:2px 0}
 .c-state{text-align:right;color:var(--muted);white-space:nowrap}
@@ -264,9 +267,10 @@ main.console{padding:40px clamp(16px,4vw,48px) 64px}
 .editor .wide{grid-column:span 2}
 .editor .full{grid-column:1 / -1}
 .editor label{display:block;font:500 11px var(--f-mono);text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin:0 0 3px}
-.editor input,.editor textarea{width:100%;font:14px/1.4 var(--f-mono);padding:7px 9px;color:var(--ink);background:var(--win);border:1px solid var(--line-strong);border-radius:var(--r)}
+.editor input:not([type=checkbox]),.editor textarea,.editor select{width:100%;font:14px/1.4 var(--f-mono);padding:7px 9px;color:var(--ink);background:var(--win);border:1px solid var(--line-strong);border-radius:var(--r)}
 .editor textarea{resize:vertical;display:block}
-.editor input:focus-visible,.editor textarea:focus-visible{outline:2px solid var(--ink);outline-offset:1px}
+.editor .check{display:inline-flex;align-items:center;gap:6px;text-transform:none;letter-spacing:0;font:400 13px var(--f-mono);color:var(--ink);margin:4px 16px 0 0}
+.editor input:focus-visible,.editor textarea:focus-visible,.editor select:focus-visible{outline:2px solid var(--ink);outline-offset:1px}
 .e-foot{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:12px}
 .e-foot .grow{flex:1}
 .e-note{font:12px/1.5 var(--f-sans);color:var(--muted);margin:8px 0 0}
@@ -296,6 +300,7 @@ main.console{padding:40px clamp(16px,4vw,48px) 64px}
 .row-actions{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:12px 0 4px}
 .facts{display:grid;grid-template-columns:max-content 1fr;gap:4px 20px;margin:4px 0 14px;font-size:14px}
 .facts dt{font:500 11px var(--f-mono);text-transform:uppercase;letter-spacing:.06em;color:var(--muted);padding-top:3px}
+.facts dt.raw{text-transform:none;letter-spacing:0;font-size:13px;color:var(--ink)}
 .facts dd{margin:0;overflow-wrap:anywhere}
 .help{list-style:none;margin:10px 0 0;padding:0;display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:2px 24px;font-size:13px}
 .help li{display:flex;align-items:baseline;gap:10px;padding:4px 0;border-bottom:1px solid var(--line)}

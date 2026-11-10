@@ -1,13 +1,15 @@
 import type { AuthenticationResponseJSON } from "@simplewebauthn/server";
-import { SESSION_COOKIE, type RelyingParty, type SessionAuth } from "./account";
+import { SESSION_COOKIE, SHARE_GONE, type RelyingParty, type SessionAuth } from "./account";
 import { issueChallenge } from "./challenge";
 import { fail, json } from "./http";
 import { rateLimit } from "./rate-limiter";
+import { shareStub } from "./share";
 import { accountIdDecode, accountIdEncode, b64Decode, b64urlDecode, hexDecode, hexEncode, sha256, type Signed } from "./wire";
 
 export { Account } from "./account";
 export { Challenge } from "./challenge";
 export { RateLimiter } from "./rate-limiter";
+export { Share } from "./share";
 
 // Contract §6.2 and §6.6.
 const MAX_CLOCK_SKEW_SECONDS = 300;
@@ -18,6 +20,8 @@ const MAX_FULFILL_BODY_BYTES = 256 * 1024;
 // A push carries up to 500 envelopes of up to 64 KiB each; the client splits
 // larger batches by this size (contract §6.6).
 const MAX_PUSH_BODY_BYTES = 4 * 1024 * 1024;
+// A share create carries a ciphertext of up to 64 KiB and meta_ct, base64 in JSON.
+const MAX_SHARE_BODY_BYTES = 128 * 1024;
 
 type Bindings = Env & { REGISTRATION_TOKEN?: string };
 
@@ -267,6 +271,51 @@ async function route(request: Request, env: Bindings): Promise<Response> {
     const req = await deviceOrSession(request, url, true);
     if (req instanceof Response) return req;
     return accountStub(env, req.accountId).declineRequest(req, m[1]);
+  }
+
+  if (path === "/api/v1/shares") {
+    if (method === "POST") {
+      if (request.headers.has("Hort-Signature")) {
+        const req = await readSigned(request, url, "device", MAX_SHARE_BODY_BYTES);
+        if (req instanceof Response) return req;
+        return accountStub(env, req.accountId).createShare(req, req.body);
+      }
+      const session = await readSession(request, url, true);
+      if (session instanceof Response) return session;
+      if (Number(request.headers.get("Content-Length") ?? 0) > MAX_SHARE_BODY_BYTES) return fail(413, "request body exceeds 128 KiB");
+      const body = await readBody(request, MAX_SHARE_BODY_BYTES);
+      if (!body) return fail(413, "request body exceeds 128 KiB");
+      return accountStub(env, session.accountId).createShare(session, body);
+    }
+    if (method === "GET") {
+      const req = await deviceOrSession(request, url, false);
+      if (req instanceof Response) return req;
+      return accountStub(env, req.accountId).listShares(req);
+    }
+    return fail(405, "method not allowed");
+  }
+
+  if ((m = path.match(/^\/api\/v1\/shares\/([^/]+)\/revoke$/))) {
+    if (method !== "POST") return fail(405, "method not allowed");
+    if (!hexDecode(m[1], 16)) return fail(404, "share not found");
+    const req = await deviceOrSession(request, url, true);
+    if (req instanceof Response) return req;
+    return accountStub(env, req.accountId).revokeShare(req, m[1]);
+  }
+
+  // Recipient endpoints: no account, the access token alone. Unknown, ended
+  // and expired shares get one answer, and nothing names the account.
+  if ((m = path.match(/^\/api\/v1\/shares\/([^/]+)(\/open)?$/))) {
+    const take = m[2] === undefined;
+    if (take ? method !== "DELETE" : method !== "POST") return fail(405, "method not allowed");
+    const limited = await rateLimit(env, "share", clientIp(request));
+    if (limited) return limited;
+    const token = b64Decode(request.headers.get("Hort-Share-Token") ?? "");
+    if (!token || token.length !== 32) return fail(400, "Hort-Share-Token must be base64 of 32 bytes");
+    const id = m[1];
+    const account = hexDecode(id, 16) ? await shareStub(env, id).account() : null;
+    if (!account) return fail(404, SHARE_GONE);
+    return accountStub(env, account).openShare(id, await sha256(token), take);
   }
 
   if (path === "/api/v1/webauthn/register/options" || path === "/api/v1/webauthn/register/verify") {

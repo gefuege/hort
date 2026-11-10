@@ -18,7 +18,7 @@ Never edit these files by hand. A changed byte means a changed contract.
   standard base64 with padding (RFC 4648 §4).
 - Integers inside `canon()` are big-endian: `u32` for lengths and Argon2id
   `t`/`m`, `u8` for `p`, `u64` for `slot_version` and timestamps.
-- IDs (account, revision, request, device) go into `canon()` as their decoded
+- IDs (account, revision, request, device, share) go into `canon()` as their decoded
   16 bytes, never as hex text. Strings go in as UTF-8.
 - AES-256-GCM: 12-byte nonce and 16-byte tag, appended to the ciphertext.
   Nonces are fixed in the vectors and random in production.
@@ -39,6 +39,7 @@ Never edit these files by hand. A changed byte means a changed contract.
 | `envelope.json` | §6.4 | `envelope` = nonce(12) ‖ AES-256-GCM(RK, plaintext, aad = canon(`"hort/v4/rev\n"`, account_id, revision id bytes)). Cases: default field, named field with env and context, describe, delete-entry, imported revision without a time (`recorded_at: null`). |
 | `request.json` | §7.2 step 3, §6.2 | `meta_ct` = nonce(12) ‖ AES-256-GCM(RK, meta JSON, aad = canon(`"hort/v4/req-meta\n"`, account_id, request id bytes)). Signature message = canon(`"hort/v4/req\n"`, account_id, device field, METHOD, PATH_WITH_QUERY, u64 timestamp, SHA-256(exact body bytes)); one device-key POST with a body, one AK GET with a query and an empty body. |
 | `secret-key.json` | §2.5, §2.6 | Secret Keys (zero, all 0xff, all symbols `1`, fixture) as data symbols, check symbol and display form; parse variants (lowercase, spaces, no separators, without `H4`, `O` for `0`, `I`/`l` for `1`); mistyped cases (data symbol, check symbol, missing symbol, `U`); account IDs. |
+| `share.json` | share by link | `normalize`: recipient names to their one form: NFKC, lowercase per code point (U+0130 → `i` U+0307), `ς` → `σ`, `ß` and `ẞ` → `ss`, NFKC, runs of Unicode White_Space collapsed to one space and trimmed; cases cover umlauts (NFC and NFD), ß, İ, ı, Σ/ς, whitespace, fullwidth letters and a whitespace-only name (empty, refused by key derivation). `keys`: `A` = Argon2id(UTF-8 normalized name, salt = share ID bytes, t, m, p, 32); `K` = HKDF(A XOR link key, share ID bytes, `hort/v4/share`); `enc` = HKDF(K, share ID bytes, `hort/v4/share-enc`); `token` = HKDF(K, share ID bytes, `hort/v4/share-token`); `token_hash` = SHA-256(token). One vector at production parameters, two at test parameters (two spellings of one name, same keys). `ct`: nonce(12) ‖ AES-256-GCM(enc, JSON `{name, description, fields: [{field, value}]}`, aad = canon(`"hort/v4/share-ct\n"`, share ID bytes)). `meta`: nonce(12) ‖ AES-256-GCM(RK, JSON `{name, recipient, fields: [field]}`, aad = canon(`"hort/v4/share-meta\n"`, account_id, share ID bytes)). `link`: valid and refused share links. |
 | `reduction.json` | §3.1–§3.3 | `reduce`: revisions in arrival order with the expected history order, values by (field, lookup key), description, visibility and read resolution. `append`: the Append stamp for a given `now`. |
 
 ## Binding encoding decisions
@@ -91,8 +92,13 @@ These points are open or ambiguous in the contract and are fixed here.
     the credential it verified and accepts a passkey slot only when
     `slot_params` carries that same hash.
 
+13. **Share link:** `https://<origin>/s/<share ID>#<link key>`. The share ID is 16 bytes lowercase hex, the link key 32 random bytes as unpadded base64url (43 symbols, canonical form only). A parser accepts only `https`, no user info, no query, the path `/s/<id>` and that fragment; the API of the share is under the link's origin.
+14. **Recipient name:** the owner and the recipient derive keys from the normalized name (`normalize` above). Go uses `unicode.ToLower` per rune with U+0130 → `i` U+0307, which equals JavaScript's `toLowerCase` per code point; both use their own Unicode tables, so code points added in a later Unicode version than both know may differ. A name that normalizes to nothing derives no keys. Shares always use production Argon2id parameters.
+15. **Share plaintext:** `fields` holds at least one entry, field names unique, each `""` (the default field) or matching the field rule of §3.4; `name` is not empty. Readers reject anything else. `meta.recipient` is the name as the owner typed it, `meta.fields` the shared field names. Writers always write every member.
+16. **Access token on the wire:** the owner sends `token_hash` (standard base64) on create; the recipient sends the token in `Hort-Share-Token` (standard base64). The link key and the name never travel.
+
 ## Argon2id
 
 The vectors come from `golang.org/x/crypto/argon2` (RFC 9106, version 0x13).
 The browser WASM build (`server/web/vendor/`) reproduces `argon_output_hex`;
-`server/test-web/vault-core.test.ts` checks it.
+`server/test-web/vault-core.test.ts` and `server/test-web/share-core.test.ts` check it.

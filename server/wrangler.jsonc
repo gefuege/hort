@@ -11,11 +11,13 @@
     "bindings": [
       { "name": "ACCOUNT", "class_name": "Account" },
       { "name": "RATE_LIMITER", "class_name": "RateLimiter" },
-      { "name": "CHALLENGE", "class_name": "Challenge" }
+      { "name": "CHALLENGE", "class_name": "Challenge" },
+      { "name": "SHARE", "class_name": "Share" }
     ]
   },
   "migrations": [
     { "tag": "v1", "new_sqlite_classes": ["Account", "RateLimiter"] },
-    { "tag": "v2", "new_sqlite_classes": ["Challenge"] }
+    { "tag": "v2", "new_sqlite_classes": ["Challenge"] },
+    { "tag": "v3", "new_sqlite_classes": ["Share"] }
   ]
 }

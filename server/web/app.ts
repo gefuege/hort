@@ -1,5 +1,5 @@
-// Hort web app: one console with the views /vault, /devices, /access and
-// /r/<id> (contract §5.4, §8.1, §8.2). The vault key lives in this module's
+// Hort web app: one console with the views /vault, /devices, /access,
+// /r/<id> and /s/<id> (contract §5.4, §8.1, §8.2). The vault key lives in this module's
 // memory. Tabs and g-chords swap the view without a page load, so an unlocked
 // vault stays unlocked. With a lock time other than "immediately", reloads and new tabs
 // reopen it until that time (unlock-memory.ts); signing out drops everything.
@@ -41,6 +41,7 @@ import {
   type LockAfter,
 } from "./unlock-memory";
 import { REQUEST_PATH, requestView } from "./request-view";
+import { SHARE_PATH, shareView } from "./share-view";
 import { forgetVault, vaultView } from "./vault-view";
 import { devicesView } from "./devices-view";
 
@@ -426,9 +427,11 @@ async function signOut(): Promise<void> {
 // ---------------------------------------------------------------------------
 // Console: one window, a view per address, the session in the menubar
 
-type View = "vault" | "devices" | "access" | "request";
-const VIEW_PATH: Record<Exclude<View, "request">, string> = { vault: "/vault", devices: "/devices", access: "/access" };
-const CHORD: Record<string, View> = { v: "vault", d: "devices", a: "access", r: "request" };
+type View = "vault" | "devices" | "access" | "request" | "share";
+// The views with a tab; a shared link (/s/<id>) has none.
+type Tab = Exclude<View, "share">;
+const VIEW_PATH: Record<Exclude<Tab, "request">, string> = { vault: "/vault", devices: "/devices", access: "/access" };
+const CHORD: Record<string, Tab> = { v: "vault", d: "devices", a: "access", r: "request" };
 
 // The open request keeps its tab until it is answered or declined.
 let requestPath: string | null = null;
@@ -442,7 +445,7 @@ let notice: { text: string; kind?: "ok" | "error" } | null = null;
 let signInNow: (() => void) | null = null;
 
 const viewOf = (path: string): View | null =>
-  REQUEST_PATH.test(path) ? "request" : ((Object.keys(VIEW_PATH) as (keyof typeof VIEW_PATH)[]).find((v) => VIEW_PATH[v] === path) ?? null);
+  REQUEST_PATH.test(path) ? "request" : SHARE_PATH.test(path) ? "share" : ((Object.keys(VIEW_PATH) as (keyof typeof VIEW_PATH)[]).find((v) => VIEW_PATH[v] === path) ?? null);
 
 const typing = (t: EventTarget | null) => t instanceof HTMLElement && t.matches("input, textarea, select");
 // Devices needs only a session, so a user whose passkey cannot unlock the vault can still revoke a lost device.
@@ -529,7 +532,9 @@ function sessionBar(): void {
     const signIn = h("button", { class: "tlink", type: "button" }, "sign in");
     signIn.addEventListener("click", () => {
       kitOpen = false;
-      render();
+      // A shared link opens without an account; signing in happens in the vault view.
+      if (viewOf(location.pathname) === "share") navigate("/vault");
+      else render();
       signInNow?.();
     });
     el.replaceChildren(window.PublicKeyCredential ? signIn : "");
@@ -556,9 +561,9 @@ function sessionBar(): void {
 function windowBar(view: View): void {
   const title = document.querySelector(".win-bar .title");
   const tabs = document.querySelector(".win-bar .tabs");
-  if (title) title.textContent = `hort — ${sessionOnly(view) ? view : !unlocked ? (signedIn || rememberedAccount() ? "locked" : "sign in") : help ? "help" : view}`;
+  if (title) title.textContent = `hort — ${view === "share" && !help ? "shared secret" : sessionOnly(view) ? view : !unlocked ? (signedIn || rememberedAccount() ? "locked" : "sign in") : help ? "help" : view}`;
   if (!tabs) return;
-  const views: View[] = ["vault", "devices", "access"];
+  const views: Tab[] = ["vault", "devices", "access"];
   if (requestPath) views.push("request");
   tabs.replaceChildren(
     ...(unlocked
@@ -576,7 +581,7 @@ function windowBar(view: View): void {
   );
 }
 
-function go(view: View): void {
+function go(view: Tab): void {
   if (view === "request" && !requestPath) return;
   help = false;
   navigate(view === "request" ? requestPath! : VIEW_PATH[view]);
@@ -891,6 +896,7 @@ function helpView(body: HTMLElement): void {
         k("enter", "show or hide value"),
         k("c", "copy, clears after 30 s"),
         k("e", "edit"),
+        k("s", "share by link"),
         k("n", "new secret"),
         k("r", "refresh"),
         k("d", "delete value, or revoke a device or passkey"),
@@ -916,11 +922,13 @@ function render(path = location.pathname): void {
   document.getElementById("kit")?.remove();
   sessionBar();
   windowBar(view);
-  document.title = `${sessionOnly(view) ? "Devices" : !unlocked ? "Sign in" : help ? "Help" : view === "request" ? "Secret request" : view[0].toUpperCase() + view.slice(1)} – Hort`;
+  document.title = `${view === "share" && !help ? "Shared secret" : sessionOnly(view) ? "Devices" : !unlocked ? "Sign in" : help ? "Help" : view === "request" ? "Secret request" : view[0].toUpperCase() + view.slice(1)} – Hort`;
   const first = notice;
   notice = null;
   let run: void | Promise<void>;
-  if (!unlocked && !sessionOnly(view)) run = unlockView(body, view);
+  if (view === "share" && !help)
+    run = shareView(body, { h, messageOf, api, ok, unlocked: () => (unlocked && signedIn ? unlocked : null), sessionLost: sessionEnded }, path);
+  else if (!unlocked && !sessionOnly(view)) run = unlockView(body, view);
   else if (kitLocked(view) && !help) run = kitLockedView(body, view);
   else if (help && unlocked) run = helpView(body);
   else if (view === "access") run = accessView(body, first);

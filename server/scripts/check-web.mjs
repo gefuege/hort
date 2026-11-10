@@ -10,7 +10,7 @@ const headers = {
   "cross-origin-resource-policy": "same-origin",
   "strict-transport-security": "max-age=63072000; includeSubDomains; preload",
 };
-const pages = ["/", "/login", "/recover", "/vault", "/devices", "/access", "/r/abc", "/impressum", "/privacy", "/threat-model", "/terms", "/js/app.js"];
+const pages = ["/", "/login", "/recover", "/vault", "/devices", "/access", "/r/abc", "/s/abc", "/impressum", "/privacy", "/threat-model", "/terms", "/js/app.js"];
 
 let failed = false;
 for (const path of [...pages, "/api/v1/nope"]) {

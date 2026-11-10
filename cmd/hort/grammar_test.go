@@ -4,9 +4,13 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/gefuege/hort/internal/vault"
@@ -168,7 +172,7 @@ func TestCLIRemovedRootGrammar(t *testing.T) {
 func TestCLIHelpAndRecoveryTopic(t *testing.T) {
 	home := t.TempDir()
 	help := hort(t, home, "--help")
-	for _, want := range []string{"hort get <name> [<field>]", "hort set <name> [<field>]", "hort delete <name>", "hort list", "hort describe", "hort search", "hort history", "hort migrate", "hort help recovery", "hort sync", "hort enroll <account-id>", "hort devices revoke <device-id>", "hort mcp"} {
+	for _, want := range []string{"hort get <name> [<field>]", "hort set <name> [<field>]", "hort delete <name>", "hort list", "hort describe", "hort search", "hort history", "hort migrate", "hort help recovery", "hort sync", "hort enroll <account-id>", "hort devices revoke <device-id>", "hort mcp", "hort take <link> [--as <name>]"} {
 		if help.code != 0 || !strings.Contains(help.stdout, want) {
 			t.Fatalf("help lacks %q: %+v", want, help)
 		}
@@ -182,6 +186,10 @@ func TestCLIHelpAndRecoveryTopic(t *testing.T) {
 	if mcp.code != 0 || !strings.Contains(mcp.stdout, "claude mcp add hort -- hort mcp") || !strings.Contains(mcp.stdout, "request_secret") {
 		t.Fatalf("mcp help: %+v", mcp)
 	}
+	take := hort(t, home, "take", "--help")
+	if take.code != 0 || !strings.Contains(take.stdout, "Who are you?") || !strings.Contains(take.stdout, "--as") {
+		t.Fatalf("take help: %+v", take)
+	}
 	recovery := hort(t, home, "help", "recovery")
 	if recovery.code != 0 || !strings.Contains(recovery.stdout, "hort passphrase") || !strings.Contains(recovery.stdout, "hort kit") || !strings.Contains(recovery.stdout, "compromised") || !strings.Contains(recovery.stdout, "hort devices revoke") {
 		t.Fatalf("recovery: %+v", recovery)
@@ -194,6 +202,21 @@ func TestCLILockedExitCodeForNewCommands(t *testing.T) {
 	hortOK(t, home, "lock")
 	for _, args := range [][]string{{"get", "t"}, {"set", "t", "--value", "v"}, {"delete", "t"}, {"list"}, {"describe", "t"}, {"search", "t"}, {"history", "t"}} {
 		wantError(t, hort(t, home, args...), 2, "")
+	}
+	// take stops at the locked vault before any request to the link's origin.
+	var conns atomic.Int32
+	srv := httptest.NewUnstartedServer(http.NotFoundHandler())
+	srv.Config.ConnState = func(_ net.Conn, state http.ConnState) {
+		if state == http.StateNew {
+			conns.Add(1)
+		}
+	}
+	srv.StartTLS()
+	defer srv.Close()
+	link := srv.URL + "/s/f7e378be5e1360ac446b6dbd3b643873#fRpqFV2dHzW-gAka-zk53O9k4jCGRmgIvHgJE1E8V6A"
+	wantError(t, hortStdin(t, home, "Jörg Müller\n", "take", link), 2, "")
+	if conns.Load() != 0 {
+		t.Fatal("take reached the network with a locked vault")
 	}
 }
 
