@@ -77,7 +77,7 @@ describe("registration with ADMIN_TOKEN", () => {
   it("needs a code", async () => {
     const res = await register(await randomFixture());
     expect(res.status).toBe(403);
-    expect(await res.text()).toMatch(/needs an invitation; run hort init or hort sync with --invite CODE/);
+    expect(await res.text()).toMatch(/needs an invitation; run hort sync --invite CODE/);
   });
 
   it("refuses a wrong or malformed code", async () => {
@@ -130,7 +130,7 @@ describe("registration with ADMIN_TOKEN", () => {
     expect((await listed(id))?.used_at).toBeNull();
   });
 
-  it("consumes atomically: the bound account again, never another one", async () => {
+  it("binds the code to the first account: that account again, never another one", async () => {
     const { code } = await invite();
     const stub = env.INVITATIONS.getByName("invitations");
     const hash = await sha256(hexDecode(code, 16)!);

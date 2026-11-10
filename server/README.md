@@ -124,7 +124,9 @@ Invitations end to end (operator commands, `init` and `sync` with `--invite`):
 ```bash
 npx wrangler dev -c wrangler.dev.jsonc --port 8788 --persist-to "$(mktemp -d)" --var ADMIN_TOKEN:synthetic-admin-token
 HORT_TEST_INVITE_SERVER=http://localhost:8788 go test ./internal/cli -run TestInvitations -count=1 -v
-``` A fresh `--persist-to` directory resets the rate limits (locally every request shares the IP bucket `unknown`).
+```
+
+A fresh `--persist-to` directory resets the rate limits (locally every request shares the IP bucket `unknown`).
 
 ## Web app and landing page
 

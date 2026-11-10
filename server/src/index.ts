@@ -178,7 +178,7 @@ async function route(request: Request, env: Bindings): Promise<Response> {
     let invite: Uint8Array | null = null;
     if (env.ADMIN_TOKEN) {
       const code = request.headers.get("Hort-Invite");
-      if (!code) return fail(403, "registration on this server needs an invitation; run hort init or hort sync with --invite CODE from your invite link");
+      if (!code) return fail(403, "registration on this server needs an invitation; run hort sync --invite CODE with the code from your invite link (hort init --invite CODE for a new vault)");
       invite = hexDecode(code, 16);
       if (!invite) return fail(403, INVITE_INVALID);
     }

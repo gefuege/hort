@@ -84,3 +84,5 @@ Open your server's address in a browser. Passkeys are bound to that domain, so r
 ## Updating
 
 Pull the new code, run `npm ci` and `npx wrangler deploy` again.
+
+Coming from Hort 1.4 or older with `REGISTRATION_TOKEN` set: that secret is no longer read. Set `ADMIN_TOKEN` before you deploy, or registration on your server is open to everyone; then delete `REGISTRATION_TOKEN`.
