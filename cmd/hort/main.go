@@ -18,6 +18,7 @@ var (
 )
 
 func main() {
+	showHint := true
 	root := &cobra.Command{
 		Use:           "hort",
 		Short:         "Hort — Local secret store for humans and AI agents",
@@ -266,6 +267,7 @@ func main() {
 		Long:  helptext.MCPText,
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			showHint = false
 			return cli.CmdMCP(version)
 		},
 	})
@@ -282,7 +284,24 @@ func main() {
 	statusCmd.Flags().Bool("json", false, "JSON output")
 	root.AddCommand(statusCmd)
 
-	if err := root.Execute(); err != nil {
+	root.AddCommand(&cobra.Command{
+		Use:   "update",
+		Short: "Update Hort through the package manager it was installed with",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			showHint = false
+			if code := cli.CmdUpdate(); code != 0 {
+				os.Exit(code)
+			}
+			return nil
+		},
+	})
+
+	err := root.Execute()
+	if showHint {
+		cli.PrintUpdateHint(version)
+	}
+	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}

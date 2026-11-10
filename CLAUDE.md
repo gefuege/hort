@@ -66,11 +66,19 @@ Tag push triggers the `cli` job in `release.yml` (goreleaser → binaries,
 Homebrew formula and Scoop manifest) and `docker.yml` (`ghcr.io/gefuege/hort`).
 The version comes from the tag through ldflags (`main.version`); `hort --version`
 prints it. The Homebrew tap and Scoop bucket stay under `sebastian-breitzke`
-(`HOMEBREW_TAP_TOKEN` is scoped to them). npm publish is manual:
+(`HOMEBREW_TAP_TOKEN` is scoped to them). npm publish is manual.
+
+Order: push the tag, wait for the release build, bump `npm/package.json`,
+deploy the Worker, publish npm. The Worker states `npm/package.json`'s version
+in `Hort-Latest` on every `/api/*` answer; the CLI's update hint compares to it,
+so the bump and deploy come after the binaries exist:
 
 ```bash
 git tag v<version> && git push --tags
-cd npm && npm version <version> --no-git-tag-version && npm publish --access=public
+# after the release build:
+cd npm && npm version <version> --no-git-tag-version   # then commit and push
+cd ../server && npm run build && npx wrangler deploy
+cd ../npm && npm publish --access=public
 ```
 
 Package: `@s16e/hort`. Do not automate npm publish via CI.

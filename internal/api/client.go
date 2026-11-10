@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 	"unicode"
 
@@ -92,12 +93,24 @@ func (c Client) Do(method, path string, body, out any) error {
 	return send(req, out)
 }
 
+// latest holds the Hort-Latest header of the last server answer, any status.
+var latest atomic.Value
+
+// Latest returns the release the server last stated, or "" if it stated none.
+func Latest() string {
+	v, _ := latest.Load().(string)
+	return v
+}
+
 func send(req *http.Request, out any) error {
 	res, err := HTTPClient.Do(req)
 	if err != nil {
 		return err
 	}
 	defer res.Body.Close()
+	if v := res.Header.Get("Hort-Latest"); v != "" {
+		latest.Store(v)
+	}
 	data, err := io.ReadAll(io.LimitReader(res.Body, 64<<20))
 	if err != nil {
 		return err

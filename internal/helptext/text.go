@@ -39,6 +39,8 @@ MANAGE:
   hort kit                               Print the Emergency Kit again (needs an unlocked vault)
   hort passphrase                        Set a new passphrase, keeping the Secret Key; other
                                          devices take it at their next sync
+  hort update                            Update Hort through the package manager it was
+                                         installed with (Homebrew, npm, Scoop); needs no vault
   hort migrate                           Convert a v3 vault (Hort 0.4.x) into a v4 vault once;
                                          read 'hort migrate --help' first
 

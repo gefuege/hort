@@ -36,3 +36,16 @@ func TestServerMessageCarriesNoControlCharacters(t *testing.T) {
 		t.Fatalf("message: %q", err)
 	}
 }
+
+func TestLatestIsRememberedFromAnyAnswer(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Hort-Latest", "9.8.7")
+		http.Error(w, "nope", http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	_, _, _ = FetchSlot(srv.URL, make([]byte, 16))
+	if got := Latest(); got != "9.8.7" {
+		t.Fatalf("Latest() = %q, want 9.8.7", got)
+	}
+}

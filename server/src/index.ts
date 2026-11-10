@@ -1,4 +1,5 @@
 import type { AuthenticationResponseJSON } from "@simplewebauthn/server";
+import npmPackage from "../../npm/package.json";
 import { SESSION_COOKIE, SHARE_GONE, type RelyingParty, type SessionAuth } from "./account";
 import { issueChallenge } from "./challenge";
 import { fail, json } from "./http";
@@ -386,11 +387,17 @@ async function route(request: Request, env: Bindings): Promise<Response> {
 
 export default {
   async fetch(request, env): Promise<Response> {
+    let response: Response;
     try {
-      return await route(request, env);
+      response = await route(request, env);
     } catch (err) {
       console.error(err);
-      return fail(500, "internal error");
+      response = fail(500, "internal error");
     }
+    if (!new URL(request.url).pathname.startsWith("/api/")) return response;
+    // The current release for the CLI's update hint; every /api/* answer carries it.
+    const stated = new Response(response.body, response);
+    stated.headers.set("Hort-Latest", npmPackage.version);
+    return stated;
   },
 } satisfies ExportedHandler<Bindings>;
