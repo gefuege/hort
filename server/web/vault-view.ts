@@ -112,6 +112,21 @@ export async function write(host: Api, u: Unlocked, typed: string, changes: Chan
   return { name, written: built };
 }
 
+// The set changes of the editor's rows for one env and context. A row with
+// neither field nor value is ignored unless no row has either, then the first
+// row is used as before. On an existing secret an empty value means unchanged.
+// Two rows naming the same field (in any letter case) are refused.
+export function rowChanges(rows: { field: string; value: string }[], key: string, editing: boolean): Change[] {
+  const filled = rows.filter((x) => x.field !== "" || x.value !== "");
+  const used = filled.length ? filled : rows.slice(0, 1);
+  const seen = new Set<string>();
+  for (const x of used) {
+    if (seen.has(foldKey(x.field))) throw new Error(`Field ${x.field || "(default)"} appears in two rows.`);
+    seen.add(foldKey(x.field));
+  }
+  return used.filter((x) => !(editing && x.value === "")).map((x) => ({ op: "set", field: x.field, key, value: x.value }));
+}
+
 // ---------------------------------------------------------------------------
 // Shares: a snapshot of one secret for one recipient, opened by link (share-core.ts).
 
@@ -721,6 +736,22 @@ export async function vaultView(main: HTMLElement, host: Host): Promise<void> {
     const ctx = text(r?.context, "any");
     const value = h("textarea", { autocomplete: "off", spellcheck: false, rows: 1, placeholder: r ? "unchanged" : "", ...notALogin });
     const desc = text(r?.description);
+    // Further rows of field and value; env and context apply to all of them.
+    const extra: { field: HTMLInputElement; value: HTMLTextAreaElement }[] = [];
+    const addField: HTMLDivElement = h(
+      "div",
+      { class: "full" },
+      h("button", {
+        class: "tbtn",
+        type: "button",
+        onclick: () => {
+          const row = { field: text(), value: h("textarea", { autocomplete: "off", spellcheck: false, rows: 1, ...notALogin }) };
+          extra.push(row);
+          addField.before(input("Field", row.field, "wide"), input("Value", row.value, "wide"));
+          row.field.focus();
+        },
+      }, "add field"),
+    );
     const err = h("span", { class: "err", role: "status" });
     const saveButton = h("button", { class: "tbtn tbtn-primary", type: "submit" }, "save");
     const cancel = h("button", { class: "tbtn", type: "button", onclick: closeEditor }, h("kbd", {}, "esc"), "cancel");
@@ -759,9 +790,10 @@ export async function vaultView(main: HTMLElement, host: Host): Promise<void> {
         input("Env", env),
         input("Context", ctx),
         input(r ? "New value" : "Value", value, "full"),
+        addField,
         input("Description", desc, "full"),
       ),
-      h("p", { class: "e-note" }, "Leave field, env and context empty for the default value. A new value replaces the current one; earlier values stay in history."),
+      h("p", { class: "e-note" }, "Leave field, env and context empty for the default value. Env and context apply to every field. A new value replaces the current one; earlier values stay in history."),
       h("div", { class: "e-foot" }, saveButton, cancel, err, h("span", { class: "grow" }), deleteEntry),
     );
     form.addEventListener("submit", async (e) => {
@@ -772,8 +804,14 @@ export async function vaultView(main: HTMLElement, host: Host): Promise<void> {
         name?.focus();
         return;
       }
-      const set = { op: "set" as const, field: field.value.trim(), key: lookupKey(env.value.trim(), ctx.value.trim()), value: value.value };
-      const changes: Change[] = r && set.value === "" ? [] : [set];
+      let changes: Change[];
+      try {
+        const rows = [{ field: field.value.trim(), value: value.value }, ...extra.map((x) => ({ field: x.field.value.trim(), value: x.value.value }))];
+        changes = rowChanges(rows, lookupKey(env.value.trim(), ctx.value.trim()), r !== null);
+      } catch (e) {
+        err.textContent = messageOf(e);
+        return;
+      }
       const d = desc.value.trim();
       if (d !== current(entryOf(v.entries, entry).revisions).description && (r || d)) changes.push({ op: "describe", field: "", key: "", value: d });
       if (!changes.length) return closeEditor();
@@ -788,7 +826,8 @@ export async function vaultView(main: HTMLElement, host: Host): Promise<void> {
         selected = first.op === "set" ? JSON.stringify([saved.name, first.field, first.key]) : selected;
         draw();
         focusSelected();
-        say(`Saved ${first.op === "set" ? rowLabel(savedKey) : saved.name}.`, "ok");
+        const sets = saved.written.filter((x) => x.op === "set").length;
+        say(`Saved ${sets > 1 ? `${saved.name} with ${sets} fields` : first.op === "set" ? rowLabel(savedKey) : saved.name}.`, "ok");
       } catch (e) {
         err.textContent = messageOf(e);
       } finally {

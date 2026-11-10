@@ -140,10 +140,12 @@ func must1[T any](v T, err error) T {
 	return v
 }
 
-// browserFulfill answers request id like the page: a set revision stamped
-// with the Append rule against what the vault knows, a describe revision when
-// the description differs, sealed with RK, sent with the session cookie.
-func browserFulfill(t *testing.T, target, cookie string, data *vault.VaultData, acct vault.Account, dev api.Client, id, value string, skipSet bool) {
+// browserFulfill answers request id like the page: a set revision per given
+// value, in the order of the request's fields, stamped with the Append rule
+// against what the vault knows, a describe revision when the description
+// differs, sealed with RK, sent with the session cookie. Fewer values than
+// fields leave the remaining fields unset.
+func browserFulfill(t *testing.T, target, cookie string, data *vault.VaultData, acct vault.Account, dev api.Client, id string, values []string, skipSet bool) {
 	t.Helper()
 	st, err := dev.GetRequest(id)
 	if err != nil {
@@ -154,10 +156,12 @@ func browserFulfill(t *testing.T, target, cookie string, data *vault.VaultData, 
 		t.Fatal(err)
 	}
 	entry := data.Secrets[meta.Name]
-	set := vault.Revision{ID: randomHex(), Op: "set", Field: meta.Field, Key: vault.MakeLookupKey(meta.Env, meta.Context), Value: value}
 	var revs []vault.Revision
-	if !skipSet {
-		entry.Append(set)
+	for i, field := range meta.Fields {
+		if skipSet || i >= len(values) {
+			break
+		}
+		entry.Append(vault.Revision{ID: randomHex(), Op: "set", Field: field, Key: vault.MakeLookupKey(meta.Env, meta.Context), Value: values[i]})
 		revs = append(revs, entry.Revisions[len(entry.Revisions)-1])
 	}
 	if _, current, _ := entry.Current(); current != meta.Description {

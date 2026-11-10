@@ -213,7 +213,7 @@ Hort is agent-first. `hort --help` ends with an `AGENT INSTRUCTIONS` section: an
 
 ### Ask for secrets without the chat (MCP)
 
-`hort mcp` is an MCP server on stdio with one tool, `request_secret`. The agent passes name, description and optionally field, env and context. You get a link to hort.pm, sign in with a passkey and type the value there. The agent learns only the name and a status (`stored`, `pending`, `declined`, `expired`, `conflict`) and reads the value afterwards with `hort get`. There is no MCP tool that reads values or lists secrets.
+`hort mcp` is an MCP server on stdio with one tool, `request_secret`. The agent passes name, description and optionally fields (up to 16 fields of one secret, entered on one page), env and context. You get a link to hort.pm, sign in with a passkey and type the value there. The agent learns only the name and a status (`stored`, `pending`, `declined`, `expired`, `conflict`) and reads the value afterwards with `hort get`. There is no MCP tool that reads values or lists secrets.
 
 ```bash
 claude mcp add hort -- hort mcp

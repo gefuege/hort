@@ -60,7 +60,7 @@ export const SESSION_COOKIE = "__Host-hort";
 const SESSION_EXPIRED = "session expired or signed out; sign in with your passkey again";
 const PASSPHRASE_SLOT = "passphrase";
 const MAX_PENDING_REQUESTS = 50;
-const MAX_ENVELOPE_BYTES = 64 * 1024;
+export const MAX_ENVELOPE_BYTES = 64 * 1024;
 const MAX_META_BYTES = 16 * 1024; // name <= 128 B plus description and parts; far below an envelope
 const MIN_CT_BYTES = 28; // nonce(12) + GCM tag(16)
 const MAX_PUSH_REVISIONS = 500; // also the most rows per pull page

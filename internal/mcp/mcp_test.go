@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/http/httputil"
@@ -112,7 +113,7 @@ func TestRequestSecret(t *testing.T) {
 		for _, args := range []map[string]any{
 			{"name": "Bad Name!", "description": "x"},
 			{"name": "valid-name", "description": ""},
-			{"name": "valid-name", "description": "x", "field": "bad field"},
+			{"name": "valid-name", "description": "x", "fields": []string{"bad field"}},
 		} {
 			res := r.call(cs, args)
 			if !res.IsError {
@@ -179,6 +180,37 @@ func TestRequestSecret(t *testing.T) {
 		r.wantStored("CASE-secret", "", "prod", "case-value")
 	})
 
+	t.Run("two fields: one request in any order, stored only once both are", func(t *testing.T) {
+		cs := r.connect(nil)
+		first := r.output(r.call(cs, map[string]any{"name": "stripe", "description": "Payments", "fields": []string{"client_id", "secret"}, "env": "prod"}))
+		if first.Status != "pending" || len(first.Fields) != 2 {
+			t.Fatalf("first call: %+v", first)
+		}
+		again := map[string]any{"name": "Stripe", "description": "Payments", "fields": []string{"secret", "client_id"}, "env": "PROD"}
+		if second := r.output(r.call(cs, again)); second.RequestID != first.RequestID || second.Status != "pending" {
+			t.Fatalf("same set in another order, name and env in another case: %+v, want the request %s", second, first.RequestID)
+		}
+		subset := r.output(r.call(cs, map[string]any{"name": "stripe", "description": "Payments", "fields": []string{"secret"}, "env": "prod"}))
+		if subset.RequestID == first.RequestID {
+			t.Fatal("a subset of the fields found the same request")
+		}
+		r.fulfill(first.RequestID, "stripe-client-1", "stripe-secret-1")
+		done := r.output(r.call(cs, again))
+		if done.Status != "stored" || done.RequestID != first.RequestID {
+			t.Fatalf("after fulfill: %+v", done)
+		}
+		r.wantStored("stripe", "client_id", "prod", "stripe-client-1")
+		r.wantStored("stripe", "secret", "prod", "stripe-secret-1")
+
+		// A fulfill that stores only one of the two fields is not stored.
+		args := map[string]any{"name": "half-secret", "description": "Half", "fields": []string{"user", "password"}}
+		half := r.output(r.call(cs, args))
+		r.fulfill(half.RequestID, "half-user-1")
+		if res := r.call(cs, args); !res.IsError || !strings.Contains(r.last(), "does not match") {
+			t.Fatalf("half fulfill: %s", r.last())
+		}
+	})
+
 	t.Run("url mode: accept, fulfilled, stored, complete notification", func(t *testing.T) {
 		var id string
 		cs := r.connect(&client{onElicit: func(req *sdk.ElicitRequest) *sdk.ElicitResult {
@@ -189,7 +221,7 @@ func TestRequestSecret(t *testing.T) {
 			r.fulfill(id, "url-value-1")
 			return &sdk.ElicitResult{Action: "accept"}
 		}})
-		out := r.output(r.call(cs, map[string]any{"name": "url-secret", "description": "With URL mode", "field": "token", "context": "acme"}))
+		out := r.output(r.call(cs, map[string]any{"name": "url-secret", "description": "With URL mode", "fields": []string{"token"}, "context": "acme"}))
 		if out.Status != "stored" || out.RequestID != id || out.URL != "" {
 			t.Fatalf("result: %+v", out)
 		}
@@ -360,6 +392,75 @@ func TestRequestSecret(t *testing.T) {
 	})
 }
 
+// TestFieldsRefused checks the fields rule before anything else runs: an
+// empty home would answer "locked" if validation let the call through.
+func TestFieldsRefused(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	st, ct := sdk.NewInMemoryTransports()
+	ss, err := mcp.New(mcp.Deps{Version: "9.9.9"}).Connect(ctx, st, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ss.Close()
+	cs, err := sdk.NewClient(&sdk.Implementation{Name: "test"}, nil).Connect(ctx, ct, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cs.Close()
+	seventeen := make([]string, 17)
+	for i := range seventeen {
+		seventeen[i] = fmt.Sprintf("f%d", i)
+	}
+	for _, c := range []struct {
+		fields []string
+		want   string
+	}{
+		{seventeen, "1 to 16 fields"},
+		{[]string{"api-key", "API-Key"}, "appears twice"},
+		{[]string{"", ""}, "appears twice"},
+		{[]string{"ok", "Bad Field"}, "must match"},
+	} {
+		res, err := cs.CallTool(ctx, &sdk.CallToolParams{Name: "request_secret", Arguments: map[string]any{"name": "x", "description": "y", "fields": c.fields}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		raw, _ := json.Marshal(res)
+		if !res.IsError || !strings.Contains(string(raw), c.want) {
+			t.Fatalf("%v: %s, want %q", c.fields, raw, c.want)
+		}
+	}
+}
+
+// TestOldFieldArgumentRefused: an agent that still sends the single "field"
+// of an older Hort gets an error, not a request for the default field.
+func TestOldFieldArgumentRefused(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	st, ct := sdk.NewInMemoryTransports()
+	ss, err := mcp.New(mcp.Deps{Version: "9.9.9"}).Connect(ctx, st, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ss.Close()
+	cs, err := sdk.NewClient(&sdk.Implementation{Name: "test"}, nil).Connect(ctx, ct, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cs.Close()
+	res, err := cs.CallTool(ctx, &sdk.CallToolParams{Name: "request_secret", Arguments: map[string]any{"name": "x", "description": "y", "field": "token"}})
+	raw, _ := json.Marshal(res)
+	if err == nil && (!res.IsError || strings.Contains(string(raw), "Hort is locked")) {
+		t.Fatalf("old field argument: %s", raw)
+	}
+}
+
 // TestStdioBinary starts the real `hort mcp` on stdio: the one tool is listed,
 // and an empty home answers as a locked vault (no network involved).
 func TestStdioBinary(t *testing.T) {
@@ -497,8 +598,8 @@ func (r *rig) pending() int {
 	return len(list)
 }
 
-// fulfill is the browser: the id is the last part of the request URL.
-func (r *rig) fulfill(id, value string) {
+// fulfill is the browser: the id is the last part of the request URL, one value per requested field.
+func (r *rig) fulfill(id string, values ...string) {
 	r.t.Helper()
 	id = path.Base(id)
 	data, _, err := vault.LoadVault(r.ref, r.vk)
@@ -506,9 +607,9 @@ func (r *rig) fulfill(id, value string) {
 		r.t.Fatal(err)
 	}
 	r.mu.Lock()
-	r.secrets = append(r.secrets, value)
+	r.secrets = append(r.secrets, values...)
 	r.mu.Unlock()
-	browserFulfill(r.t, r.target, r.cookie, data, r.acct, r.dev, id, value, r.fulfillNoSet.Swap(false))
+	browserFulfill(r.t, r.target, r.cookie, data, r.acct, r.dev, id, values, r.fulfillNoSet.Swap(false))
 }
 
 // pushCompeting is another device writing the same value a moment later.

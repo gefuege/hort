@@ -186,6 +186,22 @@ describe("request.json", () => {
       await expect(openRequestMeta(keys, "00".repeat(16), hex(v.meta_ct_hex))).rejects.toThrow();
     });
   }
+  it("refuses meta with no, too many or repeated fields, or both forms", async () => {
+    const keys = await deriveAccountKeys(crypto.getRandomValues(new Uint8Array(32)), crypto.getRandomValues(new Uint8Array(16)));
+    const id = "ab".repeat(16);
+    const sealMeta = async (o: object) => {
+      const { canon } = await import("../src/wire");
+      const nonce = new Uint8Array(12);
+      const ct = await crypto.subtle.encrypt({ name: "AES-GCM", iv: nonce, additionalData: canon("hort/v4/req-meta\n", keys.accountId, hex(id)) as BufferSource }, keys.rk, str(JSON.stringify(o)) as BufferSource);
+      return new Uint8Array([...nonce, ...new Uint8Array(ct)]);
+    };
+    const base = { name: "stripe", description: "d", env: "", context: "" };
+    expect((await openRequestMeta(keys, id, await sealMeta({ ...base, fields: ["client_id", "secret"] }))).fields).toEqual(["client_id", "secret"]);
+    expect((await openRequestMeta(keys, id, await sealMeta({ ...base, field: "token" }))).fields).toEqual(["token"]);
+    for (const bad of [{ fields: [] }, { fields: Array.from({ length: 17 }, (_, i) => `f${i}`) }, { fields: ["Token", "token"] }, { fields: ["a"], field: "a" }, { fields: [1] }, {}]) {
+      await expect(openRequestMeta(keys, id, await sealMeta({ ...base, ...bad })), JSON.stringify(bad)).rejects.toThrow("invalid metadata");
+    }
+  });
   it("AK request signature verifies under the vector message scheme", async () => {
     const v = requestVectors.vectors.signature.find((s) => s.hort_device === "ak")!;
     const keys = await deriveAccountKeys(hex(keyVectors.vectors[0].vk_hex), hex(v.account_id_hex));

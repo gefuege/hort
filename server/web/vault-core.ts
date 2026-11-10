@@ -390,15 +390,25 @@ export async function openRevision(keys: AccountKeys, id: string, envelope: Uint
   return { name: o.name, revision: r };
 }
 
-export type RequestMeta = { name: string; description: string; field: string; env: string; context: string };
-const META_KEYS = ["name", "description", "field", "env", "context"];
+// fields: 1 to MAX_REQUEST_FIELDS field names, distinct by foldKey; "" is the default field.
+export type RequestMeta = { name: string; description: string; fields: string[]; env: string; context: string };
+export const MAX_REQUEST_FIELDS = 16;
+const META_KEYS = ["name", "description", "env", "context"];
 
+// Reads both forms: `fields`, and the single `field` a request from an older Hort carries.
 export async function openRequestMeta(keys: AccountKeys, requestId: string, metaCt: Uint8Array): Promise<RequestMeta> {
   if (!ID.test(requestId)) throw new Error("invalid request ID");
   const pt = await open(keys.rk, metaCt, canon("hort/v4/req-meta\n", keys.accountId, hexDecode(requestId, 16)!));
   const o: unknown = JSON.parse(new TextDecoder("utf-8", { fatal: true, ignoreBOM: false }).decode(pt));
-  if (!exactKeys(o, META_KEYS) || META_KEYS.some((k) => typeof o[k] !== "string")) throw new Error(`request ${requestId}: invalid metadata`);
-  return o as RequestMeta;
+  const invalid = new Error(`request ${requestId}: invalid metadata`);
+  const single = exactKeys(o, [...META_KEYS, "field"]);
+  if (!single && !exactKeys(o, [...META_KEYS, "fields"])) throw invalid;
+  const m = o as Record<string, unknown>;
+  if (META_KEYS.some((k) => typeof m[k] !== "string")) throw invalid;
+  const fields: unknown = single ? [m.field] : m.fields;
+  if (!Array.isArray(fields) || fields.length < 1 || fields.length > MAX_REQUEST_FIELDS || fields.some((f) => typeof f !== "string")) throw invalid;
+  if (new Set(fields.map(foldKey)).size !== fields.length) throw invalid;
+  return { name: m.name as string, description: m.description as string, fields: fields as string[], env: m.env as string, context: m.context as string };
 }
 
 // ---------------------------------------------------------------------------

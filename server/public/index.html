@@ -68,7 +68,7 @@
 <div class="section wrap" id="agents">
   <p class="sec-tag">// agents</p>
   <h2 class="sec-h">Agents need secrets. Give them one place to look.</h2>
-  <div class="win talk sec-intro"><div class="win-bar"><i></i><i></i><i></i><span>hort — agents</span></div><div class="talk-body"><p><span class="say">hort ›</span> Today you paste credentials into the chat, the agent forgets, and next session it asks again. With Hort, your agent looks them up itself, and asks you for what's missing.</p></div></div>
+  <div class="win talk sec-intro"><div class="win-bar"><i></i><i></i><i></i><span>hort — agents</span></div><div class="talk-body"><p><span class="say">hort ›</span> You just want your agent to have the secret, without unlocking a password manager by hand every time. Paste it into the chat instead, and the agent tells you off for it. With Hort, your agent looks secrets up itself and asks you for what's missing.</p></div></div>
   <div class="win talk"><div class="win-bar"><i></i><i></i><i></i><span>hort — how agents use it</span></div><div class="cards">
     <div class="card"><span class="num">[01]</span><h3>Discover</h3><p>The agent runs <code>hort list</code> and sees what exists: names, descriptions, environments. No values.</p></div>
     <div class="card"><span class="num">[02]</span><h3>Read</h3><p><code>hort get &lt;name&gt;</code> prints just the value on stdout. Ready for <code>$(...)</code> and pipes. Locked vault? Exit code 2, and the agent asks you to unlock.</p></div>
@@ -93,16 +93,16 @@
     <div class="example">
       <p class="label">In your agent's chat</p>
       <div class="win term"><div class="win-bar"><i></i><i></i><i></i><span>claude — ~/shop</span></div><pre tabindex="0"><span class="t-v">you</span>    › Add Stripe checkout to the shop.
-<span class="t-a">agent</span>  › hort list has no stripe client_id.
-<span class="t-a">agent</span>  › request_secret stripe · client_id · prod
+<span class="t-a">agent</span>  › hort list has no stripe keys.
+<span class="t-a">agent</span>  › request_secret stripe · client_id, secret · prod
 <span class="t-p">hort</span>   › pending · https://hort.pm/r/…
-<span class="t-v">you</span>    › <span class="t-m">(open the link, type the value)</span>
+<span class="t-v">you</span>    › <span class="t-m">(open the link, type both values)</span>
 <span class="t-p">hort</span>   › stored
 <span class="t-a">agent</span>  › $ hort get stripe client_id --env prod</pre></div>
     </div>
     <div class="example">
       <p class="label">On hort.pm</p>
-      <figure class="win mock" role="img" aria-label="Illustration: the hort.pm page for an agent's request, with the secret's name, field and environment and an empty value field">
+      <figure class="win mock" role="img" aria-label="Illustration: the hort.pm page for an agent's request, with the secret's name, its two fields and environment and an empty value input for each field">
         <div class="win-bar"><i></i><i></i><i></i><span class="title">hort — request</span></div>
         <div class="win-body" inert>
           <div class="prompt static"><span class="ps1">&gt; <span class="cmd">hort request</span></span></div>
@@ -112,12 +112,13 @@
             <dl class="facts">
               <dt>Secret</dt><dd><code>stripe</code></dd>
               <dt>Agent says it is for</dt><dd>Stripe checkout in the shop</dd>
-              <dt>Field</dt><dd><code>client_id</code></dd>
+              <dt>Fields</dt><dd><code>client_id</code> <code>secret</code></dd>
               <dt>Environment</dt><dd><code>prod</code></dd>
               <dt>Context</dt><dd><span class="muted">any</span></dd>
             </dl>
-            <div class="f"><label>Value</label><input type="text" tabindex="-1" autocomplete="off" data-1p-ignore data-lpignore="true" data-bwignore><p class="hint">No value is stored for this secret yet.</p></div>
-            <div class="row-actions"><button class="tbtn tbtn-primary tbtn-big" type="button" tabindex="-1"><kbd>⏎</kbd>store value</button><button class="tbtn" type="button" tabindex="-1">decline</button></div>
+            <div class="f"><label>client_id</label><input type="text" tabindex="-1" autocomplete="off" data-1p-ignore data-lpignore="true" data-bwignore><p class="hint">No value is stored for this field yet.</p></div>
+            <div class="f"><label>secret</label><input type="text" tabindex="-1" autocomplete="off" data-1p-ignore data-lpignore="true" data-bwignore><p class="hint">No value is stored for this field yet.</p></div>
+            <div class="row-actions"><button class="tbtn tbtn-primary tbtn-big" type="button" tabindex="-1"><kbd>⏎</kbd>store values</button><button class="tbtn" type="button" tabindex="-1">decline</button></div>
           </section>
         </div>
       </figure>

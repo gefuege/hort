@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 	"testing"
@@ -370,13 +371,23 @@ func envelopeVectors(t *testing.T) any {
 func requestVectors(t *testing.T) any {
 	keys := must(DeriveAccountKeys(vecVK, vecAccountID))
 	requestID := hex.EncodeToString(fixed("request-id", 16))
-	meta := RequestMeta{Name: "openai", Description: "API key for the summarizer", Field: "", Env: "prod", Context: ""}
+	idBytes, _ := hex.DecodeString(requestID)
+	// The single-field form an older Hort writes; readers take its field as the one entry of fields.
+	single := `{"name":"openai","description":"API key for the summarizer","field":"","env":"prod","context":""}`
 	nonce := fixed("nonce/request-meta", NonceSize)
-	metaCT := must(sealRequestMeta(keys.RK, vecAccountID, requestID, meta, nonce))
-	if got := must(OpenRequestMeta(keys.RK, vecAccountID, requestID, metaCT)); got != meta {
+	metaCT := must(sealEnvelope(keys.RK, nonce, []byte(single), requestMetaAAD(vecAccountID, idBytes)))
+	singleMeta := RequestMeta{Name: "openai", Description: "API key for the summarizer", Fields: []string{""}, Env: "prod", Context: ""}
+	if got := must(OpenRequestMeta(keys.RK, vecAccountID, requestID, metaCT)); !reflect.DeepEqual(got, singleMeta) {
+		t.Fatal("single-field request meta does not read as fields")
+	}
+	fieldsID := hex.EncodeToString(fixed("request-id/fields", 16))
+	fieldsIDBytes, _ := hex.DecodeString(fieldsID)
+	meta := RequestMeta{Name: "stripe", Description: "Payments for the shop", Fields: []string{"client_id", "secret"}, Env: "prod", Context: ""}
+	fieldsNonce := fixed("nonce/request-meta-fields", NonceSize)
+	fieldsCT := must(sealRequestMeta(keys.RK, vecAccountID, fieldsID, meta, fieldsNonce))
+	if got := must(OpenRequestMeta(keys.RK, vecAccountID, fieldsID, fieldsCT)); !reflect.DeepEqual(got, meta) {
 		t.Fatal("request meta does not round-trip")
 	}
-	idBytes, _ := hex.DecodeString(requestID)
 	type metaVec struct {
 		RequestID string      `json:"request_id"`
 		Meta      RequestMeta `json:"meta"`
@@ -417,9 +428,12 @@ func requestVectors(t *testing.T) any {
 	}
 	plaintext := must(json.Marshal(meta))
 	return vectorFile{
-		Description: "Request meta (contract §7.2 step 3, tag per Kopf decision): meta_ct = nonce(12) || AES-256-GCM(RK, JSON meta, aad = canon(\"hort/v4/req-meta\\n\", account_id, request id bytes)). Request signature (contract §6.2): Ed25519 over canon(\"hort/v4/req\\n\", account_id, device id bytes or \"ak\", METHOD, PATH_WITH_QUERY, u64 timestamp, SHA-256(body)).",
+		Description: "Request meta (contract §7.2 step 3, tag per Kopf decision): meta_ct = nonce(12) || AES-256-GCM(RK, JSON meta, aad = canon(\"hort/v4/req-meta\\n\", account_id, request id bytes)). JSON meta is {name, description, fields, env, context} with 1 to 16 fields distinct by fold; the single-field form of an older Hort carries field instead of fields and reads as fields [field]. Request signature (contract §6.2): Ed25519 over canon(\"hort/v4/req\\n\", account_id, device id bytes or \"ak\", METHOD, PATH_WITH_QUERY, u64 timestamp, SHA-256(body)).",
 		Vectors: map[string]any{
-			"meta": []metaVec{{requestID, meta, keys.RK, vecAccountID, requestMetaAAD(vecAccountID, idBytes), nonce, string(plaintext), metaCT, base64.StdEncoding.EncodeToString(metaCT)}},
+			"meta": []metaVec{
+				{fieldsID, meta, keys.RK, vecAccountID, requestMetaAAD(vecAccountID, fieldsIDBytes), fieldsNonce, string(plaintext), fieldsCT, base64.StdEncoding.EncodeToString(fieldsCT)},
+				{requestID, singleMeta, keys.RK, vecAccountID, requestMetaAAD(vecAccountID, idBytes), nonce, single, metaCT, base64.StdEncoding.EncodeToString(metaCT)},
+			},
 			"signature": []sigVec{
 				sign("device key, POST with body", vecDeviceKey, vecDeviceID, hex.EncodeToString(vecDeviceID), "POST", "/api/v1/requests",
 					1793872800, `{"id":"`+requestID+`","meta_ct":"`+base64.StdEncoding.EncodeToString(metaCT)+`"}`),

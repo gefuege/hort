@@ -167,8 +167,11 @@ EXAMPLES:
 const MCPText = `Serve the request_secret tool to an MCP client on stdio.
 
 The tool asks the user to enter a secret in Hort without the value entering the
-chat. It takes name, description, and optionally field, env and context, and
+chat. It takes name, description, and optionally fields, env and context, and
 returns only name and status: stored, pending, declined, expired or conflict.
+fields lists up to 16 fields of one secret, for example api-key and
+api-secret; the user enters all of them on one page, and the status is stored
+only once all are stored. Without fields the request is for the default field.
 Read the value afterwards with 'hort get'. There is no tool that reads values
 or lists secrets.
 

@@ -1,7 +1,7 @@
 // Hort web app: /r/<id>, the page for an agent's secret request (contract §7.3).
 // The page decrypts the request's metadata, shows what is asked for and
-// whether a value exists for that tuple (never the value), and stores the
-// value the user types through POST /requests/{id}/fulfill. The vault key and
+// whether a value exists for each requested field (never the value), and
+// stores the values the user types in one POST /requests/{id}/fulfill. The vault key and
 // everything decrypted here stay in memory; no innerHTML (Trusted Types).
 import { b64Decode, b64Encode } from "../src/wire";
 import { notALogin } from "./not-a-login";
@@ -160,8 +160,8 @@ async function load(body: HTMLElement, host: Host, id: string, retry: () => Prom
       h("dd", {}, h("code", {}, meta.name)),
       h("dt", {}, "Agent says it is for"),
       h("dd", {}, meta.description),
-      h("dt", {}, "Field"),
-      h("dd", {}, meta.field === "" ? h("span", { class: "muted" }, "default") : h("code", {}, meta.field)),
+      h("dt", {}, meta.fields.length > 1 ? "Fields" : "Field"),
+      h("dd", {}, ...meta.fields.flatMap((f, i) => [i > 0 && " ", f === "" ? h("span", { class: "muted" }, "default") : h("code", {}, f)])),
       h("dt", {}, "Environment"),
       h("dd", {}, meta.env === "" ? h("span", { class: "muted" }, "any") : h("code", {}, meta.env)),
       h("dt", {}, "Context"),
@@ -180,51 +180,49 @@ async function load(body: HTMLElement, host: Host, id: string, retry: () => Prom
   }
 
   const key = lookupKey(meta.env, meta.context);
-  const invalid = validateWrite(meta.name, { id: newId(), recordedAt: 0n, op: "set", field: meta.field, key, value: "" });
-  if (invalid) {
-    throw new Error(`The agent's request cannot be stored: ${invalid}`);
+  for (const field of meta.fields) {
+    const invalid = validateWrite(meta.name, { id: newId(), recordedAt: 0n, op: "set", field, key, value: "" });
+    if (invalid) throw new Error(`The agent's request cannot be stored: ${invalid}`);
   }
 
   const stored = new Map<string, Revision[]>();
   let cursor = await pull(host, keys, meta.name, 0, stored);
   const now = current(entryOf(stored, meta.name).revisions);
-  const exists = [...now.values.values()].some((v) => foldKey(v.field) === foldKey(meta.field) && foldKey(v.key) === foldKey(key));
+  const exists = (field: string) => [...now.values.values()].some((v) => foldKey(v.field) === foldKey(field) && foldKey(v.key) === foldKey(key));
 
-  // A secret value is not a login: keep password managers from filling it or offering to save it.
-  const single = h("input", { id: "f-value", type: "password", autocomplete: "off", spellcheck: false, ...notALogin });
-  const multi = h("textarea", { id: "f-value-multi", rows: 6, autocomplete: "off", spellcheck: false, autocapitalize: "off", hidden: true, ...notALogin });
-  const multiToggle = h("input", { id: "f-multiline", type: "checkbox" });
-  multiToggle.addEventListener("change", () => {
-    const [from, to] = multiToggle.checked ? [single, multi] : [multi, single];
-    to.value = from.value;
-    from.value = "";
-    from.hidden = true;
-    to.hidden = false;
-    to.focus();
-  });
-  const value = () => (multiToggle.checked ? multi.value : single.value);
-  const store = h("button", { class: "tbtn tbtn-primary tbtn-big", type: "submit" }, h("kbd", {}, "⏎"), exists ? "replace value" : "store value");
-  const decline = h("button", { class: "tbtn", type: "button" }, "decline");
-  const form = h(
-    "form",
-    notALogin,
-    h(
+  // One value input per field. A secret value is not a login: keep password managers from filling it or offering to save it.
+  const inputs = meta.fields.map((field, i) => {
+    const single = h("input", { id: `f-value-${i}`, type: "password", autocomplete: "off", spellcheck: false, ...notALogin });
+    const multi = h("textarea", { id: `f-value-multi-${i}`, rows: 6, autocomplete: "off", spellcheck: false, autocapitalize: "off", hidden: true, ...notALogin });
+    const multiToggle = h("input", { id: `f-multiline-${i}`, type: "checkbox" });
+    multiToggle.addEventListener("change", () => {
+      const [from, to] = multiToggle.checked ? [single, multi] : [multi, single];
+      to.value = from.value;
+      from.value = "";
+      from.hidden = true;
+      to.hidden = false;
+      to.focus();
+    });
+    const group = h(
       "div",
       { class: "f" },
-      h("label", { htmlFor: "f-value" }, "Value"),
+      h("label", { htmlFor: single.id }, meta.fields.length > 1 ? (field === "" ? "Value (default field)" : field) : "Value"),
       single,
       multi,
-      h("label", { class: "check", htmlFor: "f-multiline" }, multiToggle, " Multi-line value (shown as typed)"),
-      exists
-        ? h("p", { class: "hint" }, "A value is stored for this secret already. A new value replaces the current one; earlier values stay in history.")
-        : h("p", { class: "hint" }, "No value is stored for this secret yet."),
-    ),
-    h("div", { class: "row-actions" }, store, decline),
-  );
+      h("label", { class: "check", htmlFor: multiToggle.id }, multiToggle, " Multi-line value (shown as typed)"),
+      exists(field)
+        ? h("p", { class: "hint" }, "A value is stored for this field already. A new value replaces the current one; earlier values stay in history.")
+        : h("p", { class: "hint" }, "No value is stored for this field yet."),
+    );
+    return { group, value: () => (multiToggle.checked ? multi.value : single.value), focus: () => (multiToggle.checked ? multi : single).focus(), clear: () => ((single.value = ""), (multi.value = "")) };
+  });
+  const label = meta.fields.length > 1 ? "store values" : exists(meta.fields[0]) ? "replace value" : "store value";
+  const store = h("button", { class: "tbtn tbtn-primary tbtn-big", type: "submit" }, h("kbd", {}, "⏎"), label);
+  const decline = h("button", { class: "tbtn", type: "button" }, "decline");
+  const form = h("form", notALogin, ...inputs.map((x) => x.group), h("div", { class: "row-actions" }, store, decline));
 
   const finish = (text: string) => {
-    single.value = "";
-    multi.value = "";
+    for (const x of inputs) x.clear();
     host.done(text, "ok");
   };
 
@@ -232,26 +230,15 @@ async function load(body: HTMLElement, host: Host, id: string, retry: () => Prom
     e.preventDefault();
     store.disabled = decline.disabled = true;
     try {
-      if (value() === "") throw new Error("Enter a value, or decline the request.");
+      const empty = inputs.find((x) => x.value() === "");
+      if (empty) {
+        empty.focus();
+        throw new Error("Enter a value, or decline the request.");
+      }
       out.set("Storing …");
       // Other writers may have been faster since the page was loaded: the Append rule needs the entry as it is now.
       cursor = await pull(host, keys, meta.name, cursor, stored);
-      // The value lands on the entry and key the request folds to, in the spelling they already have.
-      const { name, revisions: entry } = entryOf(stored, meta.name);
-      const set: Revision = { id: newId(), recordedAt: appendStamp(entry, nowNs()), op: "set", ...spelling(entry, meta.field, key), value: value() };
-      const revisions = [set];
-      if (meta.description !== "" && current(entry).description !== meta.description) {
-        revisions.push({ id: newId(), recordedAt: appendStamp([...entry, set], nowNs()), op: "describe", field: "", key: "", value: meta.description });
-      }
-      const sealed: { id: string; ct: string }[] = [];
-      for (const r of revisions) {
-        const problem = validateWrite(name, r);
-        if (problem) throw new Error(problem);
-        sealed.push({ id: r.id, ct: b64Encode(await sealRevision(keys, name, r)) });
-      }
-      const res = await host.api("POST", `/api/v1/requests/${id}/fulfill`, { body: JSON.stringify({ revisions: sealed }) });
-      if (res.status === 401) throw new SessionLost();
-      await host.ok(res);
+      await fulfill(host, keys, id, meta, stored, inputs.map((x) => x.value()));
       finish(`Stored. Your agent can read "${meta.name}" now.`);
     } catch (err) {
       if (err instanceof SessionLost) await retry();
@@ -276,4 +263,28 @@ async function load(body: HTMLElement, host: Host, id: string, retry: () => Prom
 
   block.append(form);
   body.append(h("p", { class: "note" }, "The text above comes from your agent, not from Hort. Enter a value only if you expect this request."));
+}
+
+// Answers request `id` in one write: a set revision per requested field, in
+// the order of meta.fields, on the entry and key the request folds to in the
+// spelling they already have (Append rule against `stored`, which the caller
+// has just pulled), then a describe revision when the description is missing
+// or differs. Nothing is sent when a revision breaks the write rules.
+export async function fulfill(host: Pick<Host, "api" | "ok">, keys: AccountKeys, id: string, meta: RequestMeta, stored: Map<string, Revision[]>, values: string[]): Promise<void> {
+  const key = lookupKey(meta.env, meta.context);
+  const { name, revisions: entry } = entryOf(stored, meta.name);
+  const known = [...entry];
+  meta.fields.forEach((field, i) => known.push({ id: newId(), recordedAt: appendStamp(known, nowNs()), op: "set", ...spelling(known, field, key), value: values[i] }));
+  if (meta.description !== "" && current(entry).description !== meta.description) {
+    known.push({ id: newId(), recordedAt: appendStamp(known, nowNs()), op: "describe", field: "", key: "", value: meta.description });
+  }
+  const sealed: { id: string; ct: string }[] = [];
+  for (const r of known.slice(entry.length)) {
+    const problem = validateWrite(name, r);
+    if (problem) throw new Error(problem);
+    sealed.push({ id: r.id, ct: b64Encode(await sealRevision(keys, name, r)) });
+  }
+  const res = await host.api("POST", `/api/v1/requests/${id}/fulfill`, { body: JSON.stringify({ revisions: sealed }) });
+  if (res.status === 401) throw new SessionLost();
+  await host.ok(res);
 }

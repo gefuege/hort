@@ -3,7 +3,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { b64Decode } from "../src/wire";
 import { current, deriveAccountKeys, entryOf, history, resolve, type Op, type Revision } from "../web/vault-core";
-import { command, envContext, sharedPrefix, forgetVault, pull, rowLabel, rows, secondsLeft, SignInRequired, write, type Host } from "../web/vault-view";
+import { command, envContext, sharedPrefix, forgetVault, pull, rowChanges, rowLabel, rows, secondsLeft, SignInRequired, write, type Host } from "../web/vault-view";
 
 async function unlockedVault() {
   const accountId = crypto.getRandomValues(new Uint8Array(16));
@@ -101,6 +101,37 @@ describe("vault-view", () => {
     await expect(write(host, u, "has space", [{ op: "set", field: "", key: "*:*", value: "v" }])).rejects.toThrow("does not meet the rules");
     await expect(write(host, u, "db", [{ op: "set", field: "", key: "a:b:c", value: "v" }])).rejects.toThrow("env and context");
     expect(rows).toEqual([]);
+  });
+});
+
+describe("editor rows", () => {
+  it("saves two fields in one write and ignores empty extra rows", async () => {
+    const u = await unlockedVault();
+    const { host, rows: pushed } = fakeServer();
+    const changes = rowChanges([{ field: "api-key", value: "k1" }, { field: "", value: "" }, { field: "api-secret", value: "s1" }], "prod:*", false);
+    expect(changes.map((c) => c.field)).toEqual(["api-key", "api-secret"]);
+    const saved = await write(host, u, "dhl", changes);
+    expect(saved.written.length).toBe(2);
+    expect(pushed.length).toBe(2);
+    forgetVault();
+    const revisions = (await pull(host, u)).entries.get("dhl")!;
+    expect([resolve(revisions, "api-key", "prod", ""), resolve(revisions, "api-secret", "prod", "")]).toEqual(["k1", "s1"]);
+  });
+
+  it("keeps a lone first row as before, drops an empty first row next to filled ones, and treats an empty value as unchanged when editing", () => {
+    expect(rowChanges([{ field: "", value: "" }], "*:*", false)).toEqual([{ op: "set", field: "", key: "*:*", value: "" }]);
+    expect(rowChanges([{ field: "", value: "" }, { field: "api-key", value: "k1" }], "*:*", false)).toEqual([{ op: "set", field: "api-key", key: "*:*", value: "k1" }]);
+    expect(rowChanges([{ field: "", value: "" }, { field: "", value: "d1" }], "*:*", false)).toEqual([{ op: "set", field: "", key: "*:*", value: "d1" }]);
+    expect(rowChanges([{ field: "token", value: "" }, { field: "user", value: "u" }], "*:*", true)).toEqual([{ op: "set", field: "user", key: "*:*", value: "u" }]);
+  });
+
+  it("refuses two rows with the same field in any case, and an invalid row, before anything is written", async () => {
+    expect(() => rowChanges([{ field: "api-key", value: "a" }, { field: "API-Key", value: "b" }], "*:*", false)).toThrow("appears in two rows");
+    expect(() => rowChanges([{ field: "", value: "a" }, { field: "", value: "b" }], "*:*", false)).toThrow("appears in two rows");
+    const u = await unlockedVault();
+    const { host, rows: pushed } = fakeServer();
+    await expect(write(host, u, "dhl", rowChanges([{ field: "api-key", value: "a" }, { field: "Bad Field", value: "b" }], "*:*", false))).rejects.toThrow();
+    expect(pushed).toEqual([]);
   });
 });
 

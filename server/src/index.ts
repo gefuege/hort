@@ -1,6 +1,6 @@
 import type { AuthenticationResponseJSON } from "@simplewebauthn/server";
 import npmPackage from "../../npm/package.json";
-import { SESSION_COOKIE, SHARE_GONE, type RelyingParty, type SessionAuth } from "./account";
+import { MAX_ENVELOPE_BYTES, SESSION_COOKIE, SHARE_GONE, type RelyingParty, type SessionAuth } from "./account";
 import { issueChallenge } from "./challenge";
 import { fail, json } from "./http";
 import { rateLimit } from "./rate-limiter";
@@ -15,9 +15,11 @@ export { Share } from "./share";
 // Contract §6.2 and §6.6.
 const MAX_CLOCK_SKEW_SECONDS = 300;
 const MAX_BODY_BYTES = 64 * 1024;
-// A fulfil carries a set and a describe revision, each up to a 64 KiB
-// envelope, base64-encoded in JSON.
-const MAX_FULFILL_BODY_BYTES = 256 * 1024;
+// A fulfil carries a set revision per requested field (at most 16) and a
+// describe revision, each up to a 64 KiB envelope, base64-encoded in JSON with
+// its ID (64 bytes cover the ID and the JSON around each entry and the list).
+const MAX_FULFILL_BODY_BYTES = (16 + 1) * (Math.ceil(MAX_ENVELOPE_BYTES / 3) * 4 + 64) + 64;
+const FULFILL_TOO_LARGE = `request body exceeds ${Math.floor(MAX_FULFILL_BODY_BYTES / 1024)} KiB`;
 // A push carries up to 500 envelopes of up to 64 KiB each; the client splits
 // larger batches by this size (contract §6.6).
 const MAX_PUSH_BODY_BYTES = 4 * 1024 * 1024;
@@ -264,9 +266,9 @@ async function route(request: Request, env: Bindings): Promise<Response> {
       if (request.headers.has("Hort-Signature")) return fail(401, "fulfilling a request requires a passkey session");
       const session = await readSession(request, url, true);
       if (session instanceof Response) return session;
-      if (Number(request.headers.get("Content-Length") ?? 0) > MAX_FULFILL_BODY_BYTES) return fail(413, "request body exceeds 256 KiB");
+      if (Number(request.headers.get("Content-Length") ?? 0) > MAX_FULFILL_BODY_BYTES) return fail(413, FULFILL_TOO_LARGE);
       const body = await readBody(request, MAX_FULFILL_BODY_BYTES);
-      if (!body) return fail(413, "request body exceeds 256 KiB");
+      if (!body) return fail(413, FULFILL_TOO_LARGE);
       return accountStub(env, session.accountId).fulfillRequest(session, m[1], body);
     }
     const req = await deviceOrSession(request, url, true);

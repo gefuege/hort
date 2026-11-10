@@ -266,12 +266,32 @@ func OpenRevision(rk, accountID []byte, id string, envelope []byte) (string, Rev
 }
 
 // RequestMeta is the encrypted metadata of an agent request (§7.2 step 3).
+// Fields lists the requested fields; "" is the default field.
 type RequestMeta struct {
-	Name        string `json:"name"`
-	Description string `json:"description"`
-	Field       string `json:"field"`
-	Env         string `json:"env"`
-	Context     string `json:"context"`
+	Name        string   `json:"name"`
+	Description string   `json:"description"`
+	Fields      []string `json:"fields"`
+	Env         string   `json:"env"`
+	Context     string   `json:"context"`
+}
+
+// MaxRequestFields is the most fields one request asks for.
+const MaxRequestFields = 16
+
+// ValidateRequestFields checks that a request asks for 1 to MaxRequestFields
+// fields that differ by more than letter case.
+func ValidateRequestFields(fields []string) error {
+	if len(fields) < 1 || len(fields) > MaxRequestFields {
+		return fmt.Errorf("a request asks for 1 to %d fields", MaxRequestFields)
+	}
+	seen := map[string]bool{}
+	for _, f := range fields {
+		if seen[FoldKey(f)] {
+			return fmt.Errorf("field %q appears twice", f)
+		}
+		seen[FoldKey(f)] = true
+	}
+	return nil
 }
 
 // requestMetaAAD uses its own tag, apart from the request signature's
@@ -311,11 +331,34 @@ func OpenRequestMeta(rk, accountID []byte, requestID string, metaCT []byte) (Req
 	if err != nil {
 		return RequestMeta{}, err
 	}
-	var m RequestMeta
-	if err := strictJSON(plaintext, &m); err != nil {
+	// A request from an older Hort names one field as "field" instead of "fields".
+	var w struct {
+		Name        string   `json:"name"`
+		Description string   `json:"description"`
+		Fields      []string `json:"fields,omitempty"`
+		Field       string   `json:"field,omitempty"`
+		Env         string   `json:"env"`
+		Context     string   `json:"context"`
+	}
+	if err := strictJSON(plaintext, &w); err != nil {
 		return RequestMeta{}, fmt.Errorf("request %s: %w", requestID, err)
 	}
-	return m, nil
+	// strictJSON refuses null members; presence tells the two forms apart, as "" is a valid field.
+	var members map[string]json.RawMessage
+	if err := json.Unmarshal(plaintext, &members); err != nil {
+		return RequestMeta{}, fmt.Errorf("request %s: %w", requestID, err)
+	}
+	_, single := members["field"]
+	if _, list := members["fields"]; single == list {
+		return RequestMeta{}, fmt.Errorf("request %s: meta needs either field or fields", requestID)
+	}
+	if single {
+		w.Fields = []string{w.Field}
+	}
+	if err := ValidateRequestFields(w.Fields); err != nil {
+		return RequestMeta{}, fmt.Errorf("request %s: %w", requestID, err)
+	}
+	return RequestMeta{Name: w.Name, Description: w.Description, Fields: w.Fields, Env: w.Env, Context: w.Context}, nil
 }
 
 // RequestMessage is the byte string a device key or AK signs for Hort-Signature

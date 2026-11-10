@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -43,22 +44,22 @@ type Deps struct {
 
 // Input is the tool's arguments (§7.1).
 type Input struct {
-	Name        string `json:"name"`
-	Description string `json:"description"`
-	Field       string `json:"field,omitempty"`
-	Env         string `json:"env,omitempty"`
-	Context     string `json:"context,omitempty"`
+	Name        string   `json:"name"`
+	Description string   `json:"description"`
+	Fields      []string `json:"fields,omitempty"`
+	Env         string   `json:"env,omitempty"`
+	Context     string   `json:"context,omitempty"`
 }
 
 // Output is the tool's result (§7.1): name and status, never a value.
 type Output struct {
-	RequestID string `json:"request_id"`
-	Status    string `json:"status"`
-	Name      string `json:"name"`
-	Field     string `json:"field,omitempty"`
-	Env       string `json:"env,omitempty"`
-	Context   string `json:"context,omitempty"`
-	URL       string `json:"url,omitempty"`
+	RequestID string   `json:"request_id"`
+	Status    string   `json:"status"`
+	Name      string   `json:"name"`
+	Fields    []string `json:"fields,omitempty"`
+	Env       string   `json:"env,omitempty"`
+	Context   string   `json:"context,omitempty"`
+	URL       string   `json:"url,omitempty"`
 }
 
 var toolSchemas = struct{ in, out map[string]any }{
@@ -67,11 +68,12 @@ var toolSchemas = struct{ in, out map[string]any }{
 		"properties": map[string]any{
 			"name":        map[string]any{"type": "string", "description": "Secret name in Hort"},
 			"description": map[string]any{"type": "string", "description": "What the secret is for"},
-			"field":       map[string]any{"type": "string", "description": "Named field, empty for the default field"},
+			"fields":      map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Up to 16 named fields of this secret, for example api-key and api-secret; omit for the default field"},
 			"env":         map[string]any{"type": "string", "description": "Environment, for example prod"},
 			"context":     map[string]any{"type": "string", "description": "Context, for example a tenant"},
 		},
-		"required": []string{"name", "description"},
+		"required":             []string{"name", "description"},
+		"additionalProperties": false,
 	},
 	out: map[string]any{
 		"type": "object",
@@ -79,7 +81,7 @@ var toolSchemas = struct{ in, out map[string]any }{
 			"request_id": map[string]any{"type": "string"},
 			"status":     map[string]any{"enum": []string{"stored", "pending", "declined", "expired", "conflict"}},
 			"name":       map[string]any{"type": "string"},
-			"field":      map[string]any{"type": "string"},
+			"fields":     map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
 			"env":        map[string]any{"type": "string"},
 			"context":    map[string]any{"type": "string"},
 			"url":        map[string]any{"type": "string"},
@@ -97,12 +99,19 @@ type server struct {
 	open map[tuple]string
 }
 
-// tuple is a request's name, field and lookup key, each folded by
-// vault.FoldKey: tuples that differ only in case are the same request.
-type tuple struct{ name, field, key string }
+// tuple is a request's name, set of fields and lookup key, each folded by
+// vault.FoldKey: tuples that differ only in case or field order are the same
+// request. fields joins the sorted folded fields with "\n", which the field
+// rule excludes.
+type tuple struct{ name, fields, key string }
 
-func makeTuple(name, field, env, context string) tuple {
-	return tuple{vault.FoldKey(name), vault.FoldKey(field), vault.FoldKey(vault.MakeLookupKey(env, context))}
+func makeTuple(name string, fields []string, env, context string) tuple {
+	folded := make([]string, len(fields))
+	for i, f := range fields {
+		folded[i] = vault.FoldKey(f)
+	}
+	sort.Strings(folded)
+	return tuple{vault.FoldKey(name), strings.Join(folded, "\n"), vault.FoldKey(vault.MakeLookupKey(env, context))}
 }
 
 // New returns the MCP server with its one tool.
@@ -116,7 +125,7 @@ func New(deps Deps) *sdk.Server {
 	})
 	sdk.AddTool(srv, &sdk.Tool{
 		Name:         "request_secret",
-		Description:  "Ask the user to enter a secret in Hort without the value entering the chat. Use this instead of asking for a secret in chat. Returns only name and status; read the value later with `hort get`.",
+		Description:  "Ask the user to enter a secret in Hort without the value entering the chat. Use this instead of asking for a secret in chat. Ask for related parts of one secret, such as api-key and api-secret, in one request with fields. Returns only name and status; read the value later with `hort get`.",
 		InputSchema:  toolSchemas.in,
 		OutputSchema: toolSchemas.out,
 	}, s.requestSecret)
@@ -128,13 +137,19 @@ func Serve(ctx context.Context, deps Deps) error {
 	return New(deps).Run(ctx, &sdk.StdioTransport{})
 }
 
+// validate checks the arguments; in.Fields is already normalized to at least one entry.
 func validate(in Input) error {
 	if in.Description == "" {
 		return errors.New("description must not be empty")
 	}
 	key := vault.MakeLookupKey(in.Env, in.Context)
-	for _, err := range []error{vault.ValidateName(in.Name), vault.ValidateField(in.Field), vault.ValidateKey(key)} {
+	for _, err := range []error{vault.ValidateName(in.Name), vault.ValidateRequestFields(in.Fields), vault.ValidateKey(key)} {
 		if err != nil {
+			return err
+		}
+	}
+	for _, f := range in.Fields {
+		if err := vault.ValidateField(f); err != nil {
 			return err
 		}
 	}
@@ -142,6 +157,10 @@ func validate(in Input) error {
 }
 
 func (s *server) requestSecret(ctx context.Context, req *sdk.CallToolRequest, in Input) (*sdk.CallToolResult, Output, error) {
+	out := Output{Status: "pending", Name: in.Name, Fields: in.Fields, Env: in.Env, Context: in.Context}
+	if len(in.Fields) == 0 {
+		in.Fields = []string{""}
+	}
 	if err := validate(in); err != nil {
 		return nil, Output{}, err
 	}
@@ -161,8 +180,7 @@ func (s *server) requestSecret(ctx context.Context, req *sdk.CallToolRequest, in
 		return nil, Output{}, fmt.Errorf("this vault is not registered on %s yet; run `hort sync`", acct.Server)
 	}
 	c := api.Client{Server: acct.Server, AccountID: acct.ID, Device: data.Device.ID, Key: data.Device.Key()}
-	key := makeTuple(in.Name, in.Field, in.Env, in.Context)
-	out := Output{Status: "pending", Name: in.Name, Field: in.Field, Env: in.Env, Context: in.Context}
+	key := makeTuple(in.Name, in.Fields, in.Env, in.Context)
 
 	id, state, err := s.findOrCreate(c, acct, in, key)
 	if err != nil {
@@ -220,7 +238,7 @@ func (s *server) findOrCreate(c api.Client, acct vault.Account, in Input, key tu
 	}
 	for _, p := range pending {
 		m, err := vault.OpenRequestMeta(acct.Keys.RK, acct.ID, p.ID, p.MetaCT)
-		if err == nil && makeTuple(m.Name, m.Field, m.Env, m.Context) == key {
+		if err == nil && makeTuple(m.Name, m.Fields, m.Env, m.Context) == key {
 			s.open[key] = p.ID
 			return p.ID, api.RequestPending, nil
 		}
@@ -230,7 +248,7 @@ func (s *server) findOrCreate(c api.Client, acct vault.Account, in Input, key tu
 		return "", "", err
 	}
 	id := hex.EncodeToString(raw[:])
-	meta, err := vault.SealRequestMeta(acct.Keys.RK, acct.ID, id, vault.RequestMeta{Name: in.Name, Description: in.Description, Field: in.Field, Env: in.Env, Context: in.Context})
+	meta, err := vault.SealRequestMeta(acct.Keys.RK, acct.ID, id, vault.RequestMeta{Name: in.Name, Description: in.Description, Fields: in.Fields, Env: in.Env, Context: in.Context})
 	if err != nil {
 		return "", "", err
 	}
@@ -318,7 +336,7 @@ func (s *server) finish(ctx context.Context, ss *sdk.ServerSession, urlMode bool
 	if err != nil {
 		return nil, out, err
 	}
-	status, err := verify(data, st.RevisionIDs, key)
+	status, err := verify(data, st.RevisionIDs, in.Fields, key)
 	if err != nil {
 		// A mismatch will not heal on a repeat call; do not keep the tuple blocked.
 		s.forget(key)
@@ -335,36 +353,42 @@ func (s *server) finish(ctx context.Context, ss *sdk.ServerSession, urlMode bool
 	return nil, out, nil
 }
 
-// verify checks that every revision of the request is merged, that one of
-// them sets the tuple and that the reduction resolves the tuple to that
-// value. A lost reduction is a conflict, anything else a mismatch.
-func verify(data *vault.VaultData, ids []string, key tuple) (string, error) {
+// verify checks that every revision of the request is merged, that for each
+// requested field one of them sets that field at the tuple's key and that the
+// reduction resolves each to its value. A lost reduction is a conflict,
+// anything else a mismatch.
+func verify(data *vault.VaultData, ids, fields []string, key tuple) (string, error) {
 	known := map[string]vault.Revision{}
 	for _, entry := range data.Secrets {
 		for _, r := range entry.Revisions {
 			known[r.ID] = r
 		}
 	}
-	var set *vault.Revision
+	sets := map[string]vault.Revision{} // the first set per folded field
 	for _, id := range ids {
 		r, ok := known[id]
 		if !ok {
 			return "", errors.New(errMismatch)
 		}
-		if r.Op == "set" && vault.FoldKey(r.Field) == key.field && vault.FoldKey(r.Key) == key.key && set == nil {
-			r := r
-			set = &r
+		field := vault.FoldKey(r.Field)
+		if _, seen := sets[field]; r.Op == "set" && vault.FoldKey(r.Key) == key.key && !seen {
+			sets[field] = r
 		}
 	}
 	_, entry, _ := data.Entry(key.name)
-	if set == nil || !holdsRevision(entry, set.ID) {
-		return "", errors.New(errMismatch)
-	}
 	values, _, _ := entry.Current()
-	if v, ok := values[entry.Spelling(vault.ValueKey{Field: key.field, Key: key.key})]; ok && v == set.Value {
-		return "stored", nil
+	status := "stored"
+	for _, f := range fields {
+		field := vault.FoldKey(f)
+		set, ok := sets[field]
+		if !ok || !holdsRevision(entry, set.ID) {
+			return "", errors.New(errMismatch)
+		}
+		if v, ok := values[entry.Spelling(vault.ValueKey{Field: field, Key: key.key})]; !ok || v != set.Value {
+			status = "conflict"
+		}
 	}
-	return "conflict", nil
+	return status, nil
 }
 
 func holdsRevision(e vault.Entry, id string) bool {

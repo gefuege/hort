@@ -481,6 +481,21 @@ describe("requests", () => {
     expect((await declineRequest(f, rid())).status).toBe(404);
   });
 
+  it("accepts a fulfil of 16 sets and a describe at the envelope limit, and refuses a larger body without writing", async () => {
+    const f = await created(await randomFixture());
+    const a = { id: rid(), meta_ct: metaCt() };
+    await createRequest(f, a);
+    const big = () => ({ id: rid(), ct: b64Encode(random(64 * 1024)) });
+    const over = { revisions: Array.from({ length: 18 }, big) };
+    const refused = await fulfill(f, a.id, over);
+    expect(refused.status).toBe(413);
+    expect(await info(f, a.id)).toMatchObject({ status: "pending", revision_ids: [] });
+    const full = { revisions: Array.from({ length: 17 }, big) };
+    expect(JSON.stringify(full).length).toBeGreaterThan(256 * 1024);
+    expect((await fulfill(f, a.id, full)).status).toBe(200);
+    expect(await info(f, a.id)).toMatchObject({ status: "fulfilled", revision_ids: full.revisions.map((r) => r.id) });
+  });
+
   it("fulfills atomically: revisions, status and revision_ids together, with dedupe", async () => {
     const f = await created(await randomFixture());
     const a = { id: rid(), meta_ct: metaCt() };
