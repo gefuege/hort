@@ -139,6 +139,17 @@ async function route(request: Request, env: Bindings): Promise<Response> {
   const method = request.method;
   let m: RegExpMatchArray | null;
 
+  // The landing page. Typed or opened from a bookmark (Sec-Fetch-Site: none)
+  // in a browser with a session, hort.pm goes straight to the vault; a link
+  // inside the site still shows the landing page.
+  if (path === "/") {
+    const cookie = (request.headers.get("Cookie") ?? "").split(/;\s*/).find((c) => c.startsWith(`${SESSION_COOKIE}=`));
+    if (method === "GET" && request.headers.get("Sec-Fetch-Site") === "none" && cookie && cookie.length > SESSION_COOKIE.length + 1) {
+      return new Response(null, { status: 302, headers: { Location: "/vault", "Cache-Control": "no-store" } });
+    }
+    return env.ASSETS.fetch(request);
+  }
+
   if (path === "/api/v1/accounts") {
     if (method !== "POST") return fail(405, "method not allowed");
     if (env.REGISTRATION_TOKEN) {

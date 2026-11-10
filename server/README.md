@@ -93,9 +93,9 @@ The CLI speaks https only; the test puts a local TLS proxy in front of the Worke
 
 ## Web app and landing page
 
-The same Worker serves hort.pm. `wrangler.jsonc` sets `run_worker_first: ["/api/*"]`; every other path is a static asset from `public/`:
+The same Worker serves hort.pm. `wrangler.jsonc` sets `run_worker_first: ["/api/*", "/"]`; every other path is a static asset from `public/`. On `/` the Worker sends a browser with a session cookie to `/vault` when hort.pm was typed or opened from a bookmark (`Sec-Fetch-Site: none`); links inside the site and visits without a session get the landing page through the `ASSETS` binding.
 
-- `index.html`, `impressum.html`, `privacy.html`, `style.css`, `fonts/`, `img/`: the landing page and legal pages (design B · Phosphor, self-hosted fonts under OFL, no third-party requests).
+- `index.html`, `impressum.html`, `privacy.html`, `style.css`, `fonts/`, `img/`: the landing page and legal pages (design B · Phosphor, self-hosted fonts under OFL, no third-party requests). `home.js` switches the install terminal between macOS, Windows, Linux and npm and preselects the visitor's OS.
 - `console.html` is the one page of the web app and loads `js/app.js`, the bundle of `web/` (see below). `_redirects` serves it for `/vault`, `/devices`, `/access` and `/r/*` and sends `/login` to `/vault` and `/recover` to `/access`.
 - `_headers` carries the security headers for assets. Cloudflare does not apply that file to Worker responses, so `src/entry.ts` sets the same list on `/api/*`; `test/web.test.ts` keeps both identical. The CSP allows `script-src 'self' 'wasm-unsafe-eval'` for the Argon2id WASM and loads nothing from another origin.
 

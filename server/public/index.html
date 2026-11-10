@@ -11,6 +11,7 @@
 <link rel="preload" href="/fonts/geist-sans-latin-600-normal.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="/style.css">
 <script src="/theme.js"></script>
+<script src="/home.js" defer></script>
 </head>
 <body>
 <nav class="m-nav">
@@ -24,9 +25,11 @@
     <p class="eyebrow">Open source · Keys stay on your devices</p>
     <div class="hero-mark" aria-hidden="true"><span class="chev">&lt;</span><img src="/img/logo.png" alt="" width="64" height="64"><span class="chev">&gt;</span></div>
     <h1>Hort – secrets for you and your agents.<span class="cur" aria-hidden="true"></span></h1>
+    <div class="sheet hero-copy">
     <p class="lede">One encrypted vault for your API keys, tokens and passwords. You use it. Your coding agents use it. Your keys never leave your devices.</p>
     <div class="ctas"><a class="btn btn-primary" href="#install">Install the CLI →</a><a class="btn btn-ghost" href="https://github.com/gefuege/hort">View on GitHub</a></div>
     <p class="hero-note">Hort 1.0 is here: CLI, encrypted sync and the web app. The CLI works without an account. Registration on hort.pm opens soon; until then it needs an invitation token.</p>
+    </div>
   </div>
   <div class="win term hero-term">
     <div class="win-bar"><i></i><i></i><i></i><span>zsh — ~/shop</span></div>
@@ -42,7 +45,7 @@
 <div class="section wrap" id="agents">
   <p class="sec-tag">// agents</p>
   <h2 class="sec-h">Your agent asks. You answer. It never sees the secret.</h2>
-  <p class="sec-intro">Agents need credentials. Today you paste them into the chat, the agent forgets, and next session it asks again. Hort gives your agents one place to look, and one polite way to ask for what's missing.</p>
+  <p class="sheet sec-intro">Agents need credentials. Today you paste them into the chat, the agent forgets, and next session it asks again. Hort gives your agents one place to look, and one polite way to ask for what's missing.</p>
   <div class="cards">
     <div class="card"><span class="num">[01]</span><h3>Discover</h3><p>The agent runs <code>hort list</code> and sees what exists: names, descriptions, environments. No values.</p></div>
     <div class="card"><span class="num">[02]</span><h3>Read</h3><p><code>hort get &lt;name&gt;</code> prints just the value on stdout. Ready for <code>$(...)</code> and pipes. Locked vault? Exit code 2, and the agent asks you to unlock.</p></div>
@@ -59,16 +62,16 @@
 <span class="t-p">$</span> export STRIPE_KEY=$(hort get stripe-key --env prod)
 
 <span class="t-m"># Different value per customer</span>
-<span class="t-p">$</span> hort get tenant-id --env prod --context acme</pre></div>
-      <p class="caption">Fallback built in: <code>env+context → env+* → *+*</code>. Specific wins, the baseline catches the rest.</p>
+<span class="t-p">$</span> hort get tenant-id --env prod --context acme</pre>
+      <p class="win-foot">Fallback built in: <code>env+context → env+* → *+*</code>. Specific wins, the baseline catches the rest.</p></div>
     </div>
     <div class="example">
       <p class="label soon">Ask</p>
       <div class="win term"><pre tabindex="0"><span class="t-a">agent</span>  › I need the Stripe client ID for this integration.
 <span class="t-p">hort</span>   › Requested "stripe / client_id". Waiting for you on hort.pm …
 <span class="t-v">you</span>    › <span class="t-m">(open the link, enter the value, done)</span>
-<span class="t-a">agent</span>  › $ hort get stripe client_id</pre></div>
-      <p class="caption">The value goes from your browser into your vault. The chat only ever sees the name.</p>
+<span class="t-a">agent</span>  › $ hort get stripe client_id</pre>
+      <p class="win-foot">The value goes from your browser into your vault. The chat only ever sees the name.</p></div>
     </div>
   </div>
   <p class="aside-note">Using Claude Code? Add the MCP server once with <code>claude mcp add hort -- hort mcp</code>. Then your agent can request a secret by name; you type the value on hort.pm, never into the chat.</p>
@@ -77,7 +80,7 @@
 <div class="section wrap" id="features">
   <p class="sec-tag">// features</p>
   <h2 class="sec-h">Small tool. Sharp edges where they belong.</h2>
-  <ul class="feat">
+  <ul class="sheet feat">
     <li><strong>One encrypted vault.</strong><span>AES-256-GCM, key derived with Argon2id. One file on your disk.</span></li>
     <li><strong>Built for agents.</strong><span><code>hort --help</code> teaches an agent the whole interface in one call. Plain values on stdout, errors on stderr, <code>--json</code> when it wants structure.</span></li>
     <li><strong>Environments and contexts.</strong><span>One name, many values: dev, prod, per tenant or customer. Lookups fall back to the baseline.</span></li>
@@ -96,9 +99,9 @@
 <div class="section security wrap" id="security">
   <p class="sec-tag">// security</p>
   <h2 class="sec-h">Where your secrets live, honestly.</h2>
-  <p class="sec-intro">A secret manager earns trust by saying what it protects and what it doesn't. Here's ours.</p>
+  <p class="sheet sec-intro">A secret manager earns trust by saying what it protects and what it doesn't. Here's ours.</p>
   <div class="cols">
-    <div>
+    <div class="sheet">
       <h3>What Hort protects</h3>
       <ul>
         <li>Keys and plaintext exist only on your devices, and in your browser while hort.pm is unlocked.</li>
@@ -107,7 +110,7 @@
         <li>Agents get values through the CLI on your machine. With the request flow, they never get values you type for them.</li>
       </ul>
     </div>
-    <div>
+    <div class="sheet">
       <h3>What Hort does not protect against</h3>
       <ul>
         <li><strong>Someone who controls your machine.</strong> Root or malware on an unlocked device can read what you can read. That's true for every local secret manager.</li>
@@ -116,33 +119,47 @@
       </ul>
     </div>
   </div>
-  <p class="today-note"><strong>Today, specifically:</strong> The sync server holds only encrypted vault data. Opening it takes your Secret Key and your passphrase, and neither ever leaves your devices.</p>
+  <p class="aside-note today-note"><strong>Today, specifically:</strong> The sync server holds only encrypted vault data. Opening it takes your Secret Key and your passphrase, and neither ever leaves your devices.</p>
 </div>
 
 <div class="section wrap" id="install">
   <p class="sec-tag">// install</p>
   <h2 class="sec-h">Install in one line.</h2>
-  <div class="install-grid">
-    <div><h3>macOS (Homebrew)</h3><div class="win term"><pre tabindex="0">brew install sebastian-breitzke/tap/hort &amp;&amp; hort init</pre></div></div>
-    <div><h3>npm (any OS)</h3><div class="win term"><pre tabindex="0">npm install -g @s16e/hort &amp;&amp; hort init</pre></div></div>
-    <div><h3>Windows (Scoop)</h3><div class="win term"><pre tabindex="0">scoop bucket add sebastian-breitzke https://github.com/sebastian-breitzke/scoop-bucket
-scoop install hort
-hort init</pre></div></div>
-    <div><h3>Linux and Windows binaries</h3><p class="after-line"><a href="https://github.com/gefuege/hort/releases">GitHub Releases</a></p></div>
+  <div class="win term install" id="install-term">
+    <div class="win-bar"><i></i><i></i><i></i>
+      <div class="tabs" role="tablist" aria-label="Operating system">
+        <button type="button" class="tab" role="tab" id="os-macos" aria-controls="os-macos-panel" aria-selected="true">macOS</button>
+        <button type="button" class="tab" role="tab" id="os-windows" aria-controls="os-windows-panel" aria-selected="false" tabindex="-1">Windows</button>
+        <button type="button" class="tab" role="tab" id="os-linux" aria-controls="os-linux-panel" aria-selected="false" tabindex="-1">Linux</button>
+        <button type="button" class="tab" role="tab" id="os-npm" aria-controls="os-npm-panel" aria-selected="false" tabindex="-1">npm</button>
+      </div>
+    </div>
+<pre role="tabpanel" id="os-macos-panel" aria-labelledby="os-macos" tabindex="0"><span class="t-m"># Homebrew</span>
+<span class="t-p">$</span> brew install sebastian-breitzke/tap/hort &amp;&amp; hort init</pre>
+<pre role="tabpanel" id="os-windows-panel" aria-labelledby="os-windows" tabindex="0" hidden><span class="t-m"># Scoop</span>
+<span class="t-p">&gt;</span> scoop bucket add sebastian-breitzke https://github.com/sebastian-breitzke/scoop-bucket
+<span class="t-p">&gt;</span> scoop install hort
+<span class="t-p">&gt;</span> hort init</pre>
+<pre role="tabpanel" id="os-linux-panel" aria-labelledby="os-linux" tabindex="0" hidden><span class="t-m"># npm, or a binary from github.com/gefuege/hort/releases</span>
+<span class="t-p">$</span> npm install -g @s16e/hort &amp;&amp; hort init</pre>
+<pre role="tabpanel" id="os-npm-panel" aria-labelledby="os-npm" tabindex="0" hidden><span class="t-m"># any OS with Node.js</span>
+<span class="t-p">$</span> npm install -g @s16e/hort &amp;&amp; hort init</pre>
+<pre class="after" tabindex="0"><span class="t-m"># after install: store a secret, read it back</span>
+<span class="t-p">$</span> printf '%s' "$KEY" | hort set openai-key --value-stdin --description "OpenAI API key"
+<span class="t-p">$</span> hort get openai-key</pre>
+    <p class="win-foot">Set a passphrase during <code>hort init</code>. That's it. Then tell your agent to run <code>hort --help</code>. Binaries for every OS: <a href="https://github.com/gefuege/hort/releases">GitHub Releases</a>.</p>
   </div>
-  <h3 class="sub-h after">After install</h3>
-  <div class="win term"><pre tabindex="0">printf '%s' "$KEY" | hort set openai-key --value-stdin --description "OpenAI API key"
-hort get openai-key</pre></div>
-  <p class="after-line">Set a passphrase during <code>hort init</code>. That's it. Then tell your agent to run <code>hort --help</code>.</p>
 </div>
 
 <div class="section about wrap" id="open-source">
   <p class="sec-tag">// open source</p>
   <h2 class="sec-h">Yours to read, run and keep.</h2>
+  <div class="sheet">
   <p>Hort is open source under the MIT license. Read the code, audit the crypto, send a pull request.</p>
   <p>The CLI needs no server at all. For sync and the web app, use the hosted service at hort.pm or <a href="https://github.com/gefuege/hort/blob/main/docs/self-hosting.md">run the backend yourself</a>.</p>
   <h3 class="sub-h">Why "Hort"?</h3>
   <p class="why">"Hort" is German for a safe place, and for a treasure hoard, like the Nibelungenhort. The logo is a key in a nest: your secrets, kept safe, close to home.</p>
+  </div>
   <div class="ctas"><a class="btn btn-primary" href="https://github.com/gefuege/hort">Star or fork on GitHub →</a></div>
 </div>
 </main>
