@@ -6,7 +6,7 @@
 import { b64Decode, b64Encode, b64urlDecode } from "../src/wire";
 import { notALogin } from "./not-a-login";
 import { deriveShareKeys, formatShareLink, normalizeShareName, openShare, SHARE_LINK_KEY_BYTES, type SharedSecret } from "./share-core";
-import { current, lookupKey } from "./vault-core";
+import { current, entryOf, lookupKey } from "./vault-core";
 import { CLIPBOARD_S, copy, pull, REVEAL_S, SignInRequired, write, type Change, type Unlocked } from "./vault-view";
 
 type Child = Node | string | null | false | undefined;
@@ -55,11 +55,13 @@ export async function deleteShared(call: Send, shareId: string, token: Uint8Arra
 }
 
 // Saves the shared fields as default values (any env and context) plus the
-// description under `name`. An existing secret of that name is refused;
+// description under `name`. An existing secret of that name, in any letter
+// case, is refused;
 // nothing is overwritten or merged.
 export async function saveShared(host: Pick<Host, "api" | "ok">, u: Unlocked, name: string, s: SharedSecret): Promise<void> {
   const v = await pull(host, u);
-  if (current(v.entries.get(name) ?? []).visible) throw new Error(`Your vault has a secret named ${name} already. Pick another name.`);
+  const existing = entryOf(v.entries, name);
+  if (current(existing.revisions).visible) throw new Error(`Your vault has a secret named ${existing.name} already. Pick another name.`);
   const changes: Change[] = s.fields.map((f) => ({ op: "set", field: f.field, key: lookupKey("", ""), value: f.value }));
   if (s.description !== "") changes.push({ op: "describe", field: "", key: "", value: s.description });
   await write(host, u, name, changes);

@@ -2,7 +2,7 @@
 
 Shared vectors that bind the Go CLI, the Cloudflare Worker and the browser to
 the same bytes. The Go reference test generates them from production code in
-`internal/vault` (`keys.go`, `secretkey.go`, `revisions.go`):
+`internal/vault` (`keys.go`, `secretkey.go`, `revisions.go`, `vault.go`):
 
 ```bash
 go test ./internal/vault/ -run TestVectors -update   # regenerate
@@ -40,6 +40,7 @@ Never edit these files by hand. A changed byte means a changed contract.
 | `request.json` | §7.2 step 3, §6.2 | `meta_ct` = nonce(12) ‖ AES-256-GCM(RK, meta JSON, aad = canon(`"hort/v4/req-meta\n"`, account_id, request id bytes)). Signature message = canon(`"hort/v4/req\n"`, account_id, device field, METHOD, PATH_WITH_QUERY, u64 timestamp, SHA-256(exact body bytes)); one device-key POST with a body, one AK GET with a query and an empty body. |
 | `secret-key.json` | §2.5, §2.6 | Secret Keys (zero, all 0xff, all symbols `1`, fixture) as data symbols, check symbol and display form; parse variants (lowercase, spaces, no separators, without `H4`, `O` for `0`, `I`/`l` for `1`); mistyped cases (data symbol, check symbol, missing symbol, `U`); account IDs. |
 | `share.json` | share by link | `normalize`: recipient names to their one form: NFKC, lowercase per code point (U+0130 → `i` U+0307), `ς` → `σ`, `ß` and `ẞ` → `ss`, NFKC, runs of Unicode White_Space collapsed to one space and trimmed; cases cover umlauts (NFC and NFD), ß, İ, ı, Σ/ς, whitespace, fullwidth letters and a whitespace-only name (empty, refused by key derivation). `keys`: `A` = Argon2id(UTF-8 normalized name, salt = share ID bytes, t, m, p, 32); `K` = HKDF(A XOR link key, share ID bytes, `hort/v4/share`); `enc` = HKDF(K, share ID bytes, `hort/v4/share-enc`); `token` = HKDF(K, share ID bytes, `hort/v4/share-token`); `token_hash` = SHA-256(token). One vector at production parameters, two at test parameters (two spellings of one name, same keys). `ct`: nonce(12) ‖ AES-256-GCM(enc, JSON `{name, description, fields: [{field, value}]}`, aad = canon(`"hort/v4/share-ct\n"`, share ID bytes)). `meta`: nonce(12) ‖ AES-256-GCM(RK, JSON `{name, recipient, fields: [field]}`, aad = canon(`"hort/v4/share-meta\n"`, account_id, share ID bytes)). `link`: valid and refused share links. |
+| `fold.json` | case-insensitive keys | `fold`: FoldKey, the identity of a name, field, env or context: lowercase per code point, U+0130 → `i` U+0307; cases cover ASCII, umlauts (NFC and NFD, not normalized), `ẞ` → `ß` (never `ss`), İ, ı, Σ and final ς (no final-sigma rule), a caseless script. `reduce`: revisions stored under names in several spellings with env and context in several spellings and arrival order not mattering; `entries` pins the grouped entries with their display name, history order, values in their display spelling (env and context spelled across fields and partner parts), description and visibility; `resolve` reads with name, field, env and context in other spellings; `spell` pins the name, field and lookup key a write lands on. |
 | `reduction.json` | §3.1–§3.3 | `reduce`: revisions in arrival order with the expected history order, values by (field, lookup key), description, visibility and read resolution. `append`: the Append stamp for a given `now`. |
 
 ## Binding encoding decisions
@@ -96,6 +97,16 @@ These points are open or ambiguous in the contract and are fixed here.
 14. **Recipient name:** the owner and the recipient derive keys from the normalized name (`normalize` above). Go uses `unicode.ToLower` per rune with U+0130 → `i` U+0307, which equals JavaScript's `toLowerCase` per code point; both use their own Unicode tables, so code points added in a later Unicode version than both know may differ. A name that normalizes to nothing derives no keys. Shares always use production Argon2id parameters.
 15. **Share plaintext:** `fields` holds at least one entry, field names unique, each `""` (the default field) or matching the field rule of §3.4; `name` is not empty. Readers reject anything else. `meta.recipient` is the name as the owner typed it, `meta.fields` the shared field names. Writers always write every member.
 16. **Access token on the wire:** the owner sends `token_hash` (standard base64) on create; the recipient sends the token in `Hort-Share-Token` (standard base64). The link key and the name never travel.
+
+17. **Case-insensitive keys:** names, fields, env and context compare by
+    FoldKey (`fold.json`); stored bytes keep their spelling and are never
+    rewritten. Names that fold alike form one entry, shown and written under
+    the name of its earliest revision in history order. Values whose field and
+    lookup key fold alike are one value; the newest value wins and older ones
+    stay in history. Field, env and context are each shown and written in the
+    spelling of the earliest `set` or `delete` of the entry whose part folds
+    alike, also across fields and partner parts. The share-name normalization uses FoldKey as its lowercase
+    step. Go and JavaScript use their own Unicode tables, as in point 14.
 
 ## Argon2id
 

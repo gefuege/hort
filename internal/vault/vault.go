@@ -10,6 +10,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"sort"
 )
 
 // LookupKey combines environment and context as "env:context".
@@ -83,11 +84,57 @@ func NewBody(deviceName string) (*VaultData, error) {
 	}, nil
 }
 
-// Append stamps r by the Append rule into entry name and queues it for push.
+// Entries groups the stored names by FoldKey: names that differ only in case
+// are one entry holding the revisions of all of them, shown under the name of
+// its earliest revision in history order. Stored names stay as they are.
+func (d *VaultData) Entries() map[string]Entry {
+	groups := make(map[string][]string)
+	for name := range d.Secrets {
+		groups[FoldKey(name)] = append(groups[FoldKey(name)], name)
+	}
+	out := make(map[string]Entry, len(groups))
+	for _, names := range groups {
+		if len(names) == 1 {
+			out[names[0]] = d.Secrets[names[0]]
+			continue
+		}
+		sort.Strings(names)
+		var merged Entry
+		owner := make(map[string]string)
+		for _, name := range names {
+			for _, r := range d.Secrets[name].Revisions {
+				merged.Revisions = append(merged.Revisions, r)
+				owner[r.ID] = name
+			}
+		}
+		spelling := names[0]
+		if history := merged.History(); len(history) > 0 {
+			spelling = owner[history[0].ID]
+		}
+		out[spelling] = merged
+	}
+	return out
+}
+
+// Entry returns the entry that name folds to and the name it is shown and
+// written under; for an unknown name, name itself and ok false.
+func (d *VaultData) Entry(name string) (spelling string, entry Entry, ok bool) {
+	for spelling, entry := range d.Entries() {
+		if FoldKey(spelling) == FoldKey(name) {
+			return spelling, entry, true
+		}
+	}
+	return name, Entry{}, false
+}
+
+// Append stamps r by the Append rule behind every revision of the entry name
+// folds to, stores it under that entry's spelling and queues it for push.
 func (d *VaultData) Append(name string, r Revision) {
-	entry := d.Secrets[name]
-	entry.Append(r)
-	d.Secrets[name] = entry
+	spelling, merged, _ := d.Entry(name)
+	merged.Append(r)
+	entry := d.Secrets[spelling]
+	entry.Revisions = append(entry.Revisions, merged.Revisions[len(merged.Revisions)-1])
+	d.Secrets[spelling] = entry
 	d.Sync.Pending = append(d.Sync.Pending, r.ID)
 }
 

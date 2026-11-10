@@ -98,6 +98,9 @@ KEYS:
 NAMES, FIELDS, ENVIRONMENTS AND CONTEXTS:
   An entry (name) holds values. A value belongs to a field, an environment and
   a context. Without <field> a command uses the default field.
+  Names, fields, environments and contexts ignore letter case: API-Key and
+  api-key are the same entry. A secret keeps the spelling it was first
+  written with.
 
   Rules for new writes:
     name     1-128 bytes, no whitespace or control characters, not starting with -

@@ -41,6 +41,7 @@ func TestVectors(t *testing.T) {
 		{"secret-key.json", secretKeyVectors},
 		{"reduction.json", reductionVectors},
 		{"share.json", shareVectors},
+		{"fold.json", foldVectors},
 	}
 	for _, f := range files {
 		t.Run(f.name, func(t *testing.T) {
@@ -655,6 +656,146 @@ func reductionVectors(t *testing.T) any {
 		Vectors: map[string]any{
 			"reduce": cases,
 			"append": appends,
+		},
+	}
+}
+
+func foldVectors(t *testing.T) any {
+	type foldVec struct {
+		Name   string `json:"name"`
+		Input  string `json:"input"`
+		Folded string `json:"folded"`
+	}
+	foldCase := func(name, input, want string) foldVec {
+		if got := FoldKey(input); got != want {
+			t.Fatalf("%s: FoldKey(%q) = %q, want %q", name, input, got, want)
+		}
+		if again := FoldKey(want); again != want {
+			t.Fatalf("%s: folding is not idempotent: %q", name, again)
+		}
+		return foldVec{name, input, want}
+	}
+	folds := []foldVec{
+		foldCase("ASCII", "DHL-Developer-Portal", "dhl-developer-portal"),
+		foldCase("digits and punctuation stay", "PROD_2.eu:*", "prod_2.eu:*"),
+		foldCase("umlauts", "ÄÖÜ-Prüfung", "äöü-prüfung"),
+		foldCase("decomposed umlaut stays decomposed", "U\u0308ber", "u\u0308ber"),
+		foldCase("capital sharp s becomes sharp s, never ss", "STRAẞE", "straße"),
+		foldCase("sharp s stays", "Straße", "straße"),
+		foldCase("dotted capital I", "İstanbul", "i\u0307stanbul"),
+		foldCase("dotless i stays", "ışık", "ışık"),
+		foldCase("capital sigma, no final-sigma rule", "ΟΔΥΣΣΕΥΣ", "οδυσσευσ"),
+		foldCase("final sigma stays", "Οδυσσευς", "οδυσσευς"),
+		foldCase("caseless script", "東京-ציון", "東京-ציון"),
+	}
+
+	type stored struct {
+		Name     string   `json:"name"`
+		Revision Revision `json:"revision"`
+	}
+	in := []stored{
+		{"DHL-Developer-Portal", vecRevision(1, "2026-01-01T00:00:00Z", "set", "", "TEST:*", "old test")},
+		{"dhl-developer-portal", vecRevision(2, "2026-01-01T00:00:01Z", "set", "", "test:*", "new test")},
+		{"DHL-DEVELOPER-PORTAL", vecRevision(3, "2026-01-01T00:00:02Z", "describe", "", "", "Developer portal")},
+		{"dhl-developer-portal", vecRevision(4, "2026-01-01T00:00:03Z", "set", "password", "Prod:Heine", "heine first")},
+		{"DHL-Developer-Portal", vecRevision(5, "2026-01-01T00:00:04Z", "set", "password", "PROD:HEINE", "heine newest")},
+		{"dhl-developer-portal", vecRevision(6, "2026-01-01T00:00:05Z", "set", "password", "prod:*", "prod")},
+		{"DHL-Developer-Portal", vecRevision(7, "2026-01-01T00:00:06Z", "delete", "password", "PROD:*", "")},
+		{"dhl-developer-portal", vecRevision(10, "2026-01-01T00:00:07Z", "set", "user", "test:HEINE", "env and context spelled from other values")},
+		{"Other", vecRevision(8, "2026-01-01T00:00:00Z", "set", "", "*:*", "newer")},
+		{"other", vecRevision(9, "", "set", "", "*:*", "imported without time")},
+	}
+	vaultOf := func(in []stored) *VaultData {
+		d := &VaultData{Secrets: map[string]Entry{}}
+		for _, s := range in {
+			e := d.Secrets[s.Name]
+			e.Revisions = append(e.Revisions, s.Revision)
+			d.Secrets[s.Name] = e
+		}
+		return d
+	}
+	type entryVec struct {
+		Name        string      `json:"name"`
+		HistoryIDs  []string    `json:"history_ids"`
+		Values      []valueJSON `json:"values"`
+		Description string      `json:"description"`
+		Visible     bool        `json:"visible"`
+	}
+	entriesOf := func(d *VaultData) []entryVec {
+		out := []entryVec{}
+		for name, e := range d.Entries() {
+			c := reduce(t, name, e.Revisions, nil)
+			out = append(out, entryVec{name, c.HistoryIDs, c.Values, c.Description, c.Visible})
+		}
+		sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+		return out
+	}
+	d := vaultOf(in)
+	entries := entriesOf(d)
+	reversed := append([]stored(nil), in...)
+	for i, j := 0, len(reversed)-1; i < j; i, j = i+1, j-1 {
+		reversed[i], reversed[j] = reversed[j], reversed[i]
+	}
+	if fmt.Sprint(entriesOf(vaultOf(reversed))) != fmt.Sprint(entries) {
+		t.Fatal("folded reduction depends on arrival order")
+	}
+
+	type resolveVec struct {
+		Name    string  `json:"name"`
+		Field   string  `json:"field"`
+		Env     string  `json:"env"`
+		Context string  `json:"context"`
+		Value   *string `json:"value"`
+	}
+	resolves := []resolveVec{}
+	for _, q := range [][4]string{
+		{"dhl-DEVELOPER-portal", "", "Test", ""},
+		{"DHL-Developer-Portal", "PASSWORD", "prod", "HEINE"},
+		{"dhl-developer-portal", "Password", "PROD", "other"},
+		{"OTHER", "", "", ""},
+		{"missing", "", "", ""},
+	} {
+		var out *string
+		_, e, _ := d.Entry(q[0])
+		if v, ok := e.Resolve(q[1], q[2], q[3]); ok {
+			out = &v
+		}
+		resolves = append(resolves, resolveVec{q[0], q[1], q[2], q[3], out})
+	}
+
+	type spellVec struct {
+		Name       string `json:"name"`
+		Field      string `json:"field"`
+		Env        string `json:"env"`
+		Context    string `json:"context"`
+		WriteName  string `json:"write_name"`
+		WriteField string `json:"write_field"`
+		WriteKey   string `json:"write_key"`
+	}
+	spells := []spellVec{}
+	for _, q := range [][4]string{
+		{"dhl-developer-portal", "PASSWORD", "prod", "heine"},
+		{"DHL-DEVELOPER-PORTAL", "", "test", ""},
+		{"dhl-developer-portal", "user", "Dev", ""},
+		{"dhl-developer-portal", "token", "prod", "x"},
+		{"dhl-developer-portal", "token", "dev", "HEINE"},
+		{"New-Secret", "", "", ""},
+	} {
+		name, e, _ := d.Entry(q[0])
+		k := e.Spelling(ValueKey{q[1], MakeLookupKey(q[2], q[3])})
+		spells = append(spells, spellVec{q[0], q[1], q[2], q[3], name, k.Field, k.Key})
+	}
+
+	return vectorFile{
+		Description: "Case-insensitive keys. fold: the identity of a name, field, env or context, lowercase per code point with U+0130 -> i + U+0307; no normalization, no ss, no final-sigma rule. reduce: revisions stored under names that differ only in case form one entry holding all their revisions, shown under the name of its earliest revision in history order; values whose field and lookup key fold alike are one value; field, env and context are each spelled like the earliest set or delete whose part folds alike, across fields and partner parts; the newest value wins and the older ones stay in history. resolve: name, field, env and context compare folded. spell: a write lands on write_name, write_field and write_key, the existing spelling, or the given one for a new value.",
+		Vectors: map[string]any{
+			"fold": folds,
+			"reduce": map[string]any{
+				"stored":  in,
+				"entries": entries,
+				"resolve": resolves,
+				"spell":   spells,
+			},
 		},
 	}
 }

@@ -1,0 +1,314 @@
+{
+  "description": "Case-insensitive keys. fold: the identity of a name, field, env or context, lowercase per code point with U+0130 -> i + U+0307; no normalization, no ss, no final-sigma rule. reduce: revisions stored under names that differ only in case form one entry holding all their revisions, shown under the name of its earliest revision in history order; values whose field and lookup key fold alike are one value; field, env and context are each spelled like the earliest set or delete whose part folds alike, across fields and partner parts; the newest value wins and the older ones stay in history. resolve: name, field, env and context compare folded. spell: a write lands on write_name, write_field and write_key, the existing spelling, or the given one for a new value.",
+  "vectors": {
+    "fold": [
+      {
+        "name": "ASCII",
+        "input": "DHL-Developer-Portal",
+        "folded": "dhl-developer-portal"
+      },
+      {
+        "name": "digits and punctuation stay",
+        "input": "PROD_2.eu:*",
+        "folded": "prod_2.eu:*"
+      },
+      {
+        "name": "umlauts",
+        "input": "ÄÖÜ-Prüfung",
+        "folded": "äöü-prüfung"
+      },
+      {
+        "name": "decomposed umlaut stays decomposed",
+        "input": "Über",
+        "folded": "über"
+      },
+      {
+        "name": "capital sharp s becomes sharp s, never ss",
+        "input": "STRAẞE",
+        "folded": "straße"
+      },
+      {
+        "name": "sharp s stays",
+        "input": "Straße",
+        "folded": "straße"
+      },
+      {
+        "name": "dotted capital I",
+        "input": "İstanbul",
+        "folded": "i̇stanbul"
+      },
+      {
+        "name": "dotless i stays",
+        "input": "ışık",
+        "folded": "ışık"
+      },
+      {
+        "name": "capital sigma, no final-sigma rule",
+        "input": "ΟΔΥΣΣΕΥΣ",
+        "folded": "οδυσσευσ"
+      },
+      {
+        "name": "final sigma stays",
+        "input": "Οδυσσευς",
+        "folded": "οδυσσευς"
+      },
+      {
+        "name": "caseless script",
+        "input": "東京-ציון",
+        "folded": "東京-ציון"
+      }
+    ],
+    "reduce": {
+      "entries": [
+        {
+          "name": "DHL-Developer-Portal",
+          "history_ids": [
+            "00000000000000000000000000000001",
+            "00000000000000000000000000000002",
+            "00000000000000000000000000000003",
+            "00000000000000000000000000000004",
+            "00000000000000000000000000000005",
+            "00000000000000000000000000000006",
+            "00000000000000000000000000000007",
+            "0000000000000000000000000000000a"
+          ],
+          "values": [
+            {
+              "field": "",
+              "key": "TEST:*",
+              "value": "new test"
+            },
+            {
+              "field": "password",
+              "key": "Prod:Heine",
+              "value": "heine newest"
+            },
+            {
+              "field": "user",
+              "key": "TEST:Heine",
+              "value": "env and context spelled from other values"
+            }
+          ],
+          "description": "Developer portal",
+          "visible": true
+        },
+        {
+          "name": "other",
+          "history_ids": [
+            "00000000000000000000000000000009",
+            "00000000000000000000000000000008"
+          ],
+          "values": [
+            {
+              "field": "",
+              "key": "*:*",
+              "value": "newer"
+            }
+          ],
+          "description": "",
+          "visible": true
+        }
+      ],
+      "resolve": [
+        {
+          "name": "dhl-DEVELOPER-portal",
+          "field": "",
+          "env": "Test",
+          "context": "",
+          "value": "new test"
+        },
+        {
+          "name": "DHL-Developer-Portal",
+          "field": "PASSWORD",
+          "env": "prod",
+          "context": "HEINE",
+          "value": "heine newest"
+        },
+        {
+          "name": "dhl-developer-portal",
+          "field": "Password",
+          "env": "PROD",
+          "context": "other",
+          "value": null
+        },
+        {
+          "name": "OTHER",
+          "field": "",
+          "env": "",
+          "context": "",
+          "value": "newer"
+        },
+        {
+          "name": "missing",
+          "field": "",
+          "env": "",
+          "context": "",
+          "value": null
+        }
+      ],
+      "spell": [
+        {
+          "name": "dhl-developer-portal",
+          "field": "PASSWORD",
+          "env": "prod",
+          "context": "heine",
+          "write_name": "DHL-Developer-Portal",
+          "write_field": "password",
+          "write_key": "Prod:Heine"
+        },
+        {
+          "name": "DHL-DEVELOPER-PORTAL",
+          "field": "",
+          "env": "test",
+          "context": "",
+          "write_name": "DHL-Developer-Portal",
+          "write_field": "",
+          "write_key": "TEST:*"
+        },
+        {
+          "name": "dhl-developer-portal",
+          "field": "user",
+          "env": "Dev",
+          "context": "",
+          "write_name": "DHL-Developer-Portal",
+          "write_field": "user",
+          "write_key": "Dev:*"
+        },
+        {
+          "name": "dhl-developer-portal",
+          "field": "token",
+          "env": "prod",
+          "context": "x",
+          "write_name": "DHL-Developer-Portal",
+          "write_field": "token",
+          "write_key": "Prod:x"
+        },
+        {
+          "name": "dhl-developer-portal",
+          "field": "token",
+          "env": "dev",
+          "context": "HEINE",
+          "write_name": "DHL-Developer-Portal",
+          "write_field": "token",
+          "write_key": "dev:Heine"
+        },
+        {
+          "name": "New-Secret",
+          "field": "",
+          "env": "",
+          "context": "",
+          "write_name": "New-Secret",
+          "write_field": "",
+          "write_key": "*:*"
+        }
+      ],
+      "stored": [
+        {
+          "name": "DHL-Developer-Portal",
+          "revision": {
+            "id": "00000000000000000000000000000001",
+            "recorded_at": "2026-01-01T00:00:00Z",
+            "op": "set",
+            "key": "TEST:*",
+            "value": "old test"
+          }
+        },
+        {
+          "name": "dhl-developer-portal",
+          "revision": {
+            "id": "00000000000000000000000000000002",
+            "recorded_at": "2026-01-01T00:00:01Z",
+            "op": "set",
+            "key": "test:*",
+            "value": "new test"
+          }
+        },
+        {
+          "name": "DHL-DEVELOPER-PORTAL",
+          "revision": {
+            "id": "00000000000000000000000000000003",
+            "recorded_at": "2026-01-01T00:00:02Z",
+            "op": "describe",
+            "key": "",
+            "value": "Developer portal"
+          }
+        },
+        {
+          "name": "dhl-developer-portal",
+          "revision": {
+            "id": "00000000000000000000000000000004",
+            "recorded_at": "2026-01-01T00:00:03Z",
+            "op": "set",
+            "field": "password",
+            "key": "Prod:Heine",
+            "value": "heine first"
+          }
+        },
+        {
+          "name": "DHL-Developer-Portal",
+          "revision": {
+            "id": "00000000000000000000000000000005",
+            "recorded_at": "2026-01-01T00:00:04Z",
+            "op": "set",
+            "field": "password",
+            "key": "PROD:HEINE",
+            "value": "heine newest"
+          }
+        },
+        {
+          "name": "dhl-developer-portal",
+          "revision": {
+            "id": "00000000000000000000000000000006",
+            "recorded_at": "2026-01-01T00:00:05Z",
+            "op": "set",
+            "field": "password",
+            "key": "prod:*",
+            "value": "prod"
+          }
+        },
+        {
+          "name": "DHL-Developer-Portal",
+          "revision": {
+            "id": "00000000000000000000000000000007",
+            "recorded_at": "2026-01-01T00:00:06Z",
+            "op": "delete",
+            "field": "password",
+            "key": "PROD:*",
+            "value": ""
+          }
+        },
+        {
+          "name": "dhl-developer-portal",
+          "revision": {
+            "id": "0000000000000000000000000000000a",
+            "recorded_at": "2026-01-01T00:00:07Z",
+            "op": "set",
+            "field": "user",
+            "key": "test:HEINE",
+            "value": "env and context spelled from other values"
+          }
+        },
+        {
+          "name": "Other",
+          "revision": {
+            "id": "00000000000000000000000000000008",
+            "recorded_at": "2026-01-01T00:00:00Z",
+            "op": "set",
+            "key": "*:*",
+            "value": "newer"
+          }
+        },
+        {
+          "name": "other",
+          "revision": {
+            "id": "00000000000000000000000000000009",
+            "recorded_at": null,
+            "op": "set",
+            "key": "*:*",
+            "value": "imported without time"
+          }
+        }
+      ]
+    }
+  }
+}

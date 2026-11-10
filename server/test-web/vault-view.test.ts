@@ -2,7 +2,7 @@
 // that a fresh pull reads back), the per-value rows and filter, and the keys.
 import { beforeEach, describe, expect, it } from "vitest";
 import { b64Decode } from "../src/wire";
-import { current, deriveAccountKeys, resolve, type Op, type Revision } from "../web/vault-core";
+import { current, deriveAccountKeys, entryOf, history, resolve, type Op, type Revision } from "../web/vault-core";
 import { command, envContext, sharedPrefix, forgetVault, pull, rowLabel, rows, secondsLeft, SignInRequired, write, type Host } from "../web/vault-view";
 
 async function unlockedVault() {
@@ -66,6 +66,35 @@ describe("vault-view", () => {
     expect(times[1] > times[0] && times[2] > times[1]).toBe(true);
   });
 
+  it("writes with another spelling land on the existing entry and key, keeping the first spelling", async () => {
+    const u = await unlockedVault();
+    const { host } = fakeServer();
+    await write(host, u, "DHL-Developer-Portal", [{ op: "set", field: "token", key: "Prod:Heine", value: "first" }]);
+    await write(host, u, "dhl-developer-portal", [{ op: "set", field: "TOKEN", key: "prod:HEINE", value: "second" }]);
+    forgetVault();
+    const v = await pull(host, u);
+    expect([...v.entries.keys()]).toEqual(["DHL-Developer-Portal"]);
+    const revisions = v.entries.get("DHL-Developer-Portal")!;
+    expect(revisions.map((r) => [r.field, r.key])).toEqual([["token", "Prod:Heine"], ["token", "Prod:Heine"]]);
+    expect(resolve(revisions, "Token", "PROD", "heine")).toBe("second");
+    await write(host, u, "DHL-DEVELOPER-PORTAL", [{ op: "delete", field: "token", key: "prod:heine", value: "" }]);
+    expect(current(entryOf(v.entries, "dhl-developer-portal").revisions).values.size).toBe(0);
+  });
+
+  it("spells env and context like the entry across fields and partner parts", async () => {
+    const u = await unlockedVault();
+    const { host } = fakeServer();
+    await write(host, u, "X", [{ op: "set", field: "password", key: "PROD:Heine", value: "v" }]);
+    await write(host, u, "x", [{ op: "set", field: "password", key: "prod:x", value: "v" }]);
+    const saved = await write(host, u, "x", [{ op: "set", field: "user", key: "dev:heine", value: "v" }]);
+    expect([saved.name, saved.written[0].key]).toEqual(["X", "dev:Heine"]);
+    forgetVault();
+    const result = rows((await pull(host, u)).entries, "");
+    expect(result.rows.filter((r) => r.kind === "child").map((r) => [r.field, r.env, r.context])).toEqual([["password", "PROD", "Heine"], ["password", "PROD", "x"], ["user", "dev", "Heine"]]);
+    // The editor selects the saved row by the name and key the write resolved.
+    expect(result.rows.some((r) => r.id === JSON.stringify([saved.name, saved.written[0].field, saved.written[0].key]))).toBe(true);
+  });
+
   it("refuses an invalid write before anything is sent", async () => {
     const u = await unlockedVault();
     const { host, rows } = fakeServer();
@@ -77,6 +106,27 @@ describe("vault-view", () => {
 
 let seq = 0n;
 const rev = (op: Op, field = "", key = "", value = ""): Revision => ({ id: `r${++seq}`, recordedAt: seq, op, field, key, value });
+
+describe("legacy duplicates", () => {
+  // An older Hort could store env TEST next to env test, and the name in two spellings.
+  const stored = new Map<string, Revision[]>([
+    ["DHL-Developer-Portal", [rev("set", "api-secret", "TEST:*", "older")]],
+    ["dhl-developer-portal", [rev("set", "api-secret", "test:*", "newest")]],
+  ]);
+
+  it("shows one row with the first spelling and the newest value", () => {
+    const result = rows(stored, "");
+    expect(result.secrets).toBe(1);
+    expect(result.rows.map((r) => [r.name, r.field, r.env, r.value])).toEqual([["DHL-Developer-Portal", "", "", null], ["DHL-Developer-Portal", "api-secret", "TEST", "newest"]]);
+  });
+
+  it("keeps the older value in the history and resolves in any case", () => {
+    const entry = entryOf(stored, "DHL-DEVELOPER-PORTAL");
+    expect(entry.name).toBe("DHL-Developer-Portal");
+    expect(history(entry.revisions).map((r) => r.value)).toEqual(["older", "newest"]);
+    expect(resolve(entry.revisions, "API-Secret", "Test", "")).toBe("newest");
+  });
+});
 
 describe("vault rows", () => {
   const entries = new Map<string, Revision[]>([

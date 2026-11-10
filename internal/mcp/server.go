@@ -97,7 +97,13 @@ type server struct {
 	open map[tuple]string
 }
 
+// tuple is a request's name, field and lookup key, each folded by
+// vault.FoldKey: tuples that differ only in case are the same request.
 type tuple struct{ name, field, key string }
+
+func makeTuple(name, field, env, context string) tuple {
+	return tuple{vault.FoldKey(name), vault.FoldKey(field), vault.FoldKey(vault.MakeLookupKey(env, context))}
+}
 
 // New returns the MCP server with its one tool.
 func New(deps Deps) *sdk.Server {
@@ -155,7 +161,7 @@ func (s *server) requestSecret(ctx context.Context, req *sdk.CallToolRequest, in
 		return nil, Output{}, fmt.Errorf("this vault is not registered on %s yet; run `hort sync`", acct.Server)
 	}
 	c := api.Client{Server: acct.Server, AccountID: acct.ID, Device: data.Device.ID, Key: data.Device.Key()}
-	key := tuple{in.Name, in.Field, vault.MakeLookupKey(in.Env, in.Context)}
+	key := makeTuple(in.Name, in.Field, in.Env, in.Context)
 	out := Output{Status: "pending", Name: in.Name, Field: in.Field, Env: in.Env, Context: in.Context}
 
 	id, state, err := s.findOrCreate(c, acct, in, key)
@@ -214,7 +220,7 @@ func (s *server) findOrCreate(c api.Client, acct vault.Account, in Input, key tu
 	}
 	for _, p := range pending {
 		m, err := vault.OpenRequestMeta(acct.Keys.RK, acct.ID, p.ID, p.MetaCT)
-		if err == nil && m.Name == key.name && m.Field == key.field && vault.MakeLookupKey(m.Env, m.Context) == key.key {
+		if err == nil && makeTuple(m.Name, m.Field, m.Env, m.Context) == key {
 			s.open[key] = p.ID
 			return p.ID, api.RequestPending, nil
 		}
@@ -345,16 +351,17 @@ func verify(data *vault.VaultData, ids []string, key tuple) (string, error) {
 		if !ok {
 			return "", errors.New(errMismatch)
 		}
-		if r.Op == "set" && r.Field == key.field && r.Key == key.key && set == nil {
+		if r.Op == "set" && vault.FoldKey(r.Field) == key.field && vault.FoldKey(r.Key) == key.key && set == nil {
 			r := r
 			set = &r
 		}
 	}
-	if set == nil || !holdsRevision(data.Secrets[key.name], set.ID) {
+	_, entry, _ := data.Entry(key.name)
+	if set == nil || !holdsRevision(entry, set.ID) {
 		return "", errors.New(errMismatch)
 	}
-	values, _, _ := data.Secrets[key.name].Current()
-	if v, ok := values[vault.ValueKey{Field: key.field, Key: key.key}]; ok && v == set.Value {
+	values, _, _ := entry.Current()
+	if v, ok := values[entry.Spelling(vault.ValueKey{Field: key.field, Key: key.key})]; ok && v == set.Value {
 		return "stored", nil
 	}
 	return "conflict", nil

@@ -189,6 +189,7 @@ describe("save to my vault", () => {
     await write(host, u, "db", [{ op: "set", field: "", key: "*:*", value: "mine" }]);
     const shared = { name: "db", description: "staging database", fields: [{ field: "password", value: "s3cret" }, { field: "user", value: "app" }] };
     await expect(saveShared(host, u, "db", shared)).rejects.toThrow("Your vault has a secret named db already. Pick another name.");
+    await expect(saveShared(host, u, "DB", shared)).rejects.toThrow("Your vault has a secret named db already. Pick another name.");
     await saveShared(host, u, "db-staging", shared);
     forgetVault();
     const v = await pull(host, u);

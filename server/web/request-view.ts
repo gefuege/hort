@@ -8,12 +8,15 @@ import { notALogin } from "./not-a-login";
 import {
   appendStamp,
   current,
+  entryOf,
+  foldKey,
   lookupKey,
   newId,
   nowNs,
   openRequestMeta,
   openRevision,
   sealRevision,
+  spelling,
   validateWrite,
   type AccountKeys,
   type Revision,
@@ -99,9 +102,10 @@ async function get(host: Host, path: string): Promise<Response> {
   return res;
 }
 
-// Pulls every revision after `after`, keeps those of the secret `name` and
-// returns the new cursor. Envelopes that do not decrypt are skipped.
-async function pull(host: Host, keys: AccountKeys, name: string, after: number, into: Revision[]): Promise<number> {
+// Pulls every revision after `after`, keeps those of the secret `name` by
+// stored name (any spelling that folds like it) and returns the new cursor.
+// Envelopes that do not decrypt are skipped.
+async function pull(host: Host, keys: AccountKeys, name: string, after: number, into: Map<string, Revision[]>): Promise<number> {
   let cursor = after;
   for (;;) {
     const page = await host.ok<{ revisions: { id: string; ct: string }[]; cursor: number; more: boolean }>(
@@ -110,7 +114,7 @@ async function pull(host: Host, keys: AccountKeys, name: string, after: number, 
     for (const r of page.revisions) {
       try {
         const opened = await openRevision(keys, r.id, b64Decode(r.ct)!);
-        if (opened.name === name) into.push(opened.revision);
+        if (foldKey(opened.name) === foldKey(name)) into.set(opened.name, [...(into.get(opened.name) ?? []), opened.revision]);
       } catch {
         // not readable with this vault key
       }
@@ -181,10 +185,10 @@ async function load(body: HTMLElement, host: Host, id: string, retry: () => Prom
     throw new Error(`The agent's request cannot be stored: ${invalid}`);
   }
 
-  const entry: Revision[] = [];
-  let cursor = await pull(host, keys, meta.name, 0, entry);
-  const now = current(entry);
-  const exists = [...now.values.values()].some((v) => v.field === meta.field && v.key === key);
+  const stored = new Map<string, Revision[]>();
+  let cursor = await pull(host, keys, meta.name, 0, stored);
+  const now = current(entryOf(stored, meta.name).revisions);
+  const exists = [...now.values.values()].some((v) => foldKey(v.field) === foldKey(meta.field) && foldKey(v.key) === foldKey(key));
 
   // A secret value is not a login: keep password managers from filling it or offering to save it.
   const single = h("input", { id: "f-value", type: "password", autocomplete: "off", spellcheck: false, ...notALogin });
@@ -231,17 +235,19 @@ async function load(body: HTMLElement, host: Host, id: string, retry: () => Prom
       if (value() === "") throw new Error("Enter a value, or decline the request.");
       out.set("Storing …");
       // Other writers may have been faster since the page was loaded: the Append rule needs the entry as it is now.
-      cursor = await pull(host, keys, meta.name, cursor, entry);
-      const set: Revision = { id: newId(), recordedAt: appendStamp(entry, nowNs()), op: "set", field: meta.field, key, value: value() };
+      cursor = await pull(host, keys, meta.name, cursor, stored);
+      // The value lands on the entry and key the request folds to, in the spelling they already have.
+      const { name, revisions: entry } = entryOf(stored, meta.name);
+      const set: Revision = { id: newId(), recordedAt: appendStamp(entry, nowNs()), op: "set", ...spelling(entry, meta.field, key), value: value() };
       const revisions = [set];
       if (meta.description !== "" && current(entry).description !== meta.description) {
         revisions.push({ id: newId(), recordedAt: appendStamp([...entry, set], nowNs()), op: "describe", field: "", key: "", value: meta.description });
       }
       const sealed: { id: string; ct: string }[] = [];
       for (const r of revisions) {
-        const problem = validateWrite(meta.name, r);
+        const problem = validateWrite(name, r);
         if (problem) throw new Error(problem);
-        sealed.push({ id: r.id, ct: b64Encode(await sealRevision(keys, meta.name, r)) });
+        sealed.push({ id: r.id, ct: b64Encode(await sealRevision(keys, name, r)) });
       }
       const res = await host.api("POST", `/api/v1/requests/${id}/fulfill`, { body: JSON.stringify({ revisions: sealed }) });
       if (res.status === 401) throw new SessionLost();

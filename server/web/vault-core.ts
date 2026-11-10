@@ -413,19 +413,60 @@ export function history(revisions: Revision[]): Revision[] {
   });
 }
 
+// The identity of a secret name, field, env or context: names that differ
+// only in letter case are the same key. Lowercase per code point, U+0130
+// becoming "i" + U+0307 (spec/vectors/fold.json); per code point,
+// toLowerCase applies no final-sigma context. Mirrors vault.FoldKey.
+export function foldKey(s: string): string {
+  let out = "";
+  for (const ch of s) out += ch.toLowerCase();
+  return out;
+}
+
 export type Current = { values: Map<string, { field: string; key: string; value: string }>; description: string; visible: boolean };
 
-const valueKey = (field: string, key: string) => `${field}\u0000${key}`;
+const valueKey = (field: string, key: string) => `${foldKey(field)}\u0000${foldKey(key)}`;
 
+// How the entry spells a value key: field, env and context each take the
+// spelling of the earliest set or delete in history order whose part folds
+// alike; a part the entry does not hold keeps its own spelling. Spelling never
+// changes identity, since a spelled part folds like the original
+// (vault.spellings).
+function spellings(ordered: Revision[]): (field: string, key: string) => { field: string; key: string } {
+  const parts = [new Map<string, string>(), new Map<string, string>(), new Map<string, string>()];
+  const spell = (field: string, key: string, learn: boolean) => {
+    const colon = key.indexOf(":");
+    const p = colon < 0 ? [field, key, ""] : [field, key.slice(0, colon), key.slice(colon + 1)];
+    p.forEach((part, i) => {
+      const known = parts[i].get(foldKey(part));
+      if (known !== undefined) p[i] = known;
+      else if (learn) parts[i].set(foldKey(part), part);
+    });
+    return { field: p[0], key: colon < 0 ? p[1] : `${p[1]}:${p[2]}` };
+  };
+  for (const r of ordered) if (r.op === "set" || r.op === "delete") spell(r.field, r.key, true);
+  return (field, key) => spell(field, key, false);
+}
+
+// Field and lookup key as the entry spells them (see spellings). Writes carry
+// this spelling (vault.Entry.Spelling).
+export function spelling(revisions: Revision[], field: string, key: string): { field: string; key: string } {
+  return spellings(history(revisions))(field, key);
+}
+
+// Values whose field and lookup key differ only in case are one value, keyed
+// by the folded key and shown in their spelling (see spellings).
 export function current(revisions: Revision[]): Current {
   const values: Current["values"] = new Map();
   let description = "";
   let visible = false;
   let deleted = false;
-  for (const r of history(revisions)) {
+  const ordered = history(revisions);
+  const spell = spellings(ordered);
+  for (const r of ordered) {
     switch (r.op) {
       case "set":
-        values.set(valueKey(r.field, r.key), { field: r.field, key: r.key, value: r.value });
+        values.set(valueKey(r.field, r.key), { ...spell(r.field, r.key), value: r.value });
         visible = true;
         deleted = false;
         break;
@@ -458,6 +499,34 @@ export function resolve(revisions: Revision[], field: string, env: string, conte
     if (v) return v.value;
   }
   return null;
+}
+
+// Groups stored names by foldKey: names that differ only in case are one
+// entry holding the revisions of all of them, shown under the name of its
+// earliest revision in history order (vault.VaultData.Entries).
+export function entries(stored: Map<string, Revision[]>): Map<string, Revision[]> {
+  const groups = new Map<string, string[]>();
+  for (const name of stored.keys()) groups.set(foldKey(name), [...(groups.get(foldKey(name)) ?? []), name]);
+  const out = new Map<string, Revision[]>();
+  for (const names of groups.values()) {
+    names.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+    const owner = new Map<string, string>();
+    const merged: Revision[] = [];
+    for (const name of names) for (const r of stored.get(name)!) {
+      merged.push(r);
+      owner.set(r.id, name);
+    }
+    const first = history(merged)[0];
+    out.set(first ? owner.get(first.id)! : names[0], merged);
+  }
+  return out;
+}
+
+// The entry `name` folds to and the name it is shown and written under; an
+// unknown name comes back as given, without revisions.
+export function entryOf(stored: Map<string, Revision[]>, name: string): { name: string; revisions: Revision[] } {
+  for (const [spelled, revisions] of entries(stored)) if (foldKey(spelled) === foldKey(name)) return { name: spelled, revisions };
+  return { name, revisions: [] };
 }
 
 // The Append rule (§3.2): a new revision is stamped behind every revision the

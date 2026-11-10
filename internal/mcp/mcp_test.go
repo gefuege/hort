@@ -165,6 +165,20 @@ func TestRequestSecret(t *testing.T) {
 		r.wantStored("nourl-secret", "", "prod", "nourl-value-1")
 	})
 
+	t.Run("a call that differs only in case is the same request", func(t *testing.T) {
+		cs := r.connect(nil)
+		first := r.output(r.call(cs, map[string]any{"name": "Case-Secret", "description": "Case", "env": "Prod"}))
+		again := map[string]any{"name": "case-SECRET", "description": "Case", "env": "PROD"}
+		if second := r.output(r.call(cs, again)); second.RequestID != first.RequestID || second.Status != "pending" {
+			t.Fatalf("second call: %+v, want the request %s", second, first.RequestID)
+		}
+		r.fulfill(first.RequestID, "case-value")
+		if done := r.output(r.call(cs, again)); done.Status != "stored" || done.RequestID != first.RequestID {
+			t.Fatalf("after fulfill: %+v", done)
+		}
+		r.wantStored("CASE-secret", "", "prod", "case-value")
+	})
+
 	t.Run("url mode: accept, fulfilled, stored, complete notification", func(t *testing.T) {
 		var id string
 		cs := r.connect(&client{onElicit: func(req *sdk.ElicitRequest) *sdk.ElicitResult {

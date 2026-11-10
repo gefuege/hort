@@ -1,6 +1,7 @@
 // vault-core against every vector and reduction fixture in spec/vectors.
 import { describe, expect, it } from "vitest";
 import envelopeVectors from "../../spec/vectors/envelope.json";
+import foldVectors from "../../spec/vectors/fold.json";
 import kekVectors from "../../spec/vectors/kek.json";
 import keyVectors from "../../spec/vectors/keys.json";
 import passkeySlotVectors from "../../spec/vectors/passkey-slot.json";
@@ -16,12 +17,16 @@ import {
   argonSlotParams,
   current,
   deriveAccountKeys,
+  entries,
+  entryOf,
+  foldKey,
   ed25519FromSeed,
   envelopePlaintext,
   formatSecretKey,
   formatTime,
   history,
   hkdf,
+  lookupKey,
   openRequestMeta,
   newPassphraseSlot,
   openRevision,
@@ -37,6 +42,7 @@ import {
   prfEvalSalt,
   resolve,
   sealRevision,
+  spelling,
   unwrapSlot,
   validateWrite,
   verifySlotAuthority,
@@ -234,6 +240,43 @@ describe("reduction.json", () => {
     for (const s of ["2026-01-01T00:20:00.500000001Z", "2026-11-06T10:00:00Z", "1999-12-31T23:59:59.1Z"]) expect(formatTime(parseTime(s)!)).toBe(s);
     expect(parseTime("2026-02-30T00:00:00Z")).toBeNull();
     expect(parseTime("2026-01-01T00:00:00")).toBeNull();
+  });
+});
+
+describe("fold.json", () => {
+  it("folds as Go does", () => {
+    for (const v of foldVectors.vectors.fold) {
+      expect(foldKey(v.input), v.name).toBe(v.folded);
+      expect(foldKey(v.folded), v.name).toBe(v.folded);
+    }
+  });
+  const { stored, entries: want, resolve: queries, spell } = foldVectors.vectors.reduce;
+  const vault = (list: typeof stored) => {
+    const m = new Map<string, Revision[]>();
+    for (const s of list) m.set(s.name, [...(m.get(s.name) ?? []), rev(s.revision)]);
+    return m;
+  };
+  const byKey = (a: { field: string; key: string }, b: { field: string; key: string }) => (a.field + "\u0000" + a.key < b.field + "\u0000" + b.key ? -1 : 1);
+  for (const list of [stored, [...stored].reverse()]) {
+    it(`reduce: entries, display spellings, values and history (${list === stored ? "arrival" : "reversed"} order)`, () => {
+      const got = [...entries(vault(list))].sort(([a], [b]) => (a < b ? -1 : 1));
+      expect(got.map(([name]) => name)).toEqual(want.map((e) => e.name));
+      got.forEach(([, revs], i) => {
+        expect(history(revs).map((r) => r.id)).toEqual(want[i].history_ids);
+        const c = current(revs);
+        expect([...c.values.values()].sort(byKey)).toEqual([...want[i].values].sort(byKey));
+        expect(c.description).toBe(want[i].description);
+        expect(c.visible).toBe(want[i].visible);
+      });
+    });
+  }
+  it("reduce: resolve and write spelling", () => {
+    const m = vault(stored);
+    for (const q of queries) expect(resolve(entryOf(m, q.name).revisions, q.field, q.env, q.context), JSON.stringify(q)).toBe(q.value);
+    for (const q of spell) {
+      const e = entryOf(m, q.name);
+      expect({ name: e.name, ...spelling(e.revisions, q.field, lookupKey(q.env, q.context)) }, JSON.stringify(q)).toEqual({ name: q.write_name, field: q.write_field, key: q.write_key });
+    }
   });
 });
 

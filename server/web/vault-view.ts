@@ -6,7 +6,7 @@
 import { b64Decode, b64Encode } from "../src/wire";
 import { formatTime } from "./format-time";
 import { notALogin } from "./not-a-login";
-import { accountIdEncode, appendStamp, current, lookupKey, newId, nowNs, openRevision, resolve, sealRevision, validateWrite, type AccountKeys, type Op, type Revision } from "./vault-core";
+import { accountIdEncode, appendStamp, current, entries, entryOf, foldKey, lookupKey, newId, nowNs, openRevision, resolve, sealRevision, spelling, validateWrite, type AccountKeys, type Op, type Revision } from "./vault-core";
 import { deriveShareKeys, formatShareLink, normalizeShareName, openShareMeta, sealShare, sealShareMeta, SHARE_LINK_KEY_BYTES, type SharedField, type SharedSecret } from "./share-core";
 
 type Child = Node | string | null | false | undefined;
@@ -87,13 +87,16 @@ export async function pull(host: Api, u: Unlocked): Promise<Vault> {
 export type Change = { op: Op; field: string; key: string; value: string };
 
 // Pulls deltas first, so the Append rule sees writes from other devices,
-// then stamps, validates, seals and pushes the changes as one batch.
-export async function write(host: Api, u: Unlocked, name: string, changes: Change[]): Promise<void> {
+// then stamps, validates, seals and pushes the changes as one batch. Changes
+// land on the entry `name` folds to, in the spelling it already holds; the
+// result names that entry and the revisions as written.
+export async function write(host: Api, u: Unlocked, typed: string, changes: Change[]): Promise<{ name: string; written: Revision[] }> {
   const v = await pull(host, u);
-  const known = [...(v.entries.get(name) ?? [])];
+  const { name, revisions: entry } = entryOf(v.entries, typed);
+  const known = [...entry];
   const built: Revision[] = [];
   for (const c of changes) {
-    const r: Revision = { id: newId(), recordedAt: appendStamp(known, nowNs()), ...c };
+    const r: Revision = { id: newId(), recordedAt: appendStamp(known, nowNs()), ...c, ...spelling(known, c.field, c.key) };
     const problem = validateWrite(name, r);
     if (problem) throw new Error(problem);
     known.push(r);
@@ -106,6 +109,7 @@ export async function write(host: Api, u: Unlocked, name: string, changes: Chang
   const result = await host.ok<{ accepted: string[]; duplicate: string[] }>(res);
   const stored = new Set([...result.accepted, ...result.duplicate]);
   for (const r of built) if (stored.has(r.id)) remember(v, name, r);
+  return { name, written: built };
 }
 
 // ---------------------------------------------------------------------------
@@ -148,7 +152,7 @@ export async function createShare(host: Api, u: Unlocked, origin: string, secret
 
 export type OwnShare = { id: string; state: string; name: string; recipient: string; expiresAt: number };
 
-// The account's shares by secret name, from GET /shares. A share whose
+// The account's shares by folded secret name (foldKey), from GET /shares. A share whose
 // metadata does not open with this vault key is left out.
 export async function ownShares(host: Api, u: Unlocked): Promise<Map<string, OwnShare[]>> {
   const res = await host.api("GET", "/api/v1/shares");
@@ -159,7 +163,7 @@ export async function ownShares(host: Api, u: Unlocked): Promise<Map<string, Own
   for (const s of shares) {
     try {
       const m = await openShareMeta(u.keys, s.id, b64Decode(s.meta_ct) ?? new Uint8Array());
-      out.set(m.name, [...(out.get(m.name) ?? []), { id: s.id, state: s.state, name: m.name, recipient: m.recipient, expiresAt: s.expires_at }]);
+      out.set(foldKey(m.name), [...(out.get(foldKey(m.name)) ?? []), { id: s.id, state: s.state, name: m.name, recipient: m.recipient, expiresAt: s.expires_at }]);
     } catch {
       console.warn(`skipped share ${s.id}: its metadata does not open`);
     }
@@ -243,13 +247,14 @@ const splitKey = (key: string) => {
 };
 const order = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
 
-export function rows(entries: Map<string, Revision[]>, filter: string): { rows: Row[]; secrets: number; values: number } {
+export function rows(stored: Map<string, Revision[]>, filter: string): { rows: Row[]; secrets: number; values: number } {
   const terms = filter.toLowerCase().split(/\s+/).filter(Boolean);
   const out: Row[] = [];
   let secrets = 0;
   let values = 0;
-  for (const name of [...entries.keys()].sort(order)) {
-    const cur = current(entries.get(name)!);
+  const grouped = entries(stored);
+  for (const name of [...grouped.keys()].sort(order)) {
+    const cur = current(grouped.get(name)!);
     if (!cur.visible) continue;
     secrets++;
     const variants = [...cur.values.values()].sort((a, b) => order(a.field, b.field) || order(a.key, b.key));
@@ -430,7 +435,7 @@ export async function vaultView(main: HTMLElement, host: Host): Promise<void> {
   };
 
   const rowById = (id: string | null) => shown.find((r) => r.id === id);
-  const shareable = (r: Row) => shareFields(v.entries.get(r.name) ?? [], r.env, r.context).length > 0;
+  const shareable = (r: Row) => shareFields(entryOf(v.entries, r.name).revisions, r.env, r.context).length > 0;
   const focusSelected = () => list.querySelector<HTMLElement>(".v-row.sel")?.focus();
 
   function draw(): void {
@@ -537,7 +542,7 @@ export async function vaultView(main: HTMLElement, host: Host): Promise<void> {
   // The entry's shares until their expiry, with revoke while open.
   function shareLine(name: string): HTMLElement[] {
     const nowS = Date.now() / 1000;
-    const items = (shares.get(name) ?? []).flatMap((s) => {
+    const items = (shares.get(foldKey(name)) ?? []).flatMap((s) => {
       const text = shareTag(s, nowS);
       if (!text) return [];
       const open = s.state === "open";
@@ -770,18 +775,20 @@ export async function vaultView(main: HTMLElement, host: Host): Promise<void> {
       const set = { op: "set" as const, field: field.value.trim(), key: lookupKey(env.value.trim(), ctx.value.trim()), value: value.value };
       const changes: Change[] = r && set.value === "" ? [] : [set];
       const d = desc.value.trim();
-      if (d !== current(v.entries.get(entry) ?? []).description && (r || d)) changes.push({ op: "describe", field: "", key: "", value: d });
+      if (d !== current(entryOf(v.entries, entry).revisions).description && (r || d)) changes.push({ op: "describe", field: "", key: "", value: d });
       if (!changes.length) return closeEditor();
       saveButton.disabled = true;
       err.textContent = "";
       try {
-        if (!(await run(() => write(host, u, entry, changes).then(() => true)))) return;
+        const saved = await run(() => write(host, u, entry, changes));
+        if (!saved) return;
         editing = null;
-        const savedKey = { name: entry, ...splitKey(set.key), field: set.field };
-        selected = changes[0].op === "set" ? JSON.stringify([entry, set.field, set.key]) : selected;
+        const first = saved.written[0];
+        const savedKey = { name: saved.name, ...splitKey(first.key), field: first.field };
+        selected = first.op === "set" ? JSON.stringify([saved.name, first.field, first.key]) : selected;
         draw();
         focusSelected();
-        say(`Saved ${changes[0].op === "set" ? rowLabel(savedKey) : entry}.`, "ok");
+        say(`Saved ${first.op === "set" ? rowLabel(savedKey) : saved.name}.`, "ok");
       } catch (e) {
         err.textContent = messageOf(e);
       } finally {
@@ -793,7 +800,7 @@ export async function vaultView(main: HTMLElement, host: Host): Promise<void> {
 
   // The share panel: who it is for, which fields, how long; then the link, once.
   function shareEl(r: Row): HTMLElement {
-    const revisions = v.entries.get(r.name) ?? [];
+    const revisions = entryOf(v.entries, r.name).revisions;
     const all = shareFields(revisions, r.env, r.context);
     // A secret without named fields shares its default value and shows no choice.
     const named = all.some((f) => f.field !== "");

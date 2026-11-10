@@ -24,25 +24,13 @@ import (
 const ShareLinkKeySize = 32
 
 // NormalizeShareName is the one form of a recipient's name that Go and the
-// browser derive keys from: NFKC, lowercase per code point (U+0130 becomes
-// "i" followed by U+0307, as in Unicode's full lowercase mapping), final
-// sigma ς and σ alike, ß and ẞ as "ss", NFKC again, then whitespace runs
+// browser derive keys from: NFKC, FoldKey (lowercase per code point, U+0130
+// becoming "i" followed by U+0307, as in Unicode's full lowercase mapping),
+// final sigma ς and σ alike, ß as "ss", NFKC again, then whitespace runs
 // collapsed to one space and trimmed. Whitespace is Unicode White_Space.
 func NormalizeShareName(name string) string {
-	var b strings.Builder
-	for _, r := range norm.NFKC.String(name) {
-		switch r {
-		case 'İ':
-			b.WriteString("i̇")
-		case 'ς':
-			b.WriteRune('σ')
-		case 'ß', 'ẞ':
-			b.WriteString("ss")
-		default:
-			b.WriteRune(unicode.ToLower(r))
-		}
-	}
-	return strings.Join(strings.FieldsFunc(norm.NFKC.String(b.String()), unicode.IsSpace), " ")
+	lower := strings.NewReplacer("ς", "σ", "ß", "ss").Replace(FoldKey(norm.NFKC.String(name)))
+	return strings.Join(strings.FieldsFunc(norm.NFKC.String(lower), unicode.IsSpace), " ")
 }
 
 // ShareKeys are what a share key yields: the AES-256-GCM key of the share

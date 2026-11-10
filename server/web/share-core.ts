@@ -2,7 +2,7 @@
 // internal/vault/share.go; spec/vectors/share.json is the byte authority and
 // test-web/share-core.test.ts runs every case of it against this module.
 import { argon2id } from "./argon2";
-import { aesKey, exactKeys, hkdf, open, PRODUCTION_ARGON, seal, type AccountKeys, type ArgonParams } from "./vault-core";
+import { aesKey, exactKeys, foldKey, hkdf, open, PRODUCTION_ARGON, seal, type AccountKeys, type ArgonParams } from "./vault-core";
 import { b64urlDecode, b64urlEncode, canon, hexDecode, sha256 } from "../src/wire";
 
 const utf8 = new TextEncoder();
@@ -13,12 +13,10 @@ const SPACE = /[\t\n\v\f\r \u0085\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u20
 
 export const SHARE_LINK_KEY_BYTES = 32;
 
-// NFKC, lowercase per code point (U+0130 becomes "i" + U+0307), ς and σ
-// alike, ß as "ss", NFKC again, whitespace runs collapsed and trimmed.
-// Per code point, toLowerCase applies no final-sigma context.
+// NFKC, foldKey (lowercase per code point, U+0130 becoming "i" + U+0307),
+// ς and σ alike, ß as "ss", NFKC again, whitespace runs collapsed and trimmed.
 export function normalizeShareName(name: string): string {
-  let lower = "";
-  for (const ch of name.normalize("NFKC")) lower += ch.toLowerCase();
+  const lower = foldKey(name.normalize("NFKC"));
   const folded = lower.replace(/ς/g, "σ").replace(/ß/g, "ss").normalize("NFKC");
   return folded.split(SPACE).filter((part) => part !== "").join(" ");
 }

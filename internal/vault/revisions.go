@@ -7,7 +7,9 @@ import (
 	"io"
 	"regexp"
 	"sort"
+	"strings"
 	"time"
+	"unicode"
 )
 
 // Entry persists only revisions. Current values are reduced on demand.
@@ -75,24 +77,77 @@ func (e Entry) History() []Revision {
 	return out
 }
 
+// FoldKey is the identity of a secret name, field, env or context: names
+// that differ only in letter case are the same key. It lowercases per code
+// point, with U+0130 becoming "i" followed by U+0307 (spec/vectors/fold.json).
+func FoldKey(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		if r == 'İ' {
+			b.WriteString("i\u0307")
+		} else {
+			b.WriteRune(unicode.ToLower(r))
+		}
+	}
+	return b.String()
+}
+
 // ValueKey addresses one value of an entry: a field and its lookup key.
 type ValueKey struct {
 	Field string
 	Key   LookupKey
 }
 
-// Current is an ephemeral projection, never a second persisted state.
+// spellings returns how the entry spells a value key: field, env and context
+// each take the spelling of the earliest set or delete in history order whose
+// part folds alike; a part the entry does not hold keeps its own spelling.
+// Spelling never changes identity, since a spelled part folds like the original.
+func spellings(history []Revision) func(ValueKey) ValueKey {
+	parts := [3]map[string]string{{}, {}, {}}
+	spell := func(k ValueKey, learn bool) ValueKey {
+		env, context, colon := strings.Cut(k.Key, ":")
+		p := [3]string{k.Field, env, context}
+		for i := range p {
+			if s, ok := parts[i][FoldKey(p[i])]; ok {
+				p[i] = s
+			} else if learn {
+				parts[i][FoldKey(p[i])] = p[i]
+			}
+		}
+		if !colon {
+			return ValueKey{p[0], p[1]}
+		}
+		return ValueKey{p[0], p[1] + ":" + p[2]}
+	}
+	for _, r := range history {
+		if r.Op == "set" || r.Op == "delete" {
+			spell(ValueKey{r.Field, r.Key}, true)
+		}
+	}
+	return func(k ValueKey) ValueKey { return spell(k, false) }
+}
+
+// Spelling returns k as the entry spells it (see spellings). Writes carry
+// this spelling, and Current keys its values by it.
+func (e Entry) Spelling(k ValueKey) ValueKey { return spellings(e.History())(k) }
+
+// Current is an ephemeral projection, never a second persisted state. Values
+// whose field and lookup key differ only in case are one value, keyed by
+// their spelling (see spellings).
 func (e Entry) Current() (values map[ValueKey]string, description string, visible bool) {
 	values = make(map[ValueKey]string)
 	deleted := false
-	for _, r := range e.History() {
+	history := e.History()
+	spell := spellings(history)
+	for _, r := range history {
+		k := spell(ValueKey{r.Field, r.Key})
 		switch r.Op {
 		case "set":
-			values[ValueKey{r.Field, r.Key}] = r.Value
+			values[k] = r.Value
 			visible = true
 			deleted = false
 		case "delete":
-			delete(values, ValueKey{r.Field, r.Key})
+			delete(values, k)
 		case "delete-entry":
 			clear(values)
 			description = ""
@@ -109,11 +164,11 @@ func (e Entry) Current() (values map[ValueKey]string, description string, visibl
 }
 
 // Resolve reads one field for env and context, falling back to env:* and *:*
-// within that field only (§3.3).
+// within that field only (§3.3). Field, env and context compare by FoldKey.
 func (e Entry) Resolve(field, env, context string) (string, bool) {
 	values, _, _ := e.Current()
 	for _, key := range []LookupKey{MakeLookupKey(env, context), MakeLookupKey(env, "*"), MakeLookupKey("*", "*")} {
-		if value, ok := values[ValueKey{field, key}]; ok {
+		if value, ok := values[e.Spelling(ValueKey{field, key})]; ok {
 			return value, true
 		}
 	}

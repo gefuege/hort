@@ -219,7 +219,7 @@ func CmdStatus(jsonOutput bool) error {
 			fmt.Fprintf(os.Stderr, "warning: session does not open the vault: %v\n", err)
 		} else {
 			count := 0
-			for _, entry := range data.Secrets {
+			for _, entry := range data.Entries() {
 				if _, _, visible := entry.Current(); visible {
 					count++
 				}
