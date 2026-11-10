@@ -37,7 +37,7 @@
   </div>
   <div class="hero-actions">
     <div class="ctas"><a class="btn btn-primary" href="#install">Install the CLI →</a><a class="btn btn-ghost" href="https://github.com/gefuege/hort">View on GitHub</a><a class="btn btn-ghost" href="/vault">Sign in</a></div>
-    <p class="hero-note">The CLI works without an account. Registering on hort.pm still needs an invitation token.</p>
+    <p class="hero-note">The CLI works without an account. Registering on hort.pm still needs an invitation.</p>
   </div>
   <div class="win term hero-term">
     <div class="win-bar"><i></i><i></i><i></i><span>zsh — ~/shop</span></div>
@@ -66,42 +66,20 @@
 </div>
 
 <div class="section wrap" id="agents">
-  <p class="sec-tag">// agents</p>
-  <h2 class="sec-h">Agents need secrets. Give them one place to look.</h2>
-  <div class="win talk sec-intro"><div class="win-bar"><i></i><i></i><i></i><span>hort — agents</span></div><div class="talk-body"><p><span class="say">hort ›</span> You just want your agent to have the secret, without unlocking a password manager by hand every time. Paste it into the chat instead, and the agent tells you off for it. With Hort, your agent looks secrets up itself and asks you for what's missing.</p></div></div>
-  <div class="win talk"><div class="win-bar"><i></i><i></i><i></i><span>hort — how agents use it</span></div><div class="cards">
-    <div class="card"><span class="num">[01]</span><h3>Discover</h3><p>The agent runs <code>hort list</code> and sees what exists: names, descriptions, environments. No values.</p></div>
-    <div class="card"><span class="num">[02]</span><h3>Read</h3><p><code>hort get &lt;name&gt;</code> prints just the value on stdout. Ready for <code>$(...)</code> and pipes. Locked vault? Exit code 2, and the agent asks you to unlock.</p></div>
-    <div class="card"><span class="num">[03]</span><h3>Ask</h3><p>Something missing? The agent asks for it by name. You type the value on hort.pm. <a href="#ask">How it works ↓</a></p></div>
-  </div></div>
-  <div class="win term agents-term"><pre tabindex="0"><span class="t-m"># What's there?</span>
-<span class="t-p">$</span> hort list --json
-
-<span class="t-m"># Use it</span>
-<span class="t-p">$</span> export STRIPE_KEY=$(hort get stripe secret --env prod)
-
-<span class="t-m"># Different value per customer</span>
-<span class="t-p">$</span> hort get tenant-id --env prod --context acme</pre>
-    <p class="win-foot">Fallback built in: <code>env+context → env+* → *+*</code>. Specific wins, the baseline catches the rest.</p></div>
-</div>
-
-<div class="section wrap" id="ask">
-  <p class="sec-tag">// ask</p>
-  <h2 class="sec-h">Ask for what's missing.</h2>
-  <div class="win talk sec-intro"><div class="win-bar"><i></i><i></i><i></i><span>hort — mcp</span></div><div class="talk-body"><p><span class="say">hort ›</span> Your agent requests a secret by name through Hort's MCP server. You open the link, unlock with your passkey and type the value on hort.pm. The agent learns the name and the status, never the value.</p></div></div>
+  <p class="sec-tag">// how it works</p>
   <div class="examples">
     <div class="example">
-      <p class="label">In your agent's chat</p>
-      <div class="win term"><div class="win-bar"><i></i><i></i><i></i><span>claude — ~/shop</span></div><pre tabindex="0"><span class="t-v">you</span>    › Add Stripe checkout to the shop.
-<span class="t-a">agent</span>  › hort list has no stripe keys.
-<span class="t-a">agent</span>  › request_secret stripe · client_id, secret · prod
-<span class="t-p">hort</span>   › pending · https://hort.pm/r/…
-<span class="t-v">you</span>    › <span class="t-m">(open the link, type both values)</span>
-<span class="t-p">hort</span>   › stored
-<span class="t-a">agent</span>  › $ hort get stripe client_id --env prod</pre></div>
+      <h2 class="pic-h">Your agent asks for what's missing.</h2>
+      <div class="win term"><div class="win-bar"><i></i><i></i><i></i><span>claude — ~/shop</span></div><pre tabindex="0"><span class="t-v">you</span>   › Add Stripe checkout.
+<span class="t-a">agent</span> › No stripe keys yet.
+<span class="t-a">agent</span> › request_secret stripe
+        client_id, secret
+<span class="t-p">hort</span>  › pending · hort.pm/r/…
+<span class="t-p">hort</span>  › stored
+<span class="t-a">agent</span> › $ hort get stripe</pre></div>
     </div>
     <div class="example">
-      <p class="label">On hort.pm</p>
+      <h2 class="pic-h">You type it on hort.pm, never in the chat.</h2>
       <figure class="win mock" role="img" aria-label="Illustration: the hort.pm page for an agent's request, with the secret's name, its two fields and environment and an empty value input for each field">
         <div class="win-bar"><i></i><i></i><i></i><span class="title">hort — request</span></div>
         <div class="win-body" inert>
@@ -123,45 +101,8 @@
         </div>
       </figure>
     </div>
-  </div>
-  <div class="win term setup-term"><div class="win-bar"><i></i><i></i><i></i><span>set up once</span></div><pre tabindex="0"><span class="t-m"># Claude Code</span>
-<span class="t-p">$</span> claude mcp add hort -- hort mcp
-
-<span class="t-m"># Codex</span>
-<span class="t-p">$</span> codex mcp add hort -- hort mcp</pre>
-    <p class="win-foot">One tool, <code>request_secret</code>. It needs an unlocked vault that is registered on hort.pm or your own server.</p></div>
-</div>
-
-<div class="section wrap" id="web">
-  <p class="sec-tag">// web app</p>
-  <h2 class="sec-h">Your vault in the browser.</h2>
-  <div class="win talk sec-intro"><div class="win-bar"><i></i><i></i><i></i><span>hort — web app</span></div><div class="talk-body"><p><span class="say">hort ›</span> On hort.pm you see the same vault as in your terminal: named fields as a tree, env and context, show, copy, edit and delete. Unlock it with a passkey instead of typing your passphrase.</p></div></div>
-  <figure class="win mock mock-vault" role="img" aria-label="Illustration: the hort.pm vault with three secrets; stripe has two named fields, client_id and secret, both for env prod, and client_id is selected with show, copy, edit, share and delete">
-    <div class="win-bar"><i></i><i></i><i></i><span class="title">hort — vault</span><div class="tabs"><span class="tab on">vault<kbd>g v</kbd></span><span class="tab">devices<kbd>g d</kbd></span><span class="tab">access<kbd>g a</kbd></span></div></div>
-    <div class="win-body" inert>
-      <div class="prompt"><span class="ps1">&gt; <span class="cmd">hort list</span></span><input type="search" tabindex="-1" placeholder="filter by name, field, env, context …"><button class="tbtn tbtn-primary" type="button" tabindex="-1"><kbd>n</kbd><span class="lbl">new</span><span class="ico">+ new</span></button></div>
-      <div class="meta"><span>3 secrets · 4 values</span><span>synced 2026-11-10 09:41</span></div>
-      <div class="s-grid">
-        <div class="v-cols s-cols"><span>name</span><span>env / context</span><span>description</span></div>
-        <ul class="v-list s-list">
-          <li class="v-row first"><span class="key"><span class="c-name">db-password</span><span class="c-env"><span class="tag">prod</span></span></span><span class="c-desc">PostgreSQL password</span></li>
-          <li class="v-row first"><span class="key"><span class="c-name">openai-key</span><span class="c-env"><span class="any">·</span></span></span><span class="c-desc">OpenAI API key</span></li>
-          <li class="v-row first"><span class="key"><span class="c-name">stripe<span class="cnt"> 2 fields</span></span><span class="c-env"></span></span><span class="c-desc">Stripe API for the shop</span></li>
-          <li class="v-row child sel"><span class="key"><span class="c-name sub"><span class="guide">├─ </span>client_id</span><span class="c-env"><span class="tag">prod</span></span></span><span class="c-desc"></span><span class="act"><button type="button" tabindex="-1"><u>⏎</u> show</button><button type="button" tabindex="-1"><u>c</u> copy</button><button type="button" tabindex="-1"><u>e</u> edit</button><button type="button" tabindex="-1"><u>s</u> share</button><button type="button" tabindex="-1" class="danger"><u>d</u> delete</button></span></li>
-          <li class="v-row child"><span class="key"><span class="c-name sub"><span class="guide">└─ </span>secret</span><span class="c-env"><span class="tag">prod</span></span></span><span class="c-desc"></span></li>
-        </ul>
-      </div>
-    </div>
-  </figure>
-</div>
-
-<div class="section wrap" id="share">
-  <p class="sec-tag">// share</p>
-  <h2 class="sec-h">Share a secret with one person.</h2>
-  <div class="win talk sec-intro"><div class="win-bar"><i></i><i></i><i></i><span>hort — share</span></div><div class="talk-body"><p><span class="say">hort ›</span> In the web app, share a secret, with or without its named fields, by link for 1 hour, 1 day or 7 days. Say who it is for. The recipient needs no account: they open it with their name, then copy what they need and delete the link. Five wrong names destroy it.</p></div></div>
-  <div class="examples">
-    <div class="example">
-      <p class="label">You share</p>
+    <div class="example" id="share">
+      <h2 class="pic-h">You share one secret with one person, by link.</h2>
       <figure class="win mock" role="img" aria-label="Illustration: the share panel for stripe, for Lars, expiring in 1 day, with both fields client_id and secret ticked">
         <div class="win-bar"><i></i><i></i><i></i><span class="title">hort — vault</span></div>
         <div class="win-body" inert>
@@ -169,7 +110,7 @@
             <h3>&gt; share stripe</h3>
             <div class="grid">
               <div class="wide"><label>For</label><input type="text" tabindex="-1" value="Lars" autocomplete="off" data-1p-ignore data-lpignore="true" data-bwignore></div>
-              <div><label>Expires in</label><select tabindex="-1"><option>1 day</option></select></div>
+              <div class="wide"><label>Expires in</label><select tabindex="-1"><option>1 day</option></select></div>
               <div class="full"><label>Fields</label><label class="check"><input type="checkbox" tabindex="-1" checked>client_id</label><label class="check"><input type="checkbox" tabindex="-1" checked>secret</label></div>
             </div>
             <p class="e-note">The link opens only for this name. Five wrong names destroy it.</p>
@@ -178,92 +119,8 @@
         </div>
       </figure>
     </div>
-    <div class="example">
-      <p class="label">Lars opens it</p>
-      <figure class="win mock" role="img" aria-label="Illustration: the recipient page asks who they are; after Lars types his name it shows the fields client_id and secret masked, with show and copy, save to my vault and delete the link">
-        <div class="win-bar"><i></i><i></i><i></i><span class="title">hort — shared secret</span></div>
-        <div class="win-body" inert>
-          <div class="prompt static"><span class="ps1">&gt; <span class="cmd">hort take</span></span></div>
-          <section class="block lead">
-            <h3>&gt; a shared secret</h3>
-            <p class="ink">Someone shared a secret with you. Who are you?</p>
-            <div class="f"><label>Your name</label><input type="text" tabindex="-1" value="Lars" autocomplete="off" data-1p-ignore data-lpignore="true" data-bwignore></div>
-          </section>
-          <section class="block">
-            <h3>&gt; shared with you</h3>
-            <dl class="facts">
-              <dt>Name</dt><dd><code>stripe</code></dd>
-              <dt class="raw">client_id</dt><dd><span class="muted">••••••••</span> <button class="tbtn" type="button" tabindex="-1">show</button><button class="tbtn" type="button" tabindex="-1">copy</button></dd>
-              <dt class="raw">secret</dt><dd><span class="muted">••••••••</span> <button class="tbtn" type="button" tabindex="-1">show</button><button class="tbtn" type="button" tabindex="-1">copy</button></dd>
-            </dl>
-            <div class="row-actions"><button class="tbtn tbtn-primary" type="button" tabindex="-1">save to my vault</button><button class="tbtn danger" type="button" tabindex="-1">I have it, delete the link</button></div>
-          </section>
-        </div>
-      </figure>
-    </div>
   </div>
-  <div class="win term setup-term"><pre tabindex="0"><span class="t-m"># Lars uses Hort too? Take it into his vault, then the link is deleted</span>
-<span class="t-p">$</span> hort take '&lt;link&gt;'
-Who are you? Lars
-Saved stripe (2 fields). The shared link is deleted.</pre>
-    <p class="win-foot">The server holds only an encrypted copy. The link key stays in the link and never reaches the server.</p></div>
-</div>
-
-<div class="section wrap" id="everywhere">
-  <p class="sec-tag">// everywhere</p>
-  <h2 class="sec-h">One vault on every device.</h2>
-  <div class="win talk sec-intro"><div class="win-bar"><i></i><i></i><i></i><span>hort — sync</span></div><div class="talk-body"><p><span class="say">hort ›</span> Your devices sync end-to-end encrypted through hort.pm, hosted on Cloudflare in the EU, or through a server you run yourself. The CLI also works alone, without an account.</p></div></div>
-  <div class="win talk"><div class="win-bar"><i></i><i></i><i></i><span>hort — platforms</span></div><ul class="reach">
-    <li><svg aria-hidden="true"><use href="#g-laptop"/></svg><h3>macOS</h3><p>Homebrew or npm</p></li>
-    <li><svg aria-hidden="true"><use href="#g-window"/></svg><h3>Windows</h3><p>Scoop or npm</p></li>
-    <li><svg aria-hidden="true"><use href="#g-term"/></svg><h3>Linux</h3><p>npm, .deb, .rpm or a plain binary</p></li>
-    <li><svg aria-hidden="true"><use href="#g-globe"/></svg><h3>Web</h3><p>hort.pm in any browser, unlocked with a passkey</p></li>
-  </ul>
-  <p class="win-foot">Synced with a server, Hort tells you in the terminal when a newer version exists. <code>hort update</code> updates through the package manager you installed with; on Windows it names the command to run.</p></div>
-</div>
-
-<div class="section wrap" id="features">
-  <p class="sec-tag">// features</p>
-  <h2 class="sec-h">Small tool. Sharp edges where they belong.</h2>
-  <div class="win talk"><div class="win-bar"><i></i><i></i><i></i><span>hort — features</span></div><ul class="feat">
-    <li><strong>One encrypted vault.</strong><span>AES-256-GCM, key derived with Argon2id. One file on your disk.</span></li>
-    <li><strong>Built for agents.</strong><span><code>hort --help</code> teaches an agent the whole interface in one call. Plain values on stdout, errors on stderr, <code>--json</code> when it wants structure.</span></li>
-    <li><strong>Environments and contexts.</strong><span>One name, many values: dev, prod, per tenant or customer. Lookups fall back to the baseline.</span></li>
-    <li><strong>Named fields.</strong><span>One secret, several parts: <code>hort get stripe client_id</code>, <code>hort get stripe secret</code>.</span></li>
-    <li><strong>History.</strong><span>Every change is a revision. <code>hort history &lt;name&gt;</code> shows what changed and when.</span></li>
-    <li><strong>Offline first.</strong><span>No telemetry, and reads and writes keep working without a network. Hort works on a plane.</span></li>
-    <li><strong>Values stay out of your shell history.</strong><span><code>--value-stdin</code> keeps secrets out of process arguments.</span></li>
-    <li><strong>Secret Key + passphrase.</strong><span>Unlock with your passphrase plus a device-generated Secret Key. A stolen copy of your vault is useless without both.</span></li>
-    <li><strong>Share by link.</strong><span>One secret for one named person, for 1 hour, 1 day or 7 days. You see when it was picked up, and you can revoke it.</span></li>
-  </ul></div>
-</div>
-
-<div class="section security wrap" id="security">
-  <p class="sec-tag">// security</p>
-  <h2 class="sec-h">Where your secrets live, honestly.</h2>
-  <div class="win talk sec-intro"><div class="win-bar"><i></i><i></i><i></i><span>hort — security</span></div><div class="talk-body"><p><span class="say">hort ›</span> A secret manager earns trust by saying what it protects and what it doesn't. Here's ours.</p></div></div>
-  <div class="cols">
-    <div class="win talk">
-      <div class="win-bar"><i></i><i></i><i></i><h3>What Hort protects</h3></div><div class="talk-body">
-      <ul>
-        <li>Keys and plaintext exist only on your devices, and in your browser while hort.pm is unlocked.</li>
-        <li>The vault is encrypted with AES-256-GCM. Tampering is detected.</li>
-        <li>The sync server stores ciphertext only. It cannot read your secrets.</li>
-        <li>A shared copy is encrypted before it leaves your browser, and the server never gets the link key. It is deleted when it expires, after 7 days at most.</li>
-        <li>Agents get values through the CLI on your machine. With the request flow, they never get values you type for them.</li>
-      </ul>
-    </div></div>
-    <div class="win talk">
-      <div class="win-bar"><i></i><i></i><i></i><h3>What Hort does not protect against</h3></div><div class="talk-body">
-      <ul>
-        <li><strong>Someone who controls your machine.</strong> Root or malware on an unlocked device can read what you can read. That's true for every local secret manager.</li>
-        <li><strong>Whoever controls the hort.pm deployment.</strong> The web app is JavaScript served by hort.pm. Whoever controls that deployment could ship code that reads secrets after you unlock in the browser. We reduce the risk: strict Content Security Policy, no third-party scripts, open source code you can check. If you don't want this risk at all, use only the CLI. Or run the backend yourself.</li>
-        <li><strong>Anyone with the link and the name.</strong> A shared copy opens for whoever has both the link and the recipient's name. Send the link only to that person, and pick a short expiry.</li>
-        <li><strong>Losing both Secret Key and passphrase.</strong> Then your data is gone. Nobody can reset it, including us. Print your Emergency Kit and keep it somewhere safe.</li>
-      </ul>
-    </div></div>
-  </div>
-  <div class="win talk aside-note today-note"><div class="win-bar"><i></i><i></i><i></i><span>hort — today</span></div><div class="talk-body"><p><span class="say">hort ›</span> <strong>Today, specifically:</strong> The sync server holds encrypted vault data and, for at most 7 days, encrypted shared copies. Opening your vault takes your Secret Key and your passphrase, and neither ever leaves your devices. Opening a shared copy takes the link and the recipient's name.</p></div></div>
+  <div class="win talk strip" id="security"><div class="win-bar"><i></i><i></i><i></i><span>hort</span></div><div class="talk-body"><p><span class="say">hort ›</span> macOS, Windows, Linux and the browser, synced end-to-end encrypted. Agents reach it through the CLI and the MCP server for Claude Code and Codex. <a href="/threat-model">What Hort protects, and what it doesn't →</a></p></div></div>
 </div>
 
 <div class="section wrap" id="install">
@@ -279,32 +136,36 @@ Saved stripe (2 fields). The shared link is deleted.</pre>
       </div>
     </div>
 <pre role="tabpanel" id="os-macos-panel" aria-labelledby="os-macos" tabindex="0"><span class="t-m"># Homebrew</span>
-<span class="t-p">$</span> brew install sebastian-breitzke/tap/hort &amp;&amp; hort init</pre>
+<span class="t-p">$</span> brew install sebastian-breitzke/tap/hort</pre>
 <pre role="tabpanel" id="os-windows-panel" aria-labelledby="os-windows" tabindex="0" hidden><span class="t-m"># Scoop</span>
 <span class="t-p">&gt;</span> scoop bucket add sebastian-breitzke https://github.com/sebastian-breitzke/scoop-bucket
-<span class="t-p">&gt;</span> scoop install hort
-<span class="t-p">&gt;</span> hort init</pre>
+<span class="t-p">&gt;</span> scoop install hort</pre>
 <pre role="tabpanel" id="os-linux-panel" aria-labelledby="os-linux" tabindex="0" hidden><span class="t-m"># npm, or a .deb, .rpm or plain binary from github.com/gefuege/hort/releases</span>
-<span class="t-p">$</span> npm install -g @s16e/hort &amp;&amp; hort init</pre>
+<span class="t-p">$</span> npm install -g @s16e/hort</pre>
 <pre role="tabpanel" id="os-npm-panel" aria-labelledby="os-npm" tabindex="0" hidden><span class="t-m"># any OS with Node.js</span>
-<span class="t-p">$</span> npm install -g @s16e/hort &amp;&amp; hort init</pre>
-<pre class="after" tabindex="0"><span class="t-m"># after install: store a secret, read it back</span>
-<span class="t-p">$</span> printf '%s' "$KEY" | hort set openai-key --value-stdin --description "OpenAI API key"
-<span class="t-p">$</span> hort get openai-key</pre>
-    <p class="win-foot">Set a passphrase during <code>hort init</code>. That's it. Then tell your agent to run <code>hort --help</code> and <a href="#ask">add the MCP server</a>. Later, <code>hort update</code> keeps it current. Binaries, .deb and .rpm packages: <a href="https://github.com/gefuege/hort/releases">GitHub Releases</a>.</p>
+<span class="t-p">$</span> npm install -g @s16e/hort</pre>
+<pre class="after" tabindex="0"><span class="t-m"># let your agents ask for secrets</span>
+<span class="t-p">$</span> claude mcp add hort -- hort mcp
+<span class="t-p">$</span> codex mcp add hort -- hort mcp</pre>
+    <p class="win-foot">Binaries, .deb and .rpm packages: <a href="https://github.com/gefuege/hort/releases">GitHub Releases</a>. Later, <code>hort update</code> keeps it current.</p>
   </div>
-</div>
-
-<div class="section about wrap" id="open-source">
-  <p class="sec-tag">// open source</p>
-  <h2 class="sec-h">Yours to read, run and keep.</h2>
-  <div class="win talk"><div class="win-bar"><i></i><i></i><i></i><span>hort — open source</span></div><div class="talk-body">
-  <p><span class="say">hort ›</span> Hort is open source under the MIT license. Read the code, audit the crypto, send a pull request.</p>
-  <p>The CLI needs no server at all. For sync and the web app, use the hosted service at hort.pm or <a href="https://github.com/gefuege/hort/blob/main/docs/self-hosting.md">run the backend yourself</a>.</p>
-  <h3 class="sub-h">Why "Hort"?</h3>
-  <p class="why">"Hort" is German for a safe place, and for a treasure hoard, like the Nibelungenhort. The logo is a key in a nest: your secrets, kept safe, close to home.</p>
-  </div></div>
-  <div class="ctas"><a class="btn btn-primary" href="https://github.com/gefuege/hort">Star or fork on GitHub →</a></div>
+  <div class="cols ways">
+    <div class="win talk">
+      <div class="win-bar"><i></i><i></i><i></i><h3>You have an invitation</h3></div><div class="talk-body">
+      <ul>
+        <li><strong>Open your invite link.</strong> It shows your command: <code class="nowrap">hort init --invite &lt;code&gt;</code></li>
+        <li><strong>Run it</strong> and set a passphrase. Your vault syncs through hort.pm, and <a href="/vault">the web app</a> opens with a passkey.</li>
+      </ul>
+    </div></div>
+    <div class="win talk">
+      <div class="win-bar"><i></i><i></i><i></i><h3>No invitation</h3></div><div class="talk-body">
+      <ul>
+        <li><strong>Local only:</strong> <code>hort init</code> works without an account.</li>
+        <li><strong>Host Hort yourself</strong> for sync and the web app: <a href="https://github.com/gefuege/hort/blob/main/docs/self-hosting.md">self-hosting guide</a>. Or tell your agent: “Set up Hort for me with <a href="/self-host.md">hort.pm/self-host.md</a>.”</li>
+        <li><strong>Or ask for an invitation</strong> <a href="https://github.com/gefuege/hort/issues">on GitHub</a>.</li>
+      </ul>
+    </div></div>
+  </div>
 </div>
 </main>
 
