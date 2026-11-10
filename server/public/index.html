@@ -74,7 +74,7 @@
       <p class="win-foot">The value goes from your browser into your vault. The chat only ever sees the name.</p></div>
     </div>
   </div>
-  <div class="win talk aside-note"><div class="win-bar"><i></i><i></i><i></i><span>hort — claude code</span></div><div class="talk-body"><p><span class="say">hort ›</span> Using Claude Code? Add the MCP server once with <code>claude mcp add hort -- hort mcp</code>. Then your agent can request a secret by name; you type the value on hort.pm, never into the chat.</p></div></div>
+  <div class="win talk aside-note"><div class="win-bar"><i></i><i></i><i></i><span>hort — mcp</span></div><div class="talk-body"><p><span class="say">hort ›</span> Hort ships an MCP server. Add it once: <code>claude mcp add hort -- hort mcp</code> for Claude Code, <code>codex mcp add hort -- hort mcp</code> for Codex. Then your agent can request a secret by name; you type the value on hort.pm, never into the chat.</p></div></div>
 </div>
 
 <div class="section wrap" id="features">
@@ -147,7 +147,7 @@
 <pre class="after" tabindex="0"><span class="t-m"># after install: store a secret, read it back</span>
 <span class="t-p">$</span> printf '%s' "$KEY" | hort set openai-key --value-stdin --description "OpenAI API key"
 <span class="t-p">$</span> hort get openai-key</pre>
-    <p class="win-foot">Set a passphrase during <code>hort init</code>. That's it. Then tell your agent to run <code>hort --help</code>. Binaries for every OS: <a href="https://github.com/gefuege/hort/releases">GitHub Releases</a>.</p>
+    <p class="win-foot">Set a passphrase during <code>hort init</code>. That's it. Then tell your agent to run <code>hort --help</code> and <a href="#agents">add the MCP server</a>. Binaries for every OS: <a href="https://github.com/gefuege/hort/releases">GitHub Releases</a>.</p>
   </div>
 </div>
 
