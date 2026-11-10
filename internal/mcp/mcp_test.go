@@ -194,6 +194,9 @@ func TestRequestSecret(t *testing.T) {
 		if v := cs.InitializeResult().ProtocolVersion; v != "2025-11-25" {
 			t.Fatalf("negotiated %s", v)
 		}
+		if v := cs.InitializeResult().ServerInfo.Version; v != "9.9.9" {
+			t.Fatalf("server reports version %s", v)
+		}
 		out := r.output(r.call(cs, map[string]any{"name": "negotiate-secret", "description": "Negotiation"}))
 		if asked != 1 || out.Status != "pending" || out.URL == "" {
 			t.Fatalf("asked %d times: %+v", asked, out)
@@ -421,7 +424,7 @@ func (r *rig) connect(c *client) session {
 			return errors.New("synthetic sync failure")
 		}
 		return cli.CmdSync(false)
-	}})
+	}, Version: "9.9.9"})
 	ss, err := server.Connect(ctx, st, nil)
 	if err != nil {
 		r.t.Fatal(err)

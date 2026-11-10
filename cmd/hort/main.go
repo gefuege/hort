@@ -266,7 +266,7 @@ func main() {
 		Long:  helptext.MCPText,
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return cli.CmdMCP()
+			return cli.CmdMCP(version)
 		},
 	})
 

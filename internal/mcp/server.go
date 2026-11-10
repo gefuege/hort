@@ -37,6 +37,8 @@ const (
 type Deps struct {
 	// Sync runs one full sync of the unlocked primary vault.
 	Sync func(ref vault.VaultRef, vk []byte) error
+	// Version is the Hort version the server reports to its client.
+	Version string
 }
 
 // Input is the tool's arguments (§7.1).
@@ -103,7 +105,7 @@ func New(deps Deps) *sdk.Server {
 	// URL elicitation is a server-initiated request, which protocol 2026-07-28 forbids
 	// while a tool runs. Claude Code tries server/discover first; without that
 	// version in the list it falls back to initialize 2025-11-25 with elicitation.url.
-	srv := sdk.NewServer(&sdk.Implementation{Name: "hort", Version: "1.0.0"}, &sdk.ServerOptions{
+	srv := sdk.NewServer(&sdk.Implementation{Name: "hort", Version: deps.Version}, &sdk.ServerOptions{
 		SupportedProtocolVersions: []string{"2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"},
 	})
 	sdk.AddTool(srv, &sdk.Tool{
