@@ -1,6 +1,6 @@
 {
   "name": "@s16e/hort",
-  "version": "0.4.1",
+  "version": "1.1.0",
   "description": "Encrypted secret store with sync for humans and AI agents",
   "keywords": [
     "secrets",
