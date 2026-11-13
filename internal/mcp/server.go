@@ -22,7 +22,7 @@ import (
 // Polling after the user accepted the URL elicitation (§7.2 step 4). Tests shorten them.
 var (
 	pollEvery = 2 * time.Second
-	pollFor   = 60 * time.Second
+	pollFor   = 10 * time.Minute
 )
 
 // maxMetaBytes is the server's limit for meta_ct (server/README.md).

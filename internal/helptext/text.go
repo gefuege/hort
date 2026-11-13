@@ -184,8 +184,9 @@ Read the value afterwards with 'hort get'. There is no tool that reads values
 or lists secrets.
 
 The user enters the value at https://hort.pm/r/<id>, signed in with a passkey.
-A client that supports URL elicitation opens that page itself; any other
-client gets status pending with the url, and the agent calls request_secret
+A client that supports URL elicitation opens that page itself, and the tool
+waits up to 10 minutes for the value; any other client, or one that gives up
+earlier, gets status pending with the url, and the agent calls request_secret
 again with the same arguments to check the status. A request expires after 24
 hours.
 
@@ -193,6 +194,13 @@ The vault must be unlocked ('hort unlock') and registered on the server.
 
 Set up Claude Code:
   claude mcp add hort -- hort mcp
+
+Set up Codex (~/.codex/config.toml; the timeout lets the tool wait the 10
+minutes):
+  [mcp_servers.hort]
+  command = "hort"
+  args = ["mcp"]
+  tool_timeout_sec = 660
 `
 
 // RecoveryText answers "what if I lose something" and is shown by
