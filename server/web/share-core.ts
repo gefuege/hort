@@ -52,9 +52,20 @@ export async function deriveShareKeys(name: string, linkKey: Uint8Array, shareId
 }
 
 export type SharedField = { field: string; value: string };
-export type SharedSecret = { name: string; description: string; fields: SharedField[] };
+// A share hands values over; a request also asks the recipient to send values
+// back once (the answer). A request may carry empty values.
+export type ShareKind = "share" | "request";
+export type SharedAnswer = { name: string; description: string; fields: SharedField[] };
+export type SharedSecret = SharedAnswer & { kind: ShareKind };
 
-function sharedSecretError(s: SharedSecret): string | null {
+// The kind member of a share plaintext or meta: absent in the form of an older
+// Hort, which reads as "share". The one place the browser maps that form.
+function shareKind(o: Record<string, unknown>): ShareKind | null {
+  if (!("kind" in o)) return "share";
+  return o.kind === "share" || o.kind === "request" ? o.kind : null;
+}
+
+function sharedSecretError(s: SharedAnswer): string | null {
   if (s.name === "") return "shared secret has no name";
   if (s.fields.length === 0) return "shared secret has no fields";
   const seen = new Set<string>();
@@ -67,44 +78,79 @@ function sharedSecretError(s: SharedSecret): string | null {
 }
 
 const shareAAD = (shareId: string) => canon("hort/v4/share-ct\n", shareIdBytes(shareId));
+const answerAAD = (shareId: string) => canon("hort/v4/share-answer\n", shareIdBytes(shareId));
 
-// ct = nonce || AES-256-GCM(enc, JSON {name, description, fields}).
+async function sealShared(keys: ShareKeys, aad: Uint8Array, s: SharedAnswer, extra: { kind?: ShareKind }, nonce: Uint8Array): Promise<Uint8Array> {
+  const error = sharedSecretError(s);
+  if (error) throw new Error(error);
+  const plaintext = { name: s.name, description: s.description, fields: s.fields.map((f) => ({ field: f.field, value: f.value })), ...extra };
+  return seal(keys.enc, utf8.encode(JSON.stringify(plaintext)), aad, nonce);
+}
+
+// A share (kinded) or an answer; only a share carries a kind.
+async function openShared(keys: ShareKeys, shareId: string, ct: Uint8Array, noun: "share" | "answer"): Promise<SharedSecret> {
+  const kinded = noun === "share";
+  let pt: Uint8Array;
+  try {
+    pt = await open(keys.enc, ct, kinded ? shareAAD(shareId) : answerAAD(shareId));
+  } catch {
+    throw new Error(`${noun} does not open`);
+  }
+  const o: unknown = JSON.parse(new TextDecoder("utf-8", { fatal: true, ignoreBOM: false }).decode(pt));
+  const what = `${noun} ${shareId}`;
+  const invalid = new Error(`${what}: invalid content`);
+  const members = ["name", "description", "fields"];
+  if (!exactKeys(o, members, kinded ? ["kind"] : [])) throw invalid;
+  const kind = shareKind(o);
+  if (!kind || typeof o.name !== "string" || typeof o.description !== "string" || !Array.isArray(o.fields)) throw invalid;
+  const fields: SharedField[] = [];
+  for (const f of o.fields as unknown[]) {
+    if (!exactKeys(f, ["field", "value"]) || typeof f.field !== "string" || typeof f.value !== "string") throw invalid;
+    fields.push({ field: f.field, value: f.value });
+  }
+  const s = { name: o.name, description: o.description, fields, kind };
+  const error = sharedSecretError(s);
+  if (error) throw new Error(`${what}: ${error}`);
+  return s;
+}
+
+// ct = nonce || AES-256-GCM(enc, JSON {name, description, fields, kind}).
 export async function sealShare(
   keys: ShareKeys,
   shareId: string,
   s: SharedSecret,
   nonce: Uint8Array = crypto.getRandomValues(new Uint8Array(12)),
 ): Promise<Uint8Array> {
-  const error = sharedSecretError(s);
-  if (error) throw new Error(error);
-  const plaintext = { name: s.name, description: s.description, fields: s.fields.map((f) => ({ field: f.field, value: f.value })) };
-  return seal(keys.enc, utf8.encode(JSON.stringify(plaintext)), shareAAD(shareId), nonce);
+  if (s.kind !== "share" && s.kind !== "request") throw new Error(`share kind "${s.kind}" is invalid`);
+  return sealShared(keys, shareAAD(shareId), s, { kind: s.kind }, nonce);
 }
 
 export async function openShare(keys: ShareKeys, shareId: string, ct: Uint8Array): Promise<SharedSecret> {
-  const aad = shareAAD(shareId);
-  let pt: Uint8Array;
-  try {
-    pt = await open(keys.enc, ct, aad);
-  } catch {
-    throw new Error("share does not open");
-  }
-  const o: unknown = JSON.parse(new TextDecoder("utf-8", { fatal: true, ignoreBOM: false }).decode(pt));
-  const invalid = new Error(`share ${shareId}: invalid content`);
-  if (!exactKeys(o, ["name", "description", "fields"]) || typeof o.name !== "string" || typeof o.description !== "string" || !Array.isArray(o.fields)) throw invalid;
-  const fields: SharedField[] = [];
-  for (const f of o.fields as unknown[]) {
-    if (!exactKeys(f, ["field", "value"]) || typeof f.field !== "string" || typeof f.value !== "string") throw invalid;
-    fields.push({ field: f.field, value: f.value });
-  }
-  const s = { name: o.name, description: o.description, fields };
-  const error = sharedSecretError(s);
-  if (error) throw new Error(`share ${shareId}: ${error}`);
-  return s;
+  return openShared(keys, shareId, ct, "share");
 }
 
-// The owner's view of a share, sealed under RK like request meta.
-export type ShareMeta = { name: string; recipient: string; fields: string[] };
+// The recipient's answer to a request: JSON {name, description, fields} under
+// the share's enc key, with its own AAD tag.
+export async function sealShareAnswer(
+  keys: ShareKeys,
+  shareId: string,
+  a: SharedAnswer,
+  nonce: Uint8Array = crypto.getRandomValues(new Uint8Array(12)),
+): Promise<Uint8Array> {
+  return sealShared(keys, answerAAD(shareId), a, {}, nonce);
+}
+
+export async function openShareAnswer(keys: ShareKeys, shareId: string, ct: Uint8Array): Promise<SharedAnswer> {
+  const { name, description, fields } = await openShared(keys, shareId, ct, "answer");
+  return { name, description, fields };
+}
+
+// The owner's view of a share, sealed under RK like request meta: the row's
+// env and context, and for a request the link key (unpadded base64url, "" for
+// a share), from which the owner derives the share keys to open the answer.
+export type ShareMeta = { name: string; recipient: string; fields: string[]; kind: ShareKind; env: string; context: string; linkKey: string };
+const META_MEMBERS = ["name", "recipient", "fields"];
+const META_KINDED = [...META_MEMBERS, "kind", "env", "context", "link_key"];
 
 const metaAAD = (keys: AccountKeys, shareId: string) => canon("hort/v4/share-meta\n", keys.accountId, shareIdBytes(shareId));
 
@@ -114,20 +160,27 @@ export async function sealShareMeta(
   m: ShareMeta,
   nonce: Uint8Array = crypto.getRandomValues(new Uint8Array(12)),
 ): Promise<Uint8Array> {
-  const plaintext = { name: m.name, recipient: m.recipient, fields: m.fields };
+  const plaintext = { name: m.name, recipient: m.recipient, fields: m.fields, kind: m.kind, env: m.env, context: m.context, link_key: m.linkKey };
   return seal(keys.rk, utf8.encode(JSON.stringify(plaintext)), metaAAD(keys, shareId), nonce);
 }
 
 export async function openShareMeta(keys: AccountKeys, shareId: string, metaCt: Uint8Array): Promise<ShareMeta> {
   const pt = await open(keys.rk, metaCt, metaAAD(keys, shareId));
   const o: unknown = JSON.parse(new TextDecoder("utf-8", { fatal: true, ignoreBOM: false }).decode(pt));
+  const invalid = new Error(`share ${shareId}: invalid metadata`);
+  const older = exactKeys(o, META_MEMBERS);
+  if (!older && !exactKeys(o, META_KINDED)) throw invalid;
+  const m = o as Record<string, unknown>;
+  const kind = shareKind(m);
+  const [env, context, linkKey] = older ? ["", "", ""] : [m.env, m.context, m.link_key];
   if (
-    !exactKeys(o, ["name", "recipient", "fields"]) || typeof o.name !== "string" || typeof o.recipient !== "string" ||
-    !Array.isArray(o.fields) || !o.fields.every((f) => typeof f === "string")
+    !kind || typeof m.name !== "string" || typeof m.recipient !== "string" || !Array.isArray(m.fields) || !m.fields.every((f) => typeof f === "string") ||
+    typeof env !== "string" || typeof context !== "string" || typeof linkKey !== "string" ||
+    (kind === "share" ? linkKey !== "" : b64urlDecode(linkKey)?.length !== SHARE_LINK_KEY_BYTES)
   ) {
-    throw new Error(`share ${shareId}: invalid metadata`);
+    throw invalid;
   }
-  return { name: o.name, recipient: o.recipient, fields: o.fields as string[] };
+  return { name: m.name, recipient: m.recipient, fields: m.fields as string[], kind, env, context, linkKey };
 }
 
 // https://<origin>/s/<share ID>#<link key, unpadded base64url>. The key lives

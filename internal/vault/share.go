@@ -86,12 +86,21 @@ func shareKey(name string, linkKey []byte, shareID string, p ArgonParams) (a, k 
 	return a, k, err
 }
 
+// Share kinds: a share hands values over; a request also asks the recipient
+// to send values back once (the answer, sealed under the same enc key).
+const (
+	ShareKindShare   = "share"
+	ShareKindRequest = "request"
+)
+
 // SharedSecret is the plaintext of a share: one snapshot of a secret's
-// description and the chosen fields; field "" is the default field.
+// description and the chosen fields; field "" is the default field. A
+// request may carry empty values.
 type SharedSecret struct {
 	Name        string        `json:"name"`
 	Description string        `json:"description"`
 	Fields      []SharedField `json:"fields"`
+	Kind        string        `json:"kind"`
 }
 
 type SharedField struct {
@@ -100,14 +109,21 @@ type SharedField struct {
 }
 
 func (s SharedSecret) validate() error {
-	if s.Name == "" {
+	if s.Kind != ShareKindShare && s.Kind != ShareKindRequest {
+		return fmt.Errorf("share kind %q is invalid", s.Kind)
+	}
+	return validateShared(s.Name, s.Fields)
+}
+
+func validateShared(name string, fields []SharedField) error {
+	if name == "" {
 		return errors.New("shared secret has no name")
 	}
-	if len(s.Fields) == 0 {
+	if len(fields) == 0 {
 		return errors.New("shared secret has no fields")
 	}
 	seen := map[string]bool{}
-	for _, f := range s.Fields {
+	for _, f := range fields {
 		if f.Field != "" && !fieldPattern.MatchString(f.Field) {
 			return fmt.Errorf("shared field %q is invalid", f.Field)
 		}
@@ -120,6 +136,27 @@ func (s SharedSecret) validate() error {
 }
 
 func shareAAD(id []byte) []byte { return canon("hort/v4/share-ct\n", id) }
+
+func shareAnswerAAD(id []byte) []byte { return canon("hort/v4/share-answer\n", id) }
+
+// shareKind reads the kind member of a share plaintext or meta: absent in
+// the form of an older Hort, which reads as "share". The one place Go maps
+// that form.
+func shareKind(plaintext []byte) (string, error) {
+	var members map[string]json.RawMessage
+	if err := json.Unmarshal(plaintext, &members); err != nil {
+		return "", err
+	}
+	raw, ok := members["kind"]
+	if !ok {
+		return ShareKindShare, nil
+	}
+	var kind string
+	if err := json.Unmarshal(raw, &kind); err != nil || (kind != ShareKindShare && kind != ShareKindRequest) {
+		return "", fmt.Errorf("share kind %s is invalid", raw)
+	}
+	return kind, nil
+}
 
 // sealShare returns ct = nonce || AES-256-GCM(enc, JSON secret, aad).
 func sealShare(enc []byte, shareID string, s SharedSecret, nonce []byte) ([]byte, error) {
@@ -147,23 +184,82 @@ func OpenShare(enc []byte, shareID string, ct []byte) (SharedSecret, error) {
 	if err != nil {
 		return SharedSecret{}, errors.New("share does not open")
 	}
-	var s SharedSecret
-	if err := strictJSON(plaintext, &s); err != nil {
+	var w struct {
+		Name        string        `json:"name"`
+		Description string        `json:"description"`
+		Fields      []SharedField `json:"fields"`
+		Kind        string        `json:"kind,omitempty"`
+	}
+	if err := strictJSON(plaintext, &w); err != nil {
 		return SharedSecret{}, fmt.Errorf("share %s: %w", shareID, err)
 	}
+	kind, err := shareKind(plaintext)
+	if err != nil {
+		return SharedSecret{}, fmt.Errorf("share %s: %w", shareID, err)
+	}
+	s := SharedSecret{Name: w.Name, Description: w.Description, Fields: w.Fields, Kind: kind}
 	if err := s.validate(); err != nil {
 		return SharedSecret{}, fmt.Errorf("share %s: %w", shareID, err)
 	}
 	return s, nil
 }
 
+// shareAnswer is what the recipient of a request sends back: the secret's
+// name, description and fields with the values as the recipient left them.
+// It is sealed under the share's enc key with its own AAD tag.
+type shareAnswer struct {
+	Name        string        `json:"name"`
+	Description string        `json:"description"`
+	Fields      []SharedField `json:"fields"`
+}
+
+func sealShareAnswer(enc []byte, shareID string, a shareAnswer, nonce []byte) ([]byte, error) {
+	id, err := decodeID(shareID)
+	if err != nil {
+		return nil, err
+	}
+	if err := validateShared(a.Name, a.Fields); err != nil {
+		return nil, err
+	}
+	plaintext, err := json.Marshal(a)
+	if err != nil {
+		return nil, err
+	}
+	return sealEnvelope(enc, nonce, plaintext, shareAnswerAAD(id))
+}
+
+func openShareAnswer(enc []byte, shareID string, ct []byte) (shareAnswer, error) {
+	id, err := decodeID(shareID)
+	if err != nil {
+		return shareAnswer{}, err
+	}
+	plaintext, err := openEnvelope(enc, ct, shareAnswerAAD(id))
+	if err != nil {
+		return shareAnswer{}, errors.New("answer does not open")
+	}
+	var a shareAnswer
+	if err := strictJSON(plaintext, &a); err != nil {
+		return shareAnswer{}, fmt.Errorf("answer %s: %w", shareID, err)
+	}
+	if err := validateShared(a.Name, a.Fields); err != nil {
+		return shareAnswer{}, fmt.Errorf("answer %s: %w", shareID, err)
+	}
+	return a, nil
+}
+
 // shareMeta is the owner's encrypted view of a share, sealed under RK like
 // request meta: the secret's name, the recipient's name as the owner typed
-// it, and the shared field names.
+// it, the shared field names, the kind, the env and context of the row, and
+// for a request the link key (unpadded base64url, "" for a share), so the
+// owner can derive the share keys again to open the answer.
 type shareMeta struct {
 	Name      string   `json:"name"`
 	Recipient string   `json:"recipient"`
 	Fields    []string `json:"fields"`
+	Kind      string   `json:"kind"`
+	Env       string   `json:"env"`
+	Context   string   `json:"context"`
+	LinkKey   string   `json:"link_key"`
 }
 
 func shareMetaAAD(accountID, shareID []byte) []byte {
@@ -191,9 +287,35 @@ func openShareMeta(rk, accountID []byte, shareID string, metaCT []byte) (shareMe
 	if err != nil {
 		return shareMeta{}, err
 	}
-	var m shareMeta
-	if err := strictJSON(plaintext, &m); err != nil {
+	// The form of an older Hort has only name, recipient and fields.
+	var w struct {
+		Name      string   `json:"name"`
+		Recipient string   `json:"recipient"`
+		Fields    []string `json:"fields"`
+		Kind      string   `json:"kind,omitempty"`
+		Env       *string  `json:"env,omitempty"`
+		Context   *string  `json:"context,omitempty"`
+		LinkKey   *string  `json:"link_key,omitempty"`
+	}
+	if err := strictJSON(plaintext, &w); err != nil {
 		return shareMeta{}, fmt.Errorf("share %s: %w", shareID, err)
+	}
+	kind, err := shareKind(plaintext)
+	if err != nil {
+		return shareMeta{}, fmt.Errorf("share %s: %w", shareID, err)
+	}
+	m := shareMeta{Name: w.Name, Recipient: w.Recipient, Fields: w.Fields, Kind: kind}
+	if w.Kind != "" {
+		if w.Env == nil || w.Context == nil || w.LinkKey == nil {
+			return shareMeta{}, fmt.Errorf("share %s: metadata misses env, context or link_key", shareID)
+		}
+		m.Env, m.Context, m.LinkKey = *w.Env, *w.Context, *w.LinkKey
+	} else if w.Env != nil || w.Context != nil || w.LinkKey != nil {
+		return shareMeta{}, fmt.Errorf("share %s: metadata without kind carries env, context or link_key", shareID)
+	}
+	key, err := base64.RawURLEncoding.Strict().DecodeString(m.LinkKey)
+	if m.Kind == ShareKindShare && m.LinkKey != "" || m.Kind == ShareKindRequest && (err != nil || len(key) != ShareLinkKeySize) {
+		return shareMeta{}, fmt.Errorf("share %s: link_key does not fit kind %s", shareID, m.Kind)
 	}
 	return m, nil
 }

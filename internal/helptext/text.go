@@ -248,5 +248,8 @@ shared name, or under --as <name>, with the shared description. A secret of
 that name is never overwritten: take refuses, writes nothing and the link
 stays open, so run it again with --as. Values are never printed.
 
+A link that asks you for values (a request) is answered in a browser; take
+says so and saves nothing.
+
 The vault must be unlocked ('hort unlock').
 `

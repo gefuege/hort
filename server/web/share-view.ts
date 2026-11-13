@@ -2,10 +2,11 @@
 // without an account: the recipient types their name, which with the link key
 // from the URL fragment opens the share (share-core.ts). The link key never
 // leaves this page: no request, log, storage or query string carries it.
-// Values stay masked until Show; no innerHTML (Trusted Types).
+// Values stay masked until Show; no innerHTML (Trusted Types). A request
+// shows the values as masked inputs the recipient can change and send once.
 import { b64Decode, b64Encode, b64urlDecode } from "../src/wire";
 import { notALogin } from "./not-a-login";
-import { deriveShareKeys, formatShareLink, normalizeShareName, openShare, SHARE_LINK_KEY_BYTES, type SharedSecret } from "./share-core";
+import { deriveShareKeys, formatShareLink, normalizeShareName, openShare, sealShareAnswer, SHARE_LINK_KEY_BYTES, type SharedAnswer, type SharedSecret, type ShareKeys } from "./share-core";
 import { current, entryOf, lookupKey } from "./vault-core";
 import { CLIPBOARD_S, copy, pull, REVEAL_S, SignInRequired, write, type Change, type Unlocked } from "./vault-view";
 
@@ -26,12 +27,15 @@ export type Host = {
 export const SHARE_PATH = /^\/s\/([0-9a-f]{32})$/;
 export const GONE = "This link no longer opens. Ask the sender for a new one.";
 const DELETED = "Deleted. The link no longer opens, and the sender sees it was picked up.";
+const DECLINED = "Deleted. The link no longer opens, and the sender sees you declined.";
+const SENT = "Sent. The sender checks the values before using them. The link no longer opens.";
 
 // A recipient call: no session, the access token alone.
-export type Send = (method: "POST" | "DELETE", path: string, token: Uint8Array) => Promise<Response>;
-export const send: Send = (method, path, token) => fetch(path, { method, headers: { "Hort-Share-Token": b64Encode(token) }, credentials: "omit" });
+export type Send = (method: "POST" | "DELETE", path: string, token: Uint8Array, body?: string) => Promise<Response>;
+export const send: Send = (method, path, token, body) =>
+  fetch(path, { method, headers: { "Hort-Share-Token": b64Encode(token) }, credentials: "omit", ...(body === undefined ? {} : { body }) });
 
-export type Opened = { kind: "secret"; secret: SharedSecret; token: Uint8Array } | { kind: "wrong"; triesLeft: number } | { kind: "gone" };
+export type Opened = { kind: "secret"; secret: SharedSecret; keys: ShareKeys } | { kind: "wrong"; triesLeft: number } | { kind: "gone" };
 
 const failed = async (res: Response) => new Error((await res.text()).trim() || `request failed (${res.status})`);
 
@@ -43,7 +47,16 @@ export async function openShared(call: Send, shareId: string, linkKey: Uint8Arra
   if (res.status === 403) return { kind: "wrong", triesLeft: ((await res.json()) as { tries_left: number }).tries_left };
   if (!res.ok) throw await failed(res);
   const { ct } = (await res.json()) as { ct: string };
-  return { kind: "secret", secret: await openShare(keys, shareId, b64Decode(ct) ?? new Uint8Array()), token: keys.token };
+  return { kind: "secret", secret: await openShare(keys, shareId, b64Decode(ct) ?? new Uint8Array()), keys };
+}
+
+// Sends the answer to request shareId once. False when it no longer opened.
+export async function answerShared(call: Send, shareId: string, keys: ShareKeys, answer: SharedAnswer): Promise<boolean> {
+  const ct = await sealShareAnswer(keys, shareId, answer);
+  const res = await call("POST", `/api/v1/shares/${shareId}/answer`, keys.token, JSON.stringify({ ct: b64Encode(ct) }));
+  if (res.status === 404) return false;
+  if (!res.ok) throw await failed(res);
+  return true;
 }
 
 // Deletes the share for everyone. False when it no longer opened anyway.
@@ -116,7 +129,8 @@ export function shareView(main: HTMLElement, host: Host, path: string): void {
         return input.select();
       }
       say("");
-      secretView(opened.secret, opened.token);
+      if (opened.secret.kind === "request") requestView(opened.secret, opened.keys);
+      else secretView(opened.secret, opened.keys.token);
     } catch (err) {
       say(messageOf(err), "error");
     } finally {
@@ -137,6 +151,73 @@ export function shareView(main: HTMLElement, host: Host, path: string): void {
       }
     });
     return b;
+  }
+
+  // Deletes the link for everyone after a confirm; `done` ends the page.
+  function removeButton(label: string, token: Uint8Array, done: (deleted: boolean) => void): HTMLButtonElement {
+    const remove = h("button", { class: "tbtn danger", type: "button" }, label);
+    remove.addEventListener("click", async () => {
+      if (!confirm("Delete for everyone?")) return;
+      remove.disabled = true;
+      try {
+        done(await deleteShared(send, id, token));
+        say("");
+      } catch (err) {
+        say(messageOf(err), "error");
+        remove.disabled = false;
+      }
+    });
+    return remove;
+  }
+
+  // A request: the values as masked, editable inputs, sent back once.
+  function requestView(s: SharedSecret, keys: ShareKeys): void {
+    const finish = (title: string, text: string) => {
+      keys.token.fill(0);
+      s.fields = [];
+      end(title, text);
+    };
+    const facts = h("dl", { class: "facts" }, h("dt", {}, "Name"), h("dd", {}, h("code", {}, s.name)));
+    if (s.description !== "") facts.append(h("dt", {}, "Description"), h("dd", {}, s.description));
+    const cells = s.fields.map((f, i) => {
+      const cell = h("textarea", { id: `f-answer-${i}`, class: "cell", rows: Math.max(1, f.value.split("\n").length), value: f.value, placeholder: "empty", autocomplete: "off", ...notALogin });
+      cell.spellcheck = false;
+      return cell;
+    });
+    const sendButton = h("button", { class: "tbtn tbtn-primary tbtn-big", type: "submit" }, h("kbd", {}, "⏎"), "send");
+    const form = h(
+      "form",
+      notALogin,
+      ...s.fields.map((f, i) => h("div", { class: "f masked" }, h("label", { htmlFor: cells[i].id }, f.field || "default"), cells[i])),
+      h("p", { class: "hint" }, "Values stay hidden until you click into them."),
+      h("div", { class: "row-actions" }, sendButton),
+    );
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      sendButton.disabled = true;
+      say("Sending …");
+      try {
+        const answer = { name: s.name, description: s.description, fields: s.fields.map((f, i) => ({ field: f.field, value: cells[i].value })) };
+        if (await answerShared(send, id, keys, answer)) finish("> sent", SENT);
+        else finish("> link closed", GONE);
+        say("");
+      } catch (err) {
+        say(messageOf(err), "error");
+        sendButton.disabled = false;
+      }
+    });
+    const remove = removeButton("decline, delete the link", keys.token, (deleted) => (deleted ? finish("> deleted", DECLINED) : finish("> link closed", GONE)));
+    body.replaceChildren(
+      h(
+        "section",
+        { class: "block lead" },
+        h("h3", {}, "> values asked of you"),
+        facts,
+        h("p", { class: "ink" }, "Fill in or correct the values and send them once. The sender checks them before using them."),
+        form,
+      ),
+      h("section", { class: "block" }, h("div", { class: "row-actions" }, remove)),
+    );
   }
 
   function secretView(s: SharedSecret, token: Uint8Array): void {
@@ -179,19 +260,7 @@ export function shareView(main: HTMLElement, host: Host, path: string): void {
       h("p", {}, "No Hort yet? ", h("code", {}, "npm install -g @s16e/hort && hort init"), " installs it."),
     );
 
-    const remove = h("button", { class: "tbtn danger", type: "button" }, "I have it, delete the link");
-    remove.addEventListener("click", async () => {
-      if (!confirm("Delete for everyone?")) return;
-      remove.disabled = true;
-      try {
-        if (await deleteShared(send, id, token)) finish("> deleted", DELETED);
-        else finish("> link closed", GONE);
-        say("");
-      } catch (err) {
-        say(messageOf(err), "error");
-        remove.disabled = false;
-      }
-    });
+    const remove = removeButton("I have it, delete the link", token, (deleted) => (deleted ? finish("> deleted", DELETED) : finish("> link closed", GONE)));
 
     const u = host.unlocked();
     let save: HTMLElement | null = null;

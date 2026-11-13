@@ -45,6 +45,9 @@ func CmdTake(link, as string) error {
 	if err != nil {
 		return err
 	}
+	if shared.Kind == vault.ShareKindRequest {
+		return errors.New("this link asks you for values; open it in a browser to answer")
+	}
 	if as == "" {
 		as = shared.Name
 	}

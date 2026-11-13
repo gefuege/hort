@@ -4,11 +4,24 @@
 // through validateWrite and the Append rule against the in-memory entry, then
 // POST /revisions. Values reach the DOM only once an entry's editor or "Show" is
 // opened; the editor grid keeps them masked until "Show values".
-import { b64Decode, b64Encode } from "../src/wire";
+import { b64Decode, b64Encode, b64urlDecode, b64urlEncode } from "../src/wire";
 import { formatTime } from "./format-time";
 import { notALogin } from "./not-a-login";
 import { accountIdEncode, appendStamp, current, entries, entryOf, foldKey, lookupKey, newId, nowNs, openRevision, resolve, sealRevision, spelling, validateWrite, type AccountKeys, type Current, type Op, type Revision } from "./vault-core";
-import { deriveShareKeys, formatShareLink, normalizeShareName, openShareMeta, sealShare, sealShareMeta, SHARE_LINK_KEY_BYTES, type SharedField, type SharedSecret } from "./share-core";
+import {
+  deriveShareKeys,
+  formatShareLink,
+  normalizeShareName,
+  openShareAnswer,
+  openShareMeta,
+  sealShare,
+  sealShareMeta,
+  SHARE_LINK_KEY_BYTES,
+  type SharedAnswer,
+  type SharedField,
+  type SharedSecret,
+  type ShareKind,
+} from "./share-core";
 
 type Child = Node | string | null | false | undefined;
 export type Unlocked = { accountId: Uint8Array; keys: AccountKeys };
@@ -115,6 +128,7 @@ export async function write(host: Api, u: Unlocked, typed: string, changes: Chan
 
 // ---------------------------------------------------------------------------
 // Shares: a snapshot of one secret for one recipient, opened by link (share-core.ts).
+// A request is a share the recipient answers once; the owner reviews the answer.
 
 export type Expiry = 3600 | 86400 | 604800;
 const EXPIRY_LABEL: Record<Expiry, string> = { 3600: "1 hour", 86400: "1 day", 604800: "7 days" };
@@ -131,16 +145,33 @@ export function shareFields(revisions: Revision[], env: string, context: string)
   return out;
 }
 
-// Seals the snapshot for `recipient`, stores it with POST /shares and returns
-// the link. The link key exists only in this call and in the returned link.
-export async function createShare(host: Api, u: Unlocked, origin: string, secret: SharedSecret, recipient: string, expiresIn: Expiry): Promise<string> {
+// Seals the snapshot of the row env/context for `recipient`, stores it with
+// POST /shares and returns the link. The link key exists only in this call and
+// in the returned link, and for a request in the meta sealed under RK.
+export async function createShare(
+  host: Api,
+  u: Unlocked,
+  origin: string,
+  secret: SharedSecret,
+  recipient: string,
+  expiresIn: Expiry,
+  row: { env: string; context: string } = { env: "", context: "" },
+): Promise<string> {
   const id = newId();
   const linkKey = crypto.getRandomValues(new Uint8Array(SHARE_LINK_KEY_BYTES));
   try {
     const keys = await deriveShareKeys(recipient, linkKey, id);
     const ct = await sealShare(keys, id, secret);
-    const metaCt = await sealShareMeta(u.keys, id, { name: secret.name, recipient: recipient.trim(), fields: secret.fields.map((f) => f.field) });
-    const body = { id, expires_in: expiresIn, ct: b64Encode(ct), meta_ct: b64Encode(metaCt), token_hash: b64Encode(keys.tokenHash) };
+    const metaCt = await sealShareMeta(u.keys, id, {
+      name: secret.name,
+      recipient: recipient.trim(),
+      fields: secret.fields.map((f) => f.field),
+      kind: secret.kind,
+      env: row.env,
+      context: row.context,
+      linkKey: secret.kind === "request" ? b64urlEncode(linkKey) : "",
+    });
+    const body = { id, expires_in: expiresIn, ct: b64Encode(ct), meta_ct: b64Encode(metaCt), token_hash: b64Encode(keys.tokenHash), kind: secret.kind };
     const res = await host.api("POST", "/api/v1/shares", { body: JSON.stringify(body) });
     const refused = sessionRefused(res);
     if (refused) throw refused;
@@ -151,7 +182,7 @@ export async function createShare(host: Api, u: Unlocked, origin: string, secret
   }
 }
 
-export type OwnShare = { id: string; state: string; name: string; recipient: string; expiresAt: number };
+export type OwnShare = { id: string; state: string; name: string; recipient: string; expiresAt: number; kind: ShareKind; env: string; context: string; linkKey: string };
 
 // The account's shares by folded secret name (foldKey), from GET /shares. A share whose
 // metadata does not open with this vault key is left out.
@@ -164,7 +195,8 @@ export async function ownShares(host: Api, u: Unlocked): Promise<Map<string, Own
   for (const s of shares) {
     try {
       const m = await openShareMeta(u.keys, s.id, b64Decode(s.meta_ct) ?? new Uint8Array());
-      out.set(foldKey(m.name), [...(out.get(foldKey(m.name)) ?? []), { id: s.id, state: s.state, name: m.name, recipient: m.recipient, expiresAt: s.expires_at }]);
+      const own = { id: s.id, state: s.state, name: m.name, recipient: m.recipient, expiresAt: s.expires_at, kind: m.kind, env: m.env, context: m.context, linkKey: m.linkKey };
+      out.set(foldKey(m.name), [...(out.get(foldKey(m.name)) ?? []), own]);
     } catch {
       console.warn(`skipped share ${s.id}: its metadata does not open`);
     }
@@ -179,15 +211,42 @@ export async function revokeShare(host: Api, id: string): Promise<void> {
   await host.ok(res);
 }
 
-const ENDED: Record<string, string> = { taken: "picked up", revoked: "revoked", destroyed: "destroyed" };
+// The answer of an answered request, opened with the keys the owner derives
+// again from the recipient's name and the link key in the meta.
+export async function shareAnswer(host: Api, s: Pick<OwnShare, "id" | "recipient" | "linkKey">): Promise<SharedAnswer> {
+  const res = await host.api("GET", `/api/v1/shares/${s.id}/answer`);
+  const refused = sessionRefused(res);
+  if (refused) throw refused;
+  const { ct } = await host.ok<{ ct: string }>(res);
+  const linkKey = b64urlDecode(s.linkKey) ?? new Uint8Array();
+  try {
+    return await openShareAnswer(await deriveShareKeys(s.recipient, linkKey, s.id), s.id, b64Decode(ct) ?? new Uint8Array());
+  } finally {
+    linkKey.fill(0);
+  }
+}
+
+// Writes the values the owner took from an answer to the request's env and
+// context (and the description, when taken) in one write, then ends the
+// request, which deletes the answer on the server.
+export async function takeAnswer(host: Api, u: Unlocked, s: Pick<OwnShare, "id" | "name" | "env" | "context">, fields: SharedField[], description: string | null): Promise<void> {
+  const changes: Change[] = fields.map((f) => ({ op: "set", field: f.field, key: lookupKey(s.env, s.context), value: f.value }));
+  if (description !== null) changes.push({ op: "describe", field: "", key: "", value: description });
+  if (changes.length) await write(host, u, s.name, changes);
+  await revokeShare(host, s.id);
+}
+
+const ENDED: Record<string, string> = { taken: "picked up", revoked: "revoked", destroyed: "destroyed", answered: "answered", closed: "closed" };
 
 // The row's line for a share: the time left while open, else how it ended.
 // Null from the expiry on, when the server keeps nothing of it.
-export function shareTag(s: Pick<OwnShare, "state" | "recipient" | "expiresAt">, nowS: number): string | null {
+export function shareTag(s: Pick<OwnShare, "state" | "recipient" | "expiresAt" | "kind">, nowS: number): string | null {
   const left = s.expiresAt - nowS;
   if (left <= 0) return null;
   const open = left >= 86400 ? `${Math.floor(left / 86400)}d` : left >= 3600 ? `${Math.floor(left / 3600)}h` : `${Math.max(1, Math.floor(left / 60))}m`;
-  return `shared → ${s.recipient} · ${s.state === "open" ? open : (ENDED[s.state] ?? s.state)}`;
+  const request = s.kind === "request";
+  const ended = request && s.state === "taken" ? "declined" : (ENDED[s.state] ?? s.state);
+  return `${request ? "requested" : "shared"} → ${s.recipient} · ${s.state === "open" ? open : ended}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -344,7 +403,10 @@ export function command(key: string, focus: Focus, confirming: boolean): Command
 // Editor input ids come from a counter, so each label points at its own input.
 let inputs = 0;
 
-type Grid = { el: HTMLElement; sync: () => void; dirty: () => boolean };
+// baseline: the description and the any/any row as typed, for a request from a new secret.
+type Grid = { el: HTMLElement; sync: () => void; dirty: () => boolean; baseline: () => { description: string; fields: SharedField[] } };
+// What the share panel shares or requests: a row of an entry, or a new secret's grid.
+type ShareSource = { name: string; description: string; env: string; context: string; fields: SharedField[] };
 
 export async function vaultView(main: HTMLElement, host: Host): Promise<void> {
   const { h, messageOf } = host;
@@ -388,7 +450,7 @@ export async function vaultView(main: HTMLElement, host: Host): Promise<void> {
   let shown: Row[] = [];
   let selected: string | null = null;
   let confirming: string | null = null;
-  // The one inline panel under an entry: the editor or the share panel.
+  // The one inline panel under an entry: the editor, the share panel or a review.
   let editing: { name: string | null; el: HTMLElement; grid?: Grid } | null = null;
   let shares = new Map<string, OwnShare[]>();
   const revealed = new Map<string, { deadline: number; timer: number; ttl?: HTMLElement }>();
@@ -444,7 +506,6 @@ export async function vaultView(main: HTMLElement, host: Host): Promise<void> {
   };
 
   const rowById = (id: string | null) => shown.find((r) => r.id === id);
-  const shareable = (r: Row) => shareFields(entryOf(v.entries, r.name).revisions, r.env, r.context).length > 0;
   const focusSelected = () => list.querySelector<HTMLElement>(".v-row.sel")?.focus();
 
   function draw(): void {
@@ -471,6 +532,17 @@ export async function vaultView(main: HTMLElement, host: Host): Promise<void> {
       const last = shown[i + 1]?.name !== r.name;
       if (last && editing?.name === r.name) items.push(editing.el);
     });
+    // Requests for a name the vault does not hold yet, with their own line.
+    const terms = filter.value.trim().toLowerCase();
+    for (const [folded, list] of shares) {
+      if (current(entryOf(v.entries, list[0].name).revisions).visible || !list[0].name.toLowerCase().includes(terms)) continue;
+      const line = shareLine(list[0].name);
+      if (!line.length) continue;
+      items.push(h("li", { class: "v-row first" }, h("span", { class: "key" }, h("span", { class: "c-name", title: list[0].name }, ...breakable(list[0].name))), ...line));
+      if (editing?.name != null && foldKey(editing.name) === folded) items.push(editing.el);
+    }
+    // A panel for a name with no line shown (filtered out, or a request from a new secret) opens on top.
+    if (editing && !items.includes(editing.el)) items.unshift(editing.el);
     list.replaceChildren(...items);
   }
 
@@ -527,7 +599,7 @@ export async function vaultView(main: HTMLElement, host: Host): Promise<void> {
           r.value === null ? null : button("⏎", rev ? "hide" : "show", () => toggleShow(r)),
           r.value === null ? null : button("c", "copy", () => void copyValue(r)),
           button("e", "edit", () => openEditor(r)),
-          shareable(r) ? button("s", "share", () => openShare(r)) : null,
+          button("s", "share", () => openShare(r)),
           button("d", "delete", () => askDelete(r), "danger"),
         ),
       );
@@ -549,14 +621,23 @@ export async function vaultView(main: HTMLElement, host: Host): Promise<void> {
     return li;
   }
 
-  // The entry's shares until their expiry, with revoke while open.
+  // The entry's shares until their expiry, with revoke while open and review once answered.
   function shareLine(name: string): HTMLElement[] {
     const nowS = Date.now() / 1000;
     const items = (shares.get(foldKey(name)) ?? []).flatMap((s) => {
       const text = shareTag(s, nowS);
       if (!text) return [];
       const open = s.state === "open";
-      return [h("span", { class: open ? "on" : undefined }, text, open ? h("button", { class: "tlink", type: "button", onclick: () => void revoke(s) }, "revoke") : null)];
+      const answered = s.state === "answered";
+      return [
+        h(
+          "span",
+          { class: open || answered ? "on" : undefined },
+          text,
+          open ? h("button", { class: "tlink", type: "button", onclick: () => void revoke(s) }, "revoke") : null,
+          answered ? h("button", { class: "tlink", type: "button", onclick: () => openReview(s) }, "review") : null,
+        ),
+      ];
     });
     return items.length ? [h("span", { class: "c-share" }, ...items)] : [];
   }
@@ -712,9 +793,20 @@ export async function vaultView(main: HTMLElement, host: Host): Promise<void> {
     if (!leave()) return;
     confirming = null;
     selected = r.id;
-    editing = { name: r.name, el: shareEl(r) };
+    const fields = shareFields(entryOf(v.entries, r.name).revisions, r.env, r.context);
+    openPanel(r.name, shareEl({ name: r.name, description: r.description, env: r.env, context: r.context, fields }, fields.length > 0));
+  }
+
+  function openPanel(name: string, el: HTMLElement): void {
+    editing = { name, el };
     draw();
-    editing.el.querySelector<HTMLElement>("input")?.focus();
+    el.querySelector<HTMLElement>("input:not([type=radio])")?.focus();
+  }
+
+  function openReview(s: OwnShare): void {
+    if (!leave()) return;
+    confirming = null;
+    openPanel(s.name, reviewEl(s));
   }
 
   function closeEditor(): void {
@@ -1050,7 +1142,8 @@ export async function vaultView(main: HTMLElement, host: Host): Promise<void> {
       }
     });
     sync();
-    return { el, sync, dirty: () => diff().changes.length > 0 };
+    const baseline = () => ({ description: desc.value.trim(), fields: fields().map((f) => ({ field: f, value: eff(f, "*:*") })) });
+    return { el, sync, dirty: () => diff().changes.length > 0, baseline };
   }
 
   // The one inline editor: a new secret, or every value and the description of an entry.
@@ -1101,49 +1194,88 @@ export async function vaultView(main: HTMLElement, host: Host): Promise<void> {
         }
       });
       foot = h("div", { class: "e-foot" }, h("button", { class: "tbtn", type: "button", onclick: closeEditor }, h("kbd", {}, "esc"), "close"), err, h("span", { class: "grow" }), b);
+    } else {
+      // Asks someone for the values instead: the grid's any/any row as typed is the prefill; nothing is written.
+      const ask = h("button", { class: "tbtn", type: "button" }, "request values");
+      ask.addEventListener("click", () => {
+        const entry = name!.value.trim();
+        if (!entry) {
+          err.textContent = "Name is required.";
+          return name!.focus();
+        }
+        const base = grid.baseline();
+        openPanel(entry, shareEl({ name: entry, description: base.description, env: "", context: "", fields: base.fields }, false));
+      });
+      foot = h("div", { class: "e-foot" }, ask, err);
     }
     return { el: h("li", { class: "editor" }, h("h3", {}, r ? `> edit ${r.name}` : "> new secret"), name ? labelled("Name", name, "g-field") : null, grid.el, foot), grid };
   }
 
-  // The share panel: who it is for, which fields, how long; then the link, once.
-  function shareEl(r: Row): HTMLElement {
-    const revisions = entryOf(v.entries, r.name).revisions;
-    const all = shareFields(revisions, r.env, r.context);
+  // The share panel: share or request, who it is for, which fields, how long;
+  // then the link, once. A request may also ask for fields the row lacks.
+  function shareEl(src: ShareSource, canShare: boolean): HTMLElement {
+    const all = src.fields;
     // A secret without named fields shares its default value and shows no choice.
     const named = all.some((f) => f.field !== "");
+    const modes = (["share", "request"] as ShareKind[]).map((k) =>
+      h("input", { type: "radio", name: `v-mode-${inputs}`, value: k, checked: k === (canShare ? "share" : "request"), disabled: k === "share" && !canShare }),
+    );
+    const kind = () => (modes[1].checked ? "request" : "share") as ShareKind;
     const recipient = h("input", { id: `v-${++inputs}`, autocomplete: "off", spellcheck: false, placeholder: "e.g. Lars", ...notALogin });
     const expiry = h("select", { id: `v-${++inputs}` }, ...([3600, 86400, 604800] as Expiry[]).map((s) => h("option", { value: String(s), selected: s === 86400 }, EXPIRY_LABEL[s])));
     const boxes = named ? all.map((f) => h("input", { type: "checkbox", checked: true, "aria-label": f.field || "default" })) : [];
+    const more = h("input", { id: `v-${++inputs}`, autocomplete: "off", spellcheck: false, placeholder: "field names, e.g. api_key, secret", ...notALogin });
+    const moreField = h("div", { class: "full" }, h("label", { htmlFor: more.id }, "Also ask for"), more);
+    const title = h("h3", {});
+    const note = h("p", { class: "e-note" });
     const err = h("span", { class: "err", role: "status" });
     const create = h("button", { class: "tbtn tbtn-primary", type: "submit" }, "create link");
     const cancel = h("button", { class: "tbtn", type: "button", onclick: closeEditor }, h("kbd", {}, "esc"), "cancel");
-    const scope = envContext(r) ? `Values for env ${r.env || "any"} · context ${r.context || "any"}. ` : "";
+    const scope = envContext(src) ? `Values for env ${src.env || "any"} · context ${src.context || "any"}. ` : "";
+    const setMode = () => {
+      const request = kind() === "request";
+      title.textContent = `> ${request ? "request" : "share"} ${src.name}`;
+      moreField.hidden = !request;
+      note.textContent = `${scope}${request ? "They see these values, can change or fill them, and send them back once. You review the answer before anything is saved. " : ""}The link opens only for this name. Five wrong names destroy it.`;
+    };
+    for (const m of modes) m.addEventListener("change", setMode);
+    setMode();
     const form = h(
       "form",
       { novalidate: true, ...notALogin },
       h(
         "div",
         { class: "grid" },
+        h("div", { class: "full" }, h("label", { class: "check" }, modes[0], "Share"), h("label", { class: "check" }, modes[1], "Request")),
         h("div", { class: "wide" }, h("label", { htmlFor: recipient.id }, "For"), recipient),
         h("div", {}, h("label", { htmlFor: expiry.id }, "Expires in"), expiry),
         named ? h("div", { class: "full" }, h("label", {}, "Fields"), ...boxes.map((b, i) => h("label", { class: "check" }, b, all[i].field || "(default)"))) : null,
+        moreField,
       ),
-      h("p", { class: "e-note" }, `${scope}The link opens only for this name. Five wrong names destroy it.`),
+      note,
       h("div", { class: "e-foot" }, create, cancel, err),
     );
     form.addEventListener("submit", async (e) => {
       e.preventDefault();
-      const fields = named ? all.filter((_, i) => boxes[i].checked) : all;
+      const request = kind() === "request";
+      let fields = named ? all.filter((_, i) => boxes[i].checked) : all;
+      if (request) {
+        const asked = uniqueFold(more.value.split(/[,\s]+/).filter(Boolean).map((f) => (f === "default" ? "" : f)));
+        fields = [...fields, ...asked.filter((f) => !all.some((x) => foldKey(x.field) === foldKey(f))).map((field) => ({ field, value: "" }))];
+        // Nothing to prefill and nothing asked for: the default field, empty.
+        if (!all.length && !fields.length) fields = [{ field: "", value: "" }];
+      }
       const name = normalizeShareName(recipient.value);
       err.textContent = !name ? "Type who this is for." : !fields.length ? "Pick at least one field." : "";
       if (err.textContent) return;
       create.disabled = true;
       say("Creating link …");
       try {
-        const secret = { name: r.name, description: current(revisions).description, fields };
-        const link = await run(() => createShare(host, u, location.origin, secret, recipient.value, Number(expiry.value) as Expiry));
+        const secret: SharedSecret = { name: src.name, description: src.description, fields, kind: kind() };
+        const link = await run(() => createShare(host, u, location.origin, secret, recipient.value, Number(expiry.value) as Expiry, src));
         if (link === null) return;
         say("");
+        for (const m of modes) m.disabled = true;
         form.replaceWith(createdEl(link, name));
         await loadShares();
         draw();
@@ -1154,7 +1286,96 @@ export async function vaultView(main: HTMLElement, host: Host): Promise<void> {
         create.disabled = false;
       }
     });
-    return h("li", { class: "editor" }, h("h3", {}, `> share ${r.name}`), form);
+    return h("li", { class: "editor" }, title, form);
+  }
+
+  // The review of an answered request: per field the row's value next to the
+  // answer, each taken or skipped; values reach the DOM only while shown.
+  function reviewEl(s: OwnShare): HTMLElement {
+    const el = h("li", { class: "editor" }, h("h3", {}, `> review ${s.name} from ${s.recipient}`), h("p", { class: "status", role: "status" }, "Opening the answer …"));
+    void (async () => {
+      let answer: SharedAnswer | null;
+      try {
+        answer = await run(() => shareAnswer(host, s));
+      } catch (e) {
+        el.lastElementChild!.textContent = messageOf(e);
+        return;
+      }
+      if (answer) el.lastElementChild!.replaceWith(reviewForm(s, answer));
+    })();
+    return el;
+  }
+
+  function reviewForm(s: OwnShare, answer: SharedAnswer): HTMLElement {
+    const revisions = entryOf(v.entries, s.name).revisions;
+    const savedDesc = current(revisions).description;
+    type Line = { label: string; now: string | null; got: string; box: HTMLInputElement; secret: boolean; field?: string };
+    const lines: Line[] = answer.fields.map((f) => {
+      const now = resolve(revisions, f.field, s.env, s.context);
+      const box = h("input", { type: "checkbox", checked: f.value !== "" && f.value !== now, disabled: f.value === "", "aria-label": `take ${f.field || "default"}` });
+      return { label: f.field || "default", now, got: f.value, box, secret: true, field: f.field };
+    });
+    if (answer.description !== "" && answer.description !== savedDesc) {
+      const box = h("input", { type: "checkbox", checked: savedDesc === "", "aria-label": "take description" });
+      lines.push({ label: "description", now: savedDesc || null, got: answer.description, box, secret: false });
+    }
+    let shownValues = false;
+    let hideTimer: number | undefined;
+    const cell = (value: string | null, secret: boolean) =>
+      value === null ? h("span", { class: "muted" }, "(none)") : value === "" ? h("span", { class: "muted" }, "(empty)") : secret && !shownValues ? h("span", { class: "muted" }, "••••••••") : h("span", { class: "c-val" }, value);
+    const tbody = h("tbody", {});
+    const drawLines = () =>
+      tbody.replaceChildren(...lines.map((l) => h("tr", {}, h("td", { class: "g-scope" }, l.label), h("td", { class: "val", "data-label": "now" }, cell(l.now, l.secret)), h("td", { class: "val", "data-label": "answer" }, cell(l.got, l.secret)), h("td", { class: "g-act" }, h("label", { class: "check" }, l.box, "take")))));
+    drawLines();
+    const showButton = h("button", { class: "tbtn", type: "button" }, "Show values");
+    showButton.addEventListener("click", () => {
+      window.clearTimeout(hideTimer);
+      shownValues = !shownValues;
+      showButton.textContent = shownValues ? "Hide values" : "Show values";
+      if (shownValues) hideTimer = window.setTimeout(() => showButton.click(), REVEAL_S * 1000);
+      drawLines();
+    });
+    const err = h("span", { class: "err", role: "status" });
+    const take = h("button", { class: "tbtn tbtn-primary", type: "button" });
+    const count = () => {
+      const n = lines.filter((l) => l.box.checked).length;
+      take.textContent = n ? `take ${n} and close` : "close without taking";
+    };
+    for (const l of lines) l.box.addEventListener("change", count);
+    count();
+    const finish = async (task: () => Promise<void>, done: string) => {
+      take.disabled = decline.disabled = true;
+      err.textContent = "";
+      try {
+        if ((await run(() => task().then(() => true))) === null) return;
+      } catch (e) {
+        err.textContent = messageOf(e);
+        take.disabled = decline.disabled = false;
+        return;
+      }
+      window.clearTimeout(hideTimer);
+      editing = null;
+      await loadShares();
+      draw();
+      say(done, "ok");
+    };
+    take.addEventListener("click", () => {
+      const taken = lines.filter((l) => l.box.checked);
+      const fields = taken.flatMap((l) => (l.field === undefined ? [] : [{ field: l.field, value: l.got }]));
+      const description = taken.find((l) => l.field === undefined)?.got ?? null;
+      void finish(() => takeAnswer(host, u, s, fields, description), taken.length ? `Took ${taken.length} from ${s.recipient} into ${s.name}. The answer is deleted.` : "Closed. The answer is deleted.");
+    });
+    const decline = h("button", { class: "tbtn danger", type: "button" }, "decline");
+    decline.addEventListener("click", () => void finish(() => revokeShare(host, s.id), `Declined the answer from ${s.recipient}. It is deleted.`));
+    const scope = envContext(s) ? `Values for env ${s.env || "any"} · context ${s.context || "any"}. ` : "";
+    return h(
+      "div",
+      {},
+      h("div", { class: "grid-bar" }, h("h4", {}, "Answer"), showButton),
+      h("table", { class: "vgrid" }, h("thead", {}, h("tr", {}, h("th", { class: "dim" }, "Field"), h("th", { class: "dim" }, "Now"), h("th", { class: "dim" }, "Answer"), h("th", {}))), tbody),
+      h("p", { class: "e-note" }, `${scope}Nothing is saved until you take it.`),
+      h("div", { class: "e-foot" }, take, decline, h("button", { class: "tbtn", type: "button", onclick: closeEditor }, h("kbd", {}, "esc"), "close"), err),
+    );
   }
 
   function createdEl(link: string, name: string): HTMLElement {
@@ -1241,7 +1462,7 @@ export async function vaultView(main: HTMLElement, host: Host): Promise<void> {
     if (!sel) return;
     if (cmd === "edit") return openEditor(sel);
     if (cmd === "delete") return askDelete(sel);
-    if (cmd === "share") return shareable(sel) ? openShare(sel) : undefined;
+    if (cmd === "share") return openShare(sel);
     if (sel.value === null) return;
     if (cmd === "show") toggleShow(sel);
     else if (cmd === "copy") void copyValue(sel);

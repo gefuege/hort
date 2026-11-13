@@ -32,10 +32,17 @@ const open = (id: string, token: Uint8Array, ip = randomIp()) =>
   exports.default.fetch(new Request(`https://hort.test/api/v1/shares/${id}/open`, { method: "POST", headers: { "Hort-Share-Token": b64Encode(token), "CF-Connecting-IP": ip } }));
 const take = (id: string, token: Uint8Array, ip = randomIp()) =>
   exports.default.fetch(new Request(`https://hort.test/api/v1/shares/${id}`, { method: "DELETE", headers: { "Hort-Share-Token": b64Encode(token), "CF-Connecting-IP": ip } }));
+const answer = (id: string, token: Uint8Array, body: unknown = { ct: b64Encode(random(100)) }, ip = randomIp()) =>
+  exports.default.fetch(
+    new Request(`https://hort.test/api/v1/shares/${id}/answer`, { method: "POST", headers: { "Hort-Share-Token": b64Encode(token), "CF-Connecting-IP": ip }, body: JSON.stringify(body) }),
+  );
+const readAnswer = (f: Fixture, id: string) =>
+  call({ account: f.account, device: f.deviceId, key: f.device, method: "GET", path: `/api/v1/shares/${id}/answer` });
 const stored = (f: Fixture, id: string) =>
   runInDurableObject(env.ACCOUNT.getByName(f.account), (_i, state) => ({
     record: state.storage.kv.get<{ state: string; tries: number }>(`share:${id}`),
     ct: state.storage.kv.get(`share-ct:${id}`),
+    ...(state.storage.kv.get(`share-answer:${id}`) === undefined ? {} : { answer: state.storage.kv.get(`share-answer:${id}`) }),
   }));
 
 async function expectGone(res: Response) {
@@ -43,12 +50,14 @@ async function expectGone(res: Response) {
   expect(await res.text()).toBe(GONE);
 }
 
-async function openShare(): Promise<{ f: Fixture; s: Share }> {
+async function openShare(over: Record<string, unknown> = {}): Promise<{ f: Fixture; s: Share }> {
   const f = await created(await randomFixture());
-  const s = await newShare();
+  const s = await newShare(over);
   expect((await create(f, s.body)).status).toBe(201);
   return { f, s };
 }
+
+const openRequest = () => openShare({ kind: "request" });
 
 describe("shares", () => {
   afterEach(() => vi.useRealTimers());
@@ -259,6 +268,8 @@ describe("shares", () => {
       { meta_ct: b64Encode(random(16 * 1024 + 1)) },
       { token_hash: b64Encode(random(31)) },
       { id: "ABCDEF".padEnd(32, "0") },
+      { kind: "ask" },
+      { kind: null },
     ]) {
       const s = await newShare(over);
       expect((await create(f, s.body)).status, JSON.stringify(Object.keys(over))).toBe(400);
@@ -267,7 +278,8 @@ describe("shares", () => {
     expect((await create(f, missing)).status).toBe(400);
     for (const expires_in of [3600, 86400, 604800]) expect((await create(f, (await newShare({ expires_in })).body)).status).toBe(201);
     expect((await create(f, (await newShare({ ct: b64Encode(random(64 * 1024)) })).body)).status).toBe(201);
-    expect(await list(f)).toHaveLength(4);
+    expect((await create(f, (await newShare({ kind: "share" })).body)).status).toBe(201);
+    expect(await list(f)).toHaveLength(5);
   });
 
   it("requires a device signature or a session for owner endpoints", async () => {
@@ -284,6 +296,93 @@ describe("shares", () => {
     expect(res.status).toBe(400);
     expect((await open(s.id, random(31))).status).toBe(400);
     expect((await exports.default.fetch(new Request(`https://hort.test/api/v1/shares/${s.id}/open`, { method: "GET" }))).status).toBe(405);
+  });
+
+  it("takes one answer to a request: the share ciphertext goes, the owner reads the answer", async () => {
+    const { f, s } = await openRequest();
+    expect((await open(s.id, s.token)).status).toBe(200);
+    const ct = b64Encode(random(300));
+    expect((await answer(s.id, s.token, { ct })).status).toBe(204);
+    expect(await stored(f, s.id)).toEqual({ record: expect.objectContaining({ state: "answered", kind: "request" }), ct: undefined, answer: expect.anything() });
+    expect((await list(f))[0].state).toBe("answered");
+    const res = await readAnswer(f, s.id);
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ct });
+    // answered ends the link for the recipient, like taken.
+    await expectGone(await answer(s.id, s.token));
+    await expectGone(await open(s.id, s.token));
+    await expectGone(await take(s.id, s.token));
+  });
+
+  it("answers a share, an ended request and an unknown link alike, and lets nobody but the owner read an answer", async () => {
+    const share = await openShare();
+    await expectGone(await answer(share.s.id, share.s.token));
+    expect(await stored(share.f, share.s.id)).toEqual({ record: expect.objectContaining({ state: "open", tries: 0 }), ct: expect.anything() });
+    expect((await readAnswer(share.f, share.s.id)).status).toBe(409);
+    await expectGone(await answer(hexEncode(random(16)), random(32)));
+    const revoked = await openRequest();
+    await revoke(revoked.f, revoked.s.id);
+    await expectGone(await answer(revoked.s.id, revoked.s.token));
+    const { f, s } = await openRequest();
+    expect((await readAnswer(f, s.id)).status).toBe(409);
+    expect((await answer(s.id, s.token)).status).toBe(204);
+    const g = await created(await randomFixture());
+    expect((await readAnswer(g, s.id)).status).toBe(404);
+    expect((await revoke(g, s.id)).status).toBe(404);
+    const anon = await exports.default.fetch(new Request(`https://hort.test/api/v1/shares/${s.id}/answer`, { headers: { "CF-Connecting-IP": randomIp() } }));
+    expect(anon.status).toBe(401);
+  });
+
+  it("counts wrong tokens on answer like on open and destroys the request at the fifth", async () => {
+    const { f, s } = await openRequest();
+    const wrong = random(32);
+    for (let left = 4; left >= 1; left--) {
+      const res = left % 2 ? await answer(s.id, wrong) : await open(s.id, wrong);
+      expect(res.status).toBe(403);
+      expect(await res.json()).toEqual({ tries_left: left });
+    }
+    await expectGone(await answer(s.id, wrong));
+    expect(await stored(f, s.id)).toEqual({ record: expect.objectContaining({ state: "destroyed" }), ct: undefined });
+    await expectGone(await answer(s.id, s.token));
+  });
+
+  it("checks the answer body before any lookup: size and form", async () => {
+    const { f, s } = await openRequest();
+    for (const body of [{ ct: b64Encode(new Uint8Array(64 * 1024 + 1)) }, { ct: b64Encode(random(27)) }, { ct: 5 }, { ct: b64Encode(random(100)), x: 1 }]) {
+      expect((await answer(s.id, s.token, body)).status).toBe(400);
+      expect((await answer(hexEncode(random(16)), random(32), body)).status).toBe(400);
+    }
+    const huge = await exports.default.fetch(
+      new Request(`https://hort.test/api/v1/shares/${s.id}/answer`, { method: "POST", headers: { "Hort-Share-Token": b64Encode(s.token), "CF-Connecting-IP": randomIp() }, body: "x".repeat(128 * 1024 + 1) }),
+    );
+    expect(huge.status).toBe(413);
+    expect((await stored(f, s.id)).record).toEqual(expect.objectContaining({ state: "open", tries: 0 }));
+    expect((await answer(s.id, s.token, { ct: b64Encode(random(64 * 1024)) })).status).toBe(204);
+  });
+
+  it("closes an answered request on revoke, deleting the answer; repeating it is idempotent", async () => {
+    const { f, s } = await openRequest();
+    expect((await answer(s.id, s.token)).status).toBe(204);
+    for (let i = 0; i < 2; i++) {
+      const res = await revoke(f, s.id);
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({ state: "closed" });
+    }
+    expect(await stored(f, s.id)).toEqual({ record: expect.objectContaining({ state: "closed" }), ct: undefined });
+    expect((await readAnswer(f, s.id)).status).toBe(409);
+    expect((await list(f))[0].state).toBe("closed");
+  });
+
+  it("deletes an answer at expiry with everything else", async () => {
+    const { f, s } = await openRequest();
+    expect((await answer(s.id, s.token)).status).toBe(204);
+    vi.useFakeTimers({ toFake: ["Date"], now: Date.now() + 86400 * 1000 });
+    expect(await list(f)).toEqual([]);
+    expect(await stored(f, s.id)).toEqual({ record: undefined, ct: undefined });
+    const alarmed = await openRequest();
+    expect((await answer(alarmed.s.id, alarmed.s.token)).status).toBe(204);
+    expect(await runDurableObjectAlarm(env.SHARE.getByName(alarmed.s.id))).toBe(true);
+    expect(await stored(alarmed.f, alarmed.s.id)).toEqual({ record: undefined, ct: undefined });
   });
 
   it("limits recipient calls to 30 per minute per IP", async () => {

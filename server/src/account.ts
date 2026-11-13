@@ -73,14 +73,16 @@ const REQUEST_TTL_SECONDS = 24 * 60 * 60;
 const UNLOCK_KEY_TTLS = [900, 3600, 28800, 604800];
 const UNLOCK_KEY_PREFIX = "unlock:";
 const NO_UNLOCK_KEY = "no unlock key for this session";
-// Shares (README "Shares"): a record under share:<id> and, while the share is
-// open, its ciphertext under share-ct:<id>, both in the DO key-value store
-// next to the SQL tables and outside the schema.
+// Shares (README "Shares"): a record under share:<id>, while the share is
+// open its ciphertext under share-ct:<id>, and once a request is answered the
+// answer under share-answer:<id>, all in the DO key-value store next to the
+// SQL tables and outside the schema.
 const MAX_OPEN_SHARES = 50;
 const SHARE_EXPIRIES = [3600, 86400, 604800];
 const SHARE_TRIES = 5;
 const SHARE_PREFIX = "share:";
 const SHARE_CT_PREFIX = "share-ct:";
+const SHARE_ANSWER_PREFIX = "share-answer:";
 // One answer for unknown, ended and expired shares, here and in the Worker.
 export const SHARE_GONE = "this link no longer opens";
 
@@ -101,8 +103,10 @@ export type RelyingParty = { origin: string; id: string };
 // A session's unlock key in the DO key-value store under unlock:<token_hash>.
 // Entries written before the lock time slid carry no ttl and do not slide.
 type UnlockKey = { key: string; ttl?: number; expires_at: number };
-type ShareState = "open" | "taken" | "revoked" | "destroyed";
-type ShareRecord = { state: ShareState; meta_ct: Uint8Array; token_hash: Uint8Array; tries: number; created_at: number; expires_at: number };
+type ShareState = "open" | "taken" | "revoked" | "destroyed" | "answered" | "closed";
+type ShareKind = "share" | "request";
+// Records stored before requests existed carry no kind and are shares.
+type ShareRecord = { state: ShareState; kind?: ShareKind; meta_ct: Uint8Array; token_hash: Uint8Array; tries: number; created_at: number; expires_at: number };
 type RequestRow = { id: string; status: string; meta_ct: ArrayBuffer; from_device: string; created_at: number; revision_ids: string | null };
 
 const now = () => Math.floor(Date.now() / 1000);
@@ -147,7 +151,7 @@ async function parseSlot(
 }
 
 // Decodes a base64 ciphertext field within [MIN_CT_BYTES, max].
-function ciphertext(v: unknown, max: number): Uint8Array | null {
+export function ciphertext(v: unknown, max: number): Uint8Array | null {
   const bytes = typeof v === "string" ? b64Decode(v) : null;
   return bytes && bytes.length >= MIN_CT_BYTES && bytes.length <= max ? bytes : null;
 }
@@ -768,14 +772,16 @@ export class Account extends DurableObject<Env> {
       if (rec.expires_at > t) continue;
       kv.delete(name);
       kv.delete(SHARE_CT_PREFIX + name.slice(SHARE_PREFIX.length));
+      kv.delete(SHARE_ANSWER_PREFIX + name.slice(SHARE_PREFIX.length));
     }
   }
 
-  // Ends an open share: the state stays for the owner, the ciphertext goes.
+  // Ends a share: the state stays for the owner, the ciphertext and any answer go.
   private endShare(id: string, rec: ShareRecord, state: ShareState): void {
     this.ctx.storage.transactionSync(() => {
       this.ctx.storage.kv.put(SHARE_PREFIX + id, { ...rec, state });
       this.ctx.storage.kv.delete(SHARE_CT_PREFIX + id);
+      this.ctx.storage.kv.delete(SHARE_ANSWER_PREFIX + id);
     });
   }
 
@@ -796,13 +802,17 @@ export class Account extends DurableObject<Env> {
     return null;
   }
 
-  // POST /api/v1/shares {id, expires_in, ct, meta_ct, token_hash}, device or
-  // session (the Worker checked Hort-CSRF and Origin).
+  // POST /api/v1/shares {id, expires_in, ct, meta_ct, token_hash, kind?},
+  // device or session (the Worker checked Hort-CSRF and Origin). kind is
+  // "share" (the default) or "request".
   async createShare(req: Auth, body: Uint8Array): Promise<Response> {
     const auth = await this.authenticate(req, true);
     if (auth instanceof Response) return auth;
-    const o = parseObject(body, ["id", "expires_in", "ct", "meta_ct", "token_hash"]);
-    if (!o) return fail(400, "body must be {id, expires_in, ct, meta_ct, token_hash}");
+    const members = ["id", "expires_in", "ct", "meta_ct", "token_hash"];
+    const o = parseObject(body, members) ?? parseObject(body, [...members, "kind"]);
+    if (!o) return fail(400, "body must be {id, expires_in, ct, meta_ct, token_hash, kind?}");
+    const kind = "kind" in o ? o.kind : "share";
+    if (kind !== "share" && kind !== "request") return fail(400, `kind must be "share" or "request"`);
     if (typeof o.id !== "string" || !hexDecode(o.id, 16)) return fail(400, "share ID must be 16 bytes of lowercase hex");
     const id = o.id;
     if (typeof o.expires_in !== "number" || !SHARE_EXPIRIES.includes(o.expires_in)) return fail(400, "expires_in must be 3600, 86400 or 604800");
@@ -823,7 +833,7 @@ export class Account extends DurableObject<Env> {
     // No await below: the checks repeat and the insert follows atomically.
     const late = this.shareCreateAnswer(id, metaCt, tokenHash);
     if (late) return late;
-    const rec: ShareRecord = { state: "open", meta_ct: metaCt, token_hash: tokenHash, tries: 0, created_at: t, expires_at: expiresAt };
+    const rec: ShareRecord = { state: "open", kind, meta_ct: metaCt, token_hash: tokenHash, tries: 0, created_at: t, expires_at: expiresAt };
     this.ctx.storage.transactionSync(() => {
       this.ctx.storage.kv.put(SHARE_PREFIX + id, rec);
       this.ctx.storage.kv.put(SHARE_CT_PREFIX + id, ct);
@@ -842,25 +852,37 @@ export class Account extends DurableObject<Env> {
     return json(200, { shares });
   }
 
-  // POST /api/v1/shares/{id}/revoke, device or session + CSRF. Revoking twice is idempotent.
+  // POST /api/v1/shares/{id}/revoke, device or session + CSRF. Ends an open
+  // share as revoked and an answered request as closed, deleting its answer.
+  // Repeating it is idempotent.
   async revokeShare(req: Auth, id: string): Promise<Response> {
     const auth = await this.authenticate(req, true);
     if (auth instanceof Response) return auth;
     this.sweepShares();
     const rec = this.ctx.storage.kv.get<ShareRecord>(SHARE_PREFIX + id);
     if (!rec) return fail(404, "share not found");
-    if (rec.state === "revoked") return json(200, { state: "revoked" });
-    if (rec.state !== "open") return fail(409, `share is ${rec.state}`);
-    this.endShare(id, rec, "revoked");
-    return json(200, { state: "revoked" });
+    if (rec.state === "revoked" || rec.state === "closed") return json(200, { state: rec.state });
+    if (rec.state !== "open" && rec.state !== "answered") return fail(409, `share is ${rec.state}`);
+    const state = rec.state === "open" ? "revoked" : "closed";
+    this.endShare(id, rec, state);
+    return json(200, { state });
   }
 
-  // POST /api/v1/shares/{id}/open (take = false) and DELETE /api/v1/shares/{id}
-  // (take = true), unauthenticated: the Worker found this account through the
-  // share's pointer, rate-limited by IP and hashed Hort-Share-Token. A wrong
-  // token counts on both; the fifth destroys the share. No await: the count
-  // is one atomic step.
-  openShare(id: string, tokenHash: Uint8Array, take: boolean): Response {
+  // GET /api/v1/shares/{id}/answer, device or session: the answer of an answered request.
+  async shareAnswer(req: Auth, id: string): Promise<Response> {
+    const auth = await this.authenticate(req, false);
+    if (auth instanceof Response) return auth;
+    this.sweepShares();
+    const rec = this.ctx.storage.kv.get<ShareRecord>(SHARE_PREFIX + id);
+    if (!rec) return fail(404, "share not found");
+    if (rec.state !== "answered") return fail(409, `share is ${rec.state}`);
+    return json(200, { ct: b64Encode(this.ctx.storage.kv.get<Uint8Array>(SHARE_ANSWER_PREFIX + id)!) });
+  }
+
+  // The open share id if tokenHash is its token, else the recipient answer:
+  // 404 for unknown and ended shares, 403 {tries_left} for a wrong token; the
+  // fifth wrong token destroys the share. No await: the count is one atomic step.
+  private recipientShare(id: string, tokenHash: Uint8Array): ShareRecord | Response {
     this.sweepShares();
     const rec = this.ctx.storage.kv.get<ShareRecord>(SHARE_PREFIX + id);
     if (!rec || rec.state !== "open") return fail(404, SHARE_GONE);
@@ -873,11 +895,36 @@ export class Account extends DurableObject<Env> {
       this.ctx.storage.kv.put(SHARE_PREFIX + id, { ...rec, tries });
       return json(403, { tries_left: SHARE_TRIES - tries });
     }
+    return rec;
+  }
+
+  // POST /api/v1/shares/{id}/open (take = false) and DELETE /api/v1/shares/{id}
+  // (take = true), unauthenticated: the Worker found this account through the
+  // share's pointer, rate-limited by IP and hashed Hort-Share-Token. A wrong
+  // token counts on both.
+  openShare(id: string, tokenHash: Uint8Array, take: boolean): Response {
+    const rec = this.recipientShare(id, tokenHash);
+    if (rec instanceof Response) return rec;
     if (take) {
       this.endShare(id, rec, "taken");
       return new Response(null, { status: 204 });
     }
     return json(200, { ct: b64Encode(this.ctx.storage.kv.get<Uint8Array>(SHARE_CT_PREFIX + id)!) });
+  }
+
+  // POST /api/v1/shares/{id}/answer {ct}, unauthenticated like open, with
+  // the same tries. Only an open request takes an answer, once; anything else
+  // answers like an ended share. The answer replaces the share's ciphertext.
+  answerShare(id: string, tokenHash: Uint8Array, ct: Uint8Array): Response {
+    const rec = this.recipientShare(id, tokenHash);
+    if (rec instanceof Response) return rec;
+    if (rec.kind !== "request") return fail(404, SHARE_GONE);
+    this.ctx.storage.transactionSync(() => {
+      this.ctx.storage.kv.put(SHARE_PREFIX + id, { ...rec, state: "answered" });
+      this.ctx.storage.kv.put(SHARE_ANSWER_PREFIX + id, ct);
+      this.ctx.storage.kv.delete(SHARE_CT_PREFIX + id);
+    });
+    return new Response(null, { status: 204 });
   }
 
   // Called by the share's alarm at its expiry: deletes that share whatever
@@ -886,6 +933,7 @@ export class Account extends DurableObject<Env> {
     this.ctx.storage.transactionSync(() => {
       this.ctx.storage.kv.delete(SHARE_PREFIX + id);
       this.ctx.storage.kv.delete(SHARE_CT_PREFIX + id);
+      this.ctx.storage.kv.delete(SHARE_ANSWER_PREFIX + id);
     });
     this.sweepShares();
   }

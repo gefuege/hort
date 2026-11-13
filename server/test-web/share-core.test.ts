@@ -8,17 +8,23 @@ import {
   formatShareLink,
   normalizeShareName,
   openShare,
+  openShareAnswer,
   openShareMeta,
   parseShareLink,
   sealShare,
+  sealShareAnswer,
   sealShareMeta,
+  type ShareKind,
+  type ShareMeta,
   type SharedSecret,
 } from "../web/share-core";
 import { deriveAccountKeys } from "../web/vault-core";
 import { b64Encode, hexDecode, hexEncode, str } from "../src/wire";
 
 const hex = (s: string) => hexDecode(s, s.length / 2)!;
-const { normalize, keys, ct, meta, link } = shareVectors.vectors;
+const { normalize, keys, ct, answer, meta, link } = shareVectors.vectors;
+const secretOf = (c: (typeof ct)[number]) => ({ ...c.secret, kind: c.secret.kind as ShareKind });
+const metaOf = ({ link_key, ...m }: (typeof meta)[number]["meta"]): ShareMeta => ({ ...m, kind: m.kind as ShareKind, linkKey: link_key });
 
 describe("share.json", () => {
   it("normalizes names as Go does", () => {
@@ -39,7 +45,7 @@ describe("share.json", () => {
       expect(hexEncode(k.tokenHash), v.name).toBe(v.token_hash_hex);
       expect(b64Encode(k.tokenHash), v.name).toBe(v.token_hash_base64);
       if (v.enc_key_hex === ct[0].enc_key_hex) {
-        expect(hexEncode(await sealShare(k, ct[0].share_id, ct[0].secret, hex(ct[0].nonce_hex)))).toBe(ct[0].ct_hex);
+        expect(hexEncode(await sealShare(k, ct[0].share_id, secretOf(ct[0]), hex(ct[0].nonce_hex)))).toBe(ct[0].ct_hex);
       }
     }
   }, 60_000);
@@ -56,30 +62,51 @@ describe("share.json", () => {
     const k = await deriveShareKeys(v.input, hex(v.link_key_hex), v.share_id, { t: v.argon.t, m: v.argon.m_kib, p: v.argon.p });
     for (const c of ct) {
       expect(c.enc_key_hex).toBe(v.enc_key_hex);
-      const sealed = await sealShare(k, c.share_id, c.secret, hex(c.nonce_hex));
-      expect(hexEncode(sealed), c.name).toBe(c.ct_hex);
-      expect(b64Encode(sealed), c.name).toBe(c.ct_base64);
-      expect(await openShare(k, c.share_id, hex(c.ct_hex))).toEqual(c.secret);
+      // The older form without kind is read, never written.
+      if (!("older" in c)) {
+        const sealed = await sealShare(k, c.share_id, secretOf(c), hex(c.nonce_hex));
+        expect(hexEncode(sealed), c.name).toBe(c.ct_hex);
+        expect(b64Encode(sealed), c.name).toBe(c.ct_base64);
+      }
+      expect(await openShare(k, c.share_id, hex(c.ct_hex)), c.name).toEqual(secretOf(c));
       await expect(openShare(k, "0".repeat(31) + "1", hex(c.ct_hex))).rejects.toThrow("share does not open");
+      await expect(openShareAnswer(k, c.share_id, hex(c.ct_hex))).rejects.toThrow("answer does not open");
     }
     const other = await deriveShareKeys("someone else", hex(v.link_key_hex), v.share_id, { t: v.argon.t, m: v.argon.m_kib, p: v.argon.p });
     await expect(openShare(other, ct[0].share_id, hex(ct[0].ct_hex))).rejects.toThrow("share does not open");
     const invalid: SharedSecret[] = [
-      { name: "db", description: "", fields: [] },
-      { name: "", description: "", fields: [{ field: "", value: "v" }] },
-      { name: "db", description: "", fields: [{ field: "user", value: "a" }, { field: "user", value: "b" }] },
-      { name: "db", description: "", fields: [{ field: "User", value: "a" }] },
+      { name: "db", description: "", fields: [], kind: "share" },
+      { name: "", description: "", fields: [{ field: "", value: "v" }], kind: "share" },
+      { name: "db", description: "", fields: [{ field: "user", value: "a" }, { field: "user", value: "b" }], kind: "share" },
+      { name: "db", description: "", fields: [{ field: "User", value: "a" }], kind: "share" },
+      { name: "db", description: "", fields: [{ field: "", value: "v" }], kind: "ask" as ShareKind },
     ];
     for (const s of invalid) await expect(sealShare(k, ct[0].share_id, s)).rejects.toThrow();
   });
 
-  it("seals and opens the owner's share meta under RK", async () => {
-    const m = meta[0];
-    const ak = await deriveAccountKeys(hex(keyVectors.vectors[0].vk_hex), hex(m.account_id_hex));
-    const sealed = await sealShareMeta(ak, m.share_id, m.meta, hex(m.nonce_hex));
-    expect(hexEncode(sealed)).toBe(m.meta_ct_hex);
-    expect(b64Encode(sealed)).toBe(m.meta_ct_base64);
-    expect(await openShareMeta(ak, m.share_id, hex(m.meta_ct_hex))).toEqual(m.meta);
+  it("seals and opens a request's answer under its own AAD tag", async () => {
+    const v = keys[1];
+    const k = await deriveShareKeys(v.input, hex(v.link_key_hex), v.share_id, { t: v.argon.t, m: v.argon.m_kib, p: v.argon.p });
+    for (const a of answer) {
+      expect(a.enc_key_hex).toBe(v.enc_key_hex);
+      const sealed = await sealShareAnswer(k, a.share_id, a.answer, hex(a.nonce_hex));
+      expect(hexEncode(sealed)).toBe(a.ct_hex);
+      expect(b64Encode(sealed)).toBe(a.ct_base64);
+      expect(await openShareAnswer(k, a.share_id, hex(a.ct_hex))).toEqual(a.answer);
+      await expect(openShare(k, a.share_id, hex(a.ct_hex))).rejects.toThrow("share does not open");
+    }
+  });
+
+  it("seals and opens the owner's share meta under RK; the older form reads as a share", async () => {
+    for (const m of meta) {
+      const ak = await deriveAccountKeys(hex(keyVectors.vectors[0].vk_hex), hex(m.account_id_hex));
+      if (!("older" in m)) {
+        const sealed = await sealShareMeta(ak, m.share_id, metaOf(m.meta), hex(m.nonce_hex));
+        expect(hexEncode(sealed), m.name).toBe(m.meta_ct_hex);
+        expect(b64Encode(sealed), m.name).toBe(m.meta_ct_base64);
+      }
+      expect(await openShareMeta(ak, m.share_id, hex(m.meta_ct_hex)), m.name).toEqual(metaOf(m.meta));
+    }
   });
 
   it("parses and formats share links", () => {

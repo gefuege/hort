@@ -1,8 +1,8 @@
 import type { AuthenticationResponseJSON } from "@simplewebauthn/server";
 import npmPackage from "../../npm/package.json";
-import { MAX_ENVELOPE_BYTES, SESSION_COOKIE, SHARE_GONE, type RelyingParty, type SessionAuth } from "./account";
+import { ciphertext, MAX_ENVELOPE_BYTES, SESSION_COOKIE, SHARE_GONE, type RelyingParty, type SessionAuth } from "./account";
 import { issueChallenge } from "./challenge";
-import { fail, json } from "./http";
+import { fail, json, parseObject } from "./http";
 import { INVITE_INVALID, invitationsStub } from "./invitations";
 import { rateLimit } from "./rate-limiter";
 import { shareStub } from "./share";
@@ -25,7 +25,8 @@ const FULFILL_TOO_LARGE = `request body exceeds ${Math.floor(MAX_FULFILL_BODY_BY
 // A push carries up to 500 envelopes of up to 64 KiB each; the client splits
 // larger batches by this size (contract §6.6).
 const MAX_PUSH_BODY_BYTES = 4 * 1024 * 1024;
-// A share create carries a ciphertext of up to 64 KiB and meta_ct, base64 in JSON.
+// A share create carries a ciphertext of up to 64 KiB and meta_ct, base64 in
+// JSON; an answer only its ciphertext.
 const MAX_SHARE_BODY_BYTES = 128 * 1024;
 
 type Bindings = Env & { ADMIN_TOKEN?: string };
@@ -339,19 +340,38 @@ async function route(request: Request, env: Bindings): Promise<Response> {
     return accountStub(env, req.accountId).revokeShare(req, m[1]);
   }
 
+  // The owner reads the answer of an answered request.
+  if ((m = path.match(/^\/api\/v1\/shares\/([^/]+)\/answer$/)) && method === "GET") {
+    if (!hexDecode(m[1], 16)) return fail(404, "share not found");
+    const req = await deviceOrSession(request, url, false);
+    if (req instanceof Response) return req;
+    return accountStub(env, req.accountId).shareAnswer(req, m[1]);
+  }
+
   // Recipient endpoints: no account, the access token alone. Unknown, ended
   // and expired shares get one answer, and nothing names the account.
-  if ((m = path.match(/^\/api\/v1\/shares\/([^/]+)(\/open)?$/))) {
+  if ((m = path.match(/^\/api\/v1\/shares\/([^/]+)(\/open|\/answer)?$/))) {
     const take = m[2] === undefined;
     if (take ? method !== "DELETE" : method !== "POST") return fail(405, "method not allowed");
     const limited = await rateLimit(env, "share", clientIp(request));
     if (limited) return limited;
     const token = b64Decode(request.headers.get("Hort-Share-Token") ?? "");
     if (!token || token.length !== 32) return fail(400, "Hort-Share-Token must be base64 of 32 bytes");
+    // An answer's body is checked before any lookup, alike for every link.
+    let answer: Uint8Array | null = null;
+    if (m[2] === "/answer") {
+      if (Number(request.headers.get("Content-Length") ?? 0) > MAX_SHARE_BODY_BYTES) return fail(413, "request body exceeds 128 KiB");
+      const body = await readBody(request, MAX_SHARE_BODY_BYTES);
+      if (!body) return fail(413, "request body exceeds 128 KiB");
+      const o = parseObject(body, ["ct"]);
+      answer = o ? ciphertext(o.ct, MAX_ENVELOPE_BYTES) : null;
+      if (!answer) return fail(400, "body must be {ct} with ct base64 of 28 bytes to 64 KiB");
+    }
     const id = m[1];
     const account = hexDecode(id, 16) ? await shareStub(env, id).account() : null;
     if (!account) return fail(404, SHARE_GONE);
-    return accountStub(env, account).openShare(id, await sha256(token), take);
+    const stub = accountStub(env, account);
+    return answer ? stub.answerShare(id, await sha256(token), answer) : stub.openShare(id, await sha256(token), take);
   }
 
   if (path === "/api/v1/webauthn/register/options" || path === "/api/v1/webauthn/register/verify") {

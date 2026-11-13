@@ -178,7 +178,7 @@ func (c takeCase) take(t *testing.T, name, as string) (string, string, error) {
 	return string(out), stderr, runErr
 }
 
-var dbShare = vault.SharedSecret{Name: "db", Description: "Postgres of tenant heine", Fields: []vault.SharedField{
+var dbShare = vault.SharedSecret{Kind: vault.ShareKindShare, Name: "db", Description: "Postgres of tenant heine", Fields: []vault.SharedField{
 	{Field: "", Value: "synthetic-url-7f3a"},
 	{Field: "user", Value: "synthetic-user-9c2e"},
 	{Field: "password", Value: "synthetic-pw-ä41d"},
@@ -232,7 +232,7 @@ func TestTakeSavesEveryFieldThenDeletesTheShare(t *testing.T) {
 }
 
 func TestTakeOneFieldAsAnotherName(t *testing.T) {
-	one := vault.SharedSecret{Name: "github-token", Fields: []vault.SharedField{{Field: "", Value: "synthetic-token-b81c"}}}
+	one := vault.SharedSecret{Kind: vault.ShareKindShare, Name: "github-token", Fields: []vault.SharedField{{Field: "", Value: "synthetic-token-b81c"}}}
 	c := newTake(t, one)
 	_, errs, err := c.take(t, "Jörg Müller", "gh")
 	if err != nil {
@@ -244,6 +244,22 @@ func TestTakeOneFieldAsAnotherName(t *testing.T) {
 	wantSaved(t, "gh", one)
 	if _, ok := entryOf(t, "github-token"); ok {
 		t.Fatal("saved under the shared name despite --as")
+	}
+}
+
+func TestTakeRequestLinkPointsToTheBrowser(t *testing.T) {
+	request := dbShare
+	request.Kind = vault.ShareKindRequest
+	c := newTake(t, request)
+	_, _, err := c.take(t, "Jörg Müller", "")
+	if err == nil || !strings.Contains(err.Error(), "open it in a browser") {
+		t.Fatalf("request link: %v", err)
+	}
+	if _, ok := entryOf(t, "db"); ok {
+		t.Fatal("a request link wrote an entry")
+	}
+	if got := c.srv.seen(); len(got) != 1 {
+		t.Fatalf("requests after a request link: %v", got)
 	}
 }
 
@@ -292,9 +308,9 @@ func TestTakeExistingNameWritesNothingAndKeepsTheShare(t *testing.T) {
 
 func TestTakeInvalidWriteWritesNothing(t *testing.T) {
 	for name, secret := range map[string]vault.SharedSecret{
-		"invalid name":       {Name: "my db", Fields: []vault.SharedField{{Field: "", Value: "synthetic-a"}}},
-		"second too large":   {Name: "big", Fields: []vault.SharedField{{Field: "", Value: "synthetic-b"}, {Field: "x", Value: strings.Repeat("y", 48<<10+1)}}},
-		"description breaks": {Name: "desc", Description: strings.Repeat("d", 48<<10+1), Fields: []vault.SharedField{{Field: "", Value: "synthetic-c"}}},
+		"invalid name":       {Kind: vault.ShareKindShare, Name: "my db", Fields: []vault.SharedField{{Field: "", Value: "synthetic-a"}}},
+		"second too large":   {Kind: vault.ShareKindShare, Name: "big", Fields: []vault.SharedField{{Field: "", Value: "synthetic-b"}, {Field: "x", Value: strings.Repeat("y", 48<<10+1)}}},
+		"description breaks": {Kind: vault.ShareKindShare, Name: "desc", Description: strings.Repeat("d", 48<<10+1), Fields: []vault.SharedField{{Field: "", Value: "synthetic-c"}}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			c := newTake(t, secret)

@@ -1,6 +1,31 @@
 {
-  "description": "Share by link. Link: https://<origin>/s/<share ID, 16 bytes lowercase hex>#<link key, 32 bytes unpadded base64url>. normalize: NFKC, lowercase per code point (U+0130 -> i + U+0307), ς -> σ, ß and ẞ -> ss, NFKC, Unicode White_Space runs collapsed to one space and trimmed. A = Argon2id(UTF-8 normalized name, salt = share ID bytes, t, m, p, 32); K = HKDF(A XOR link key, share ID bytes, hort/v4/share); enc = HKDF(K, share ID bytes, hort/v4/share-enc); token = HKDF(K, share ID bytes, hort/v4/share-token); token_hash = SHA-256(token). ct = nonce(12) || AES-256-GCM(enc, JSON {name, description, fields: [{field, value}]}, aad = canon(\"hort/v4/share-ct\\n\", share ID bytes)). meta_ct = nonce(12) || AES-256-GCM(RK, JSON {name, recipient, fields: [field]}, aad = canon(\"hort/v4/share-meta\\n\", account_id, share ID bytes)).",
+  "description": "Share by link. Link: https://<origin>/s/<share ID, 16 bytes lowercase hex>#<link key, 32 bytes unpadded base64url>. normalize: NFKC, lowercase per code point (U+0130 -> i + U+0307), ς -> σ, ß and ẞ -> ss, NFKC, Unicode White_Space runs collapsed to one space and trimmed. A = Argon2id(UTF-8 normalized name, salt = share ID bytes, t, m, p, 32); K = HKDF(A XOR link key, share ID bytes, hort/v4/share); enc = HKDF(K, share ID bytes, hort/v4/share-enc); token = HKDF(K, share ID bytes, hort/v4/share-token); token_hash = SHA-256(token). ct = nonce(12) || AES-256-GCM(enc, JSON {name, description, fields: [{field, value}], kind}, aad = canon(\"hort/v4/share-ct\\n\", share ID bytes)); kind is share or request, a plaintext without kind (older form) reads as share, a request may carry empty values. answer = nonce(12) || AES-256-GCM(enc, JSON {name, description, fields: [{field, value}]}, aad = canon(\"hort/v4/share-answer\\n\", share ID bytes)). meta_ct = nonce(12) || AES-256-GCM(RK, JSON {name, recipient, fields: [field], kind, env, context, link_key}, aad = canon(\"hort/v4/share-meta\\n\", account_id, share ID bytes)); link_key is the unpadded base64url link key for a request and \"\" for a share; a meta with only name, recipient and fields (older form) reads as kind share, env, context and link_key \"\".",
   "vectors": {
+    "answer": [
+      {
+        "share_id": "f7e378be5e1360ac446b6dbd3b643873",
+        "answer": {
+          "name": "stripe",
+          "description": "Payments for the shop",
+          "fields": [
+            {
+              "field": "client_id",
+              "value": "pk_example"
+            },
+            {
+              "field": "secret",
+              "value": "sk_example\nline 2"
+            }
+          ]
+        },
+        "enc_key_hex": "e173f0c955b611037a5a6baec3d65f1a333a6e20165cb65b70c39aee4c38c0d9",
+        "aad_hex": "686f72742f76342f73686172652d616e737765720a00000010f7e378be5e1360ac446b6dbd3b643873",
+        "nonce_hex": "3b1f8ef7de859def48565bb5",
+        "plaintext": "{\"name\":\"stripe\",\"description\":\"Payments for the shop\",\"fields\":[{\"field\":\"client_id\",\"value\":\"pk_example\"},{\"field\":\"secret\",\"value\":\"sk_example\\nline 2\"}]}",
+        "ct_hex": "3b1f8ef7de859def48565bb528b825423e78856e5d50009c71a0ca02597aa5755e0ea981943267f546e6683465d7ab74782d94ae14af8cad83f30a3fe2bba52ef6225e74b21bd8b7730e23cd494d3c787f8d69f1de64e9d0f3e975be28c42c4be64f3dc0aa25473615259b6e2897d2c96b5d248e6ac855466187cf410ce8868824a0accfa954c86f457aa2a756dba264a70574fe4071d6454ec58930474d70acf3a182348b1b25bf932bac9db0a54b81787c5a220625b61288",
+        "ct_base64": "Ox+O996Fne9IVlu1KLglQj54hW5dUACccaDKAll6pXVeDqmBlDJn9UbmaDRl16t0eC2UrhSvjK2D8wo/4rulLvYiXnSyG9i3cw4jzUlNPHh/jWnx3mTp0PPpdb4oxCxL5k89wKolRzYVJZtuKJfSyWtdJI5qyFVGYYfPQQzohogkoKzPqVTIb0V6oqdW26JkpwV0/kBx1kVOxYkwR01wrPOhgjSLGyW/kyusnbClS4F4fFoiBiW2Eog="
+      }
+    ],
     "ct": [
       {
         "name": "default field only, empty description",
@@ -13,14 +38,15 @@
               "field": "",
               "value": "ghp_example"
             }
-          ]
+          ],
+          "kind": "share"
         },
         "enc_key_hex": "e173f0c955b611037a5a6baec3d65f1a333a6e20165cb65b70c39aee4c38c0d9",
         "aad_hex": "686f72742f76342f73686172652d63740a00000010f7e378be5e1360ac446b6dbd3b643873",
         "nonce_hex": "b594a07d6c6675e01cd3ceac",
-        "plaintext": "{\"name\":\"github-token\",\"description\":\"\",\"fields\":[{\"field\":\"\",\"value\":\"ghp_example\"}]}",
-        "ct_hex": "b594a07d6c6675e01cd3ceac8311c488c348d6b5a478620fbbada3474927b350db9f17c6eb412744d44d0deb70197b58d5a0afe75392e53359dcf19b52584369e6bd3eb675f4cfb646be8f8fdf63f479ffe9ed8f9924f4528155cd1f2605f802a4ac4ef98bb39f77afa744524b3545cf4e58",
-        "ct_base64": "tZSgfWxmdeAc086sgxHEiMNI1rWkeGIPu62jR0kns1DbnxfG60EnRNRNDetwGXtY1aCv51OS5TNZ3PGbUlhDaea9PrZ19M+2Rr6Pj99j9Hn/6e2PmST0UoFVzR8mBfgCpKxO+Yuzn3evp0RSSzVFz05Y"
+        "plaintext": "{\"name\":\"github-token\",\"description\":\"\",\"fields\":[{\"field\":\"\",\"value\":\"ghp_example\"}],\"kind\":\"share\"}",
+        "ct_hex": "b594a07d6c6675e01cd3ceac8311c488c348d6b5a478620fbbada3474927b350db9f17c6eb412744d44d0deb70197b58d5a0afe75392e53359dcf19b52584369e6bd3eb675f4cfb646be8f8fdf63f479ffe9ed8f9924f4528155cd1f2605f802a4fd6609e3f1937e7e9645087dd7db0ea17854f8029db86dbad53a09cba49b436d",
+        "ct_base64": "tZSgfWxmdeAc086sgxHEiMNI1rWkeGIPu62jR0kns1DbnxfG60EnRNRNDetwGXtY1aCv51OS5TNZ3PGbUlhDaea9PrZ19M+2Rr6Pj99j9Hn/6e2PmST0UoFVzR8mBfgCpP1mCePxk35+lkUIfdfbDqF4VPgCnbhtutU6Ccukm0Nt"
       },
       {
         "name": "default and named fields",
@@ -41,14 +67,62 @@
               "field": "password",
               "value": "s3cr3t ä"
             }
-          ]
+          ],
+          "kind": "share"
         },
         "enc_key_hex": "e173f0c955b611037a5a6baec3d65f1a333a6e20165cb65b70c39aee4c38c0d9",
         "aad_hex": "686f72742f76342f73686172652d63740a00000010f7e378be5e1360ac446b6dbd3b643873",
         "nonce_hex": "24dc92ed50817fc798e202f9",
-        "plaintext": "{\"name\":\"db\",\"description\":\"Postgres of tenant heine\",\"fields\":[{\"field\":\"\",\"value\":\"postgres://db\"},{\"field\":\"user\",\"value\":\"heine\"},{\"field\":\"password\",\"value\":\"s3cr3t ä\"}]}",
-        "ct_hex": "24dc92ed50817fc798e202f9b0a5fe202b27de8f86a21c90a81e510c250b6b4481721b87750b3885ba08ee26903394c40a5a57d125314da4cc55d995e740a06bd55e0ecd51b20db9581a4d0ec3219e617fc10c00d279a6873eb038dc0ded93aa6d9471963fcf4585a6556f037f7c4fb7d8e172befee9a098d276ebe6069229b1b001ecd80e94d29d5a55ab246c780a7cb0ffb1b0f2bdf79120994e97b1d0abcd9ab5dd1839c36daef2b9ca624274eb1de06418aa12c7aa8de1e402b340090bdcbf3abe9de8915ff81c439176",
-        "ct_base64": "JNyS7VCBf8eY4gL5sKX+ICsn3o+GohyQqB5RDCULa0SBchuHdQs4hboI7iaQM5TEClpX0SUxTaTMVdmV50Cga9VeDs1Rsg25WBpNDsMhnmF/wQwA0nmmhz6wONwN7ZOqbZRxlj/PRYWmVW8Df3xPt9jhcr7+6aCY0nbr5gaSKbGwAezYDpTSnVpVqyRseAp8sP+xsPK995EgmU6XsdCrzZq13Rg5w22u8rnKYkJ06x3gZBiqEseqjeHkArNACQvcvzq+neiRX/gcQ5F2"
+        "plaintext": "{\"name\":\"db\",\"description\":\"Postgres of tenant heine\",\"fields\":[{\"field\":\"\",\"value\":\"postgres://db\"},{\"field\":\"user\",\"value\":\"heine\"},{\"field\":\"password\",\"value\":\"s3cr3t ä\"}],\"kind\":\"share\"}",
+        "ct_hex": "24dc92ed50817fc798e202f9b0a5fe202b27de8f86a21c90a81e510c250b6b4481721b87750b3885ba08ee26903394c40a5a57d125314da4cc55d995e740a06bd55e0ecd51b20db9581a4d0ec3219e617fc10c00d279a6873eb038dc0ded93aa6d9471963fcf4585a6556f037f7c4fb7d8e172befee9a098d276ebe6069229b1b001ecd80e94d29d5a55ab246c780a7cb0ffb1b0f2bdf79120994e97b1d0abcd9ab5dd1839c36daef2b9ca624274eb1de06418aa12c7aa8de1e402e22241b586d13088a002df520425a59452bf1eb6f96ae0c6b8faae24b1a3c79f",
+        "ct_base64": "JNyS7VCBf8eY4gL5sKX+ICsn3o+GohyQqB5RDCULa0SBchuHdQs4hboI7iaQM5TEClpX0SUxTaTMVdmV50Cga9VeDs1Rsg25WBpNDsMhnmF/wQwA0nmmhz6wONwN7ZOqbZRxlj/PRYWmVW8Df3xPt9jhcr7+6aCY0nbr5gaSKbGwAezYDpTSnVpVqyRseAp8sP+xsPK995EgmU6XsdCrzZq13Rg5w22u8rnKYkJ06x3gZBiqEseqjeHkAuIiQbWG0TCIoALfUgQlpZRSvx62+Wrgxrj6riSxo8ef"
+      },
+      {
+        "name": "request with an empty value",
+        "share_id": "f7e378be5e1360ac446b6dbd3b643873",
+        "secret": {
+          "name": "stripe",
+          "description": "Payments for the shop",
+          "fields": [
+            {
+              "field": "client_id",
+              "value": "pk_example"
+            },
+            {
+              "field": "secret",
+              "value": ""
+            }
+          ],
+          "kind": "request"
+        },
+        "enc_key_hex": "e173f0c955b611037a5a6baec3d65f1a333a6e20165cb65b70c39aee4c38c0d9",
+        "aad_hex": "686f72742f76342f73686172652d63740a00000010f7e378be5e1360ac446b6dbd3b643873",
+        "nonce_hex": "99a5e2168bda44868d618517",
+        "plaintext": "{\"name\":\"stripe\",\"description\":\"Payments for the shop\",\"fields\":[{\"field\":\"client_id\",\"value\":\"pk_example\"},{\"field\":\"secret\",\"value\":\"\"}],\"kind\":\"request\"}",
+        "ct_hex": "99a5e2168bda44868d618517ba562815de8890fbafc65483c63666050cfaa331af8004a7852326406d5a25e77240f065bfc0ab672dc3dac0ef266296c06d201c01597320ebd3e4b96f2c7daf517239326da349cfb3e81f213a2c23f9818624b1cebc61b609a1495b6b905d0cee47f5e5993df77c0eb834ec88df59d32a4f15c41b5bcead71e180dd7d9ff3f432afecff48329525f22a958844a0f78c927f90479794616f94c51ee3bf403de4f0b8029062aee6cdfe0c1930",
+        "ct_base64": "maXiFovaRIaNYYUXulYoFd6IkPuvxlSDxjZmBQz6ozGvgASnhSMmQG1aJedyQPBlv8CrZy3D2sDvJmKWwG0gHAFZcyDr0+S5byx9r1FyOTJto0nPs+gfITosI/mBhiSxzrxhtgmhSVtrkF0M7kf15Zk993wOuDTsiN9Z0ypPFcQbW86tceGA3X2f8/Qyr+z/SDKVJfIqlYhEoPeMkn+QR5eUYW+UxR7jv0A95PC4ApBirubN/gwZMA=="
+      },
+      {
+        "name": "older form without kind",
+        "older": true,
+        "share_id": "f7e378be5e1360ac446b6dbd3b643873",
+        "secret": {
+          "name": "github-token",
+          "description": "",
+          "fields": [
+            {
+              "field": "",
+              "value": "ghp_example"
+            }
+          ],
+          "kind": "share"
+        },
+        "enc_key_hex": "e173f0c955b611037a5a6baec3d65f1a333a6e20165cb65b70c39aee4c38c0d9",
+        "aad_hex": "686f72742f76342f73686172652d63740a00000010f7e378be5e1360ac446b6dbd3b643873",
+        "nonce_hex": "1ebbb59f379b6aff385c339d",
+        "plaintext": "{\"name\":\"github-token\",\"description\":\"\",\"fields\":[{\"field\":\"\",\"value\":\"ghp_example\"}]}",
+        "ct_hex": "1ebbb59f379b6aff385c339ddbf62050057ef2af58b5974d13055be17c4d2fffb08fff1aafb1ad279abe8740dbe1ef4d05e61dc43e7bd742927893e62339baec0bbf1a185893064d22c802d21d431262772e141d147f42da30ce7f7dbbc42a0c2b837d6958a8ff66fbe94d3d4b35e4ca1fd3",
+        "ct_base64": "Hru1nzebav84XDOd2/YgUAV+8q9YtZdNEwVb4XxNL/+wj/8ar7GtJ5q+h0Db4e9NBeYdxD5710KSeJPmIzm67Au/GhhYkwZNIsgC0h1DEmJ3LhQdFH9C2jDOf327xCoMK4N9aVio/2b76U09SzXkyh/T"
       }
     ],
     "keys": [
@@ -169,6 +243,7 @@
     ],
     "meta": [
       {
+        "name": "share",
         "share_id": "f7e378be5e1360ac446b6dbd3b643873",
         "meta": {
           "name": "db",
@@ -177,7 +252,59 @@
             "",
             "user",
             "password"
-          ]
+          ],
+          "kind": "share",
+          "env": "prod",
+          "context": "",
+          "link_key": ""
+        },
+        "rk_hex": "01e4bceae0b33dfbdf7526ac1e23852c865f7964464a83557816481941858767",
+        "account_id_hex": "02bbde121c1c4b97706161d94fba838d",
+        "aad_hex": "686f72742f76342f73686172652d6d6574610a0000001002bbde121c1c4b97706161d94fba838d00000010f7e378be5e1360ac446b6dbd3b643873",
+        "nonce_hex": "c898b5a2b36bf8589d91bd1a",
+        "plaintext": "{\"name\":\"db\",\"recipient\":\"Jörg Müller\",\"fields\":[\"\",\"user\",\"password\"],\"kind\":\"share\",\"env\":\"prod\",\"context\":\"\",\"link_key\":\"\"}",
+        "meta_ct_hex": "c898b5a2b36bf8589d91bd1ae272b79e1a6f5e61aea775ce481ea4f692dd83b5c36426eb1a2a3895d941e028313771d5e2587210b02a1994311c90e7806686c8d66443ff6d655538b4e09fd9b814a28db2886d49c652c28527f4e8ff0b99f81c8d50f7a19de33066ddc4b682c095baa17e40b7155ab91b089824902af929e6a2ffba52d2771ca6e143adeb1afe94bdcda431ca0561036cc218500081",
+        "meta_ct_base64": "yJi1orNr+Fidkb0a4nK3nhpvXmGup3XOSB6k9pLdg7XDZCbrGio4ldlB4CgxN3HV4lhyELAqGZQxHJDngGaGyNZkQ/9tZVU4tOCf2bgUoo2yiG1JxlLChSf06P8LmfgcjVD3oZ3jMGbdxLaCwJW6oX5AtxVauRsImCSQKvkp5qL/ulLSdxym4UOt6xr+lL3NpDHKBWEDbMIYUACB"
+      },
+      {
+        "name": "request",
+        "share_id": "f7e378be5e1360ac446b6dbd3b643873",
+        "meta": {
+          "name": "stripe",
+          "recipient": "Lars",
+          "fields": [
+            "client_id",
+            "secret"
+          ],
+          "kind": "request",
+          "env": "prod",
+          "context": "shop",
+          "link_key": "fRpqFV2dHzW-gAka-zk53O9k4jCGRmgIvHgJE1E8V6A"
+        },
+        "rk_hex": "01e4bceae0b33dfbdf7526ac1e23852c865f7964464a83557816481941858767",
+        "account_id_hex": "02bbde121c1c4b97706161d94fba838d",
+        "aad_hex": "686f72742f76342f73686172652d6d6574610a0000001002bbde121c1c4b97706161d94fba838d00000010f7e378be5e1360ac446b6dbd3b643873",
+        "nonce_hex": "35040017dd23a797ce3e9db3",
+        "plaintext": "{\"name\":\"stripe\",\"recipient\":\"Lars\",\"fields\":[\"client_id\",\"secret\"],\"kind\":\"request\",\"env\":\"prod\",\"context\":\"shop\",\"link_key\":\"fRpqFV2dHzW-gAka-zk53O9k4jCGRmgIvHgJE1E8V6A\"}",
+        "meta_ct_hex": "35040017dd23a797ce3e9db3e940851a9b6f80b55e730fdbabb9beffc90ddf5a7ef79455d6fe1eb7067b66fa53fc153526fee4cee11eb70c1c9c67d6dee7ca8f6245462440f11398e61eeaabee0a32ee31ff61fba6a1e7e1ac8aecc40c761ba45769bc430e6b3b2a409417c6be962d5f273a7bf34e4739a2ec745bc27c85a9e0e48c84a42843fa6d2707067a7b6e092a4cd030bcffc4526b803101803d4ea9bbef9c8d9773e830c716cf3ca60a0e931ae0a68fc5b712dca549d9b742c6d6aa48e576b0d20e867297",
+        "meta_ct_base64": "NQQAF90jp5fOPp2z6UCFGptvgLVecw/bq7m+/8kN31p+95RV1v4etwZ7ZvpT/BU1Jv7kzuEetwwcnGfW3ufKj2JFRiRA8ROY5h7qq+4KMu4x/2H7pqHn4ayK7MQMdhukV2m8Qw5rOypAlBfGvpYtXyc6e/NORzmi7HRbwnyFqeDkjISkKEP6bScHBnp7bgkqTNAwvP/EUmuAMQGAPU6pu++cjZdz6DDHFs88pgoOkxrgpo/FtxLcpUnZt0LG1qpI5Xaw0g6Gcpc="
+      },
+      {
+        "name": "older form without kind",
+        "older": true,
+        "share_id": "f7e378be5e1360ac446b6dbd3b643873",
+        "meta": {
+          "name": "db",
+          "recipient": "Jörg Müller",
+          "fields": [
+            "",
+            "user",
+            "password"
+          ],
+          "kind": "share",
+          "env": "",
+          "context": "",
+          "link_key": ""
         },
         "rk_hex": "01e4bceae0b33dfbdf7526ac1e23852c865f7964464a83557816481941858767",
         "account_id_hex": "02bbde121c1c4b97706161d94fba838d",

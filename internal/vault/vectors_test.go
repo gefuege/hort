@@ -901,6 +901,7 @@ func shareVectors(t *testing.T) any {
 
 	type ctVec struct {
 		Name      string       `json:"name"`
+		Older     bool         `json:"older,omitempty"`
 		ShareID   string       `json:"share_id"`
 		Secret    SharedSecret `json:"secret"`
 		Enc       hexBytes     `json:"enc_key_hex"`
@@ -915,7 +916,7 @@ func shareVectors(t *testing.T) any {
 		nonce := fixed(fmt.Sprintf("nonce/share/%d", i), NonceSize)
 		ct := must(sealShare(enc, shareID, s, nonce))
 		got := must(OpenShare(enc, shareID, ct))
-		if got.Name != s.Name || got.Description != s.Description || len(got.Fields) != len(s.Fields) {
+		if !reflect.DeepEqual(got, s) {
 			t.Fatalf("%s: share does not round-trip", name)
 		}
 		if _, err := OpenShare(enc, fmt.Sprintf("%032x", 99), ct); err == nil {
@@ -924,25 +925,73 @@ func shareVectors(t *testing.T) any {
 		if _, err := OpenShare(keyVecs[0].Enc, shareID, ct); err == nil {
 			t.Fatalf("%s: share opened with another key", name)
 		}
-		return ctVec{name, shareID, s, enc, shareAAD(idBytes), nonce, string(must(json.Marshal(s))), ct, base64.StdEncoding.EncodeToString(ct)}
+		if _, err := openShareAnswer(enc, shareID, ct); err == nil {
+			t.Fatalf("%s: share opened as an answer", name)
+		}
+		return ctVec{name, false, shareID, s, enc, shareAAD(idBytes), nonce, string(must(json.Marshal(s))), ct, base64.StdEncoding.EncodeToString(ct)}
+	}
+	// The form an older Hort writes has no kind; readers take it as a share.
+	olderPlaintext := `{"name":"github-token","description":"","fields":[{"field":"","value":"ghp_example"}]}`
+	olderNonce := fixed("nonce/share/older", NonceSize)
+	olderCT := must(sealEnvelope(enc, olderNonce, []byte(olderPlaintext), shareAAD(idBytes)))
+	olderSecret := SharedSecret{Name: "github-token", Fields: []SharedField{{"", "ghp_example"}}, Kind: ShareKindShare}
+	if got := must(OpenShare(enc, shareID, olderCT)); !reflect.DeepEqual(got, olderSecret) {
+		t.Fatal("share without kind does not read as a share")
 	}
 	cts := []ctVec{
-		ctCase(0, "default field only, empty description", SharedSecret{Name: "github-token", Fields: []SharedField{{"", "ghp_example"}}}),
+		ctCase(0, "default field only, empty description", SharedSecret{Name: "github-token", Fields: []SharedField{{"", "ghp_example"}}, Kind: ShareKindShare}),
 		ctCase(1, "default and named fields", SharedSecret{Name: "db", Description: "Postgres of tenant heine",
-			Fields: []SharedField{{"", "postgres://db"}, {"user", "heine"}, {"password", "s3cr3t ä"}}}),
+			Fields: []SharedField{{"", "postgres://db"}, {"user", "heine"}, {"password", "s3cr3t ä"}}, Kind: ShareKindShare}),
+		ctCase(2, "request with an empty value", SharedSecret{Name: "stripe", Description: "Payments for the shop",
+			Fields: []SharedField{{"client_id", "pk_example"}, {"secret", ""}}, Kind: ShareKindRequest}),
+		{"older form without kind", true, shareID, olderSecret, enc, shareAAD(idBytes), olderNonce, olderPlaintext, olderCT, base64.StdEncoding.EncodeToString(olderCT)},
 	}
 	for _, bad := range []SharedSecret{
-		{Name: "db"},
-		{Name: "", Fields: []SharedField{{"", "v"}}},
-		{Name: "db", Fields: []SharedField{{"user", "a"}, {"user", "b"}}},
-		{Name: "db", Fields: []SharedField{{"User", "a"}}},
+		{Name: "db", Kind: ShareKindShare},
+		{Name: "", Fields: []SharedField{{"", "v"}}, Kind: ShareKindShare},
+		{Name: "db", Fields: []SharedField{{"user", "a"}, {"user", "b"}}, Kind: ShareKindShare},
+		{Name: "db", Fields: []SharedField{{"User", "a"}}, Kind: ShareKindShare},
+		{Name: "db", Fields: []SharedField{{"", "v"}}},
+		{Name: "db", Fields: []SharedField{{"", "v"}}, Kind: "ask"},
 	} {
 		if _, err := sealShare(enc, shareID, bad, fixed("nonce/share/bad", NonceSize)); err == nil {
 			t.Fatalf("sealed invalid share %+v", bad)
 		}
 	}
+	for _, bad := range []string{
+		`{"name":"db","description":"","fields":[{"field":"","value":"v"}],"kind":"ask"}`,
+		`{"name":"db","description":"","fields":[{"field":"","value":"v"}],"kind":""}`,
+		`{"name":"db","description":"","fields":[{"field":"","value":"v"}],"kind":null}`,
+	} {
+		ct := must(sealEnvelope(enc, olderNonce, []byte(bad), shareAAD(idBytes)))
+		if _, err := OpenShare(enc, shareID, ct); err == nil {
+			t.Fatalf("opened invalid share %s", bad)
+		}
+	}
+
+	type answerVec struct {
+		ShareID   string      `json:"share_id"`
+		Answer    shareAnswer `json:"answer"`
+		Enc       hexBytes    `json:"enc_key_hex"`
+		AAD       hexBytes    `json:"aad_hex"`
+		Nonce     hexBytes    `json:"nonce_hex"`
+		Plaintext string      `json:"plaintext"`
+		CT        hexBytes    `json:"ct_hex"`
+		Base64    string      `json:"ct_base64"`
+	}
+	answer := shareAnswer{Name: "stripe", Description: "Payments for the shop", Fields: []SharedField{{"client_id", "pk_example"}, {"secret", "sk_example\nline 2"}}}
+	answerNonce := fixed("nonce/share-answer", NonceSize)
+	answerCT := must(sealShareAnswer(enc, shareID, answer, answerNonce))
+	if got := must(openShareAnswer(enc, shareID, answerCT)); !reflect.DeepEqual(got, answer) {
+		t.Fatal("answer does not round-trip")
+	}
+	if _, err := OpenShare(enc, shareID, answerCT); err == nil {
+		t.Fatal("answer opened as a share")
+	}
 
 	type metaVec struct {
+		Name      string    `json:"name"`
+		Older     bool      `json:"older,omitempty"`
 		ShareID   string    `json:"share_id"`
 		Meta      shareMeta `json:"meta"`
 		RK        hexBytes  `json:"rk_hex"`
@@ -953,11 +1002,38 @@ func shareVectors(t *testing.T) any {
 		MetaCT    hexBytes  `json:"meta_ct_hex"`
 		Base64    string    `json:"meta_ct_base64"`
 	}
-	meta := shareMeta{Name: "db", Recipient: "Jörg Müller", Fields: []string{"", "user", "password"}}
-	metaNonce := fixed("nonce/share-meta", NonceSize)
-	metaCT := must(sealShareMeta(keys.RK, vecAccountID, shareID, meta, metaNonce))
-	if got := must(openShareMeta(keys.RK, vecAccountID, shareID, metaCT)); got.Name != meta.Name || got.Recipient != meta.Recipient || len(got.Fields) != 3 {
-		t.Fatal("share meta does not round-trip")
+	metaAAD := shareMetaAAD(vecAccountID, idBytes)
+	metaCase := func(name, nonceLabel string, m shareMeta) metaVec {
+		nonce := fixed(nonceLabel, NonceSize)
+		ct := must(sealShareMeta(keys.RK, vecAccountID, shareID, m, nonce))
+		if got := must(openShareMeta(keys.RK, vecAccountID, shareID, ct)); !reflect.DeepEqual(got, m) {
+			t.Fatalf("%s: share meta does not round-trip", name)
+		}
+		return metaVec{name, false, shareID, m, keys.RK, vecAccountID, metaAAD, nonce, string(must(json.Marshal(m))), ct, base64.StdEncoding.EncodeToString(ct)}
+	}
+	olderMetaPlaintext := `{"name":"db","recipient":"Jörg Müller","fields":["","user","password"]}`
+	olderMetaNonce := fixed("nonce/share-meta", NonceSize)
+	olderMetaCT := must(sealEnvelope(keys.RK, olderMetaNonce, []byte(olderMetaPlaintext), metaAAD))
+	olderMeta := shareMeta{Name: "db", Recipient: "Jörg Müller", Fields: []string{"", "user", "password"}, Kind: ShareKindShare}
+	if got := must(openShareMeta(keys.RK, vecAccountID, shareID, olderMetaCT)); !reflect.DeepEqual(got, olderMeta) {
+		t.Fatal("share meta without kind does not read as a share")
+	}
+	metas := []metaVec{
+		metaCase("share", "nonce/share-meta/share", shareMeta{Name: "db", Recipient: "Jörg Müller", Fields: []string{"", "user", "password"}, Kind: ShareKindShare, Env: "prod", Context: ""}),
+		metaCase("request", "nonce/share-meta/request", shareMeta{Name: "stripe", Recipient: "Lars", Fields: []string{"client_id", "secret"}, Kind: ShareKindRequest, Env: "prod", Context: "shop",
+			LinkKey: base64.RawURLEncoding.EncodeToString(linkKey)}),
+		{"older form without kind", true, shareID, olderMeta, keys.RK, vecAccountID, metaAAD, olderMetaNonce, olderMetaPlaintext, olderMetaCT, base64.StdEncoding.EncodeToString(olderMetaCT)},
+	}
+	for _, bad := range []string{
+		`{"name":"db","recipient":"L","fields":[""],"kind":"share","env":"","context":"","link_key":"` + base64.RawURLEncoding.EncodeToString(linkKey) + `"}`,
+		`{"name":"db","recipient":"L","fields":[""],"kind":"request","env":"","context":"","link_key":""}`,
+		`{"name":"db","recipient":"L","fields":[""],"kind":"share"}`,
+		`{"name":"db","recipient":"L","fields":[""],"env":"","context":"","link_key":""}`,
+	} {
+		ct := must(sealEnvelope(keys.RK, olderMetaNonce, []byte(bad), metaAAD))
+		if _, err := openShareMeta(keys.RK, vecAccountID, shareID, ct); err == nil {
+			t.Fatalf("opened invalid share meta %s", bad)
+		}
 	}
 
 	type linkVec struct {
@@ -995,13 +1071,14 @@ func shareVectors(t *testing.T) any {
 	}
 
 	return vectorFile{
-		Description: "Share by link. Link: https://<origin>/s/<share ID, 16 bytes lowercase hex>#<link key, 32 bytes unpadded base64url>. normalize: NFKC, lowercase per code point (U+0130 -> i + U+0307), ς -> σ, ß and ẞ -> ss, NFKC, Unicode White_Space runs collapsed to one space and trimmed. A = Argon2id(UTF-8 normalized name, salt = share ID bytes, t, m, p, 32); K = HKDF(A XOR link key, share ID bytes, hort/v4/share); enc = HKDF(K, share ID bytes, hort/v4/share-enc); token = HKDF(K, share ID bytes, hort/v4/share-token); token_hash = SHA-256(token). ct = nonce(12) || AES-256-GCM(enc, JSON {name, description, fields: [{field, value}]}, aad = canon(\"hort/v4/share-ct\\n\", share ID bytes)). meta_ct = nonce(12) || AES-256-GCM(RK, JSON {name, recipient, fields: [field]}, aad = canon(\"hort/v4/share-meta\\n\", account_id, share ID bytes)).",
+		Description: "Share by link. Link: https://<origin>/s/<share ID, 16 bytes lowercase hex>#<link key, 32 bytes unpadded base64url>. normalize: NFKC, lowercase per code point (U+0130 -> i + U+0307), ς -> σ, ß and ẞ -> ss, NFKC, Unicode White_Space runs collapsed to one space and trimmed. A = Argon2id(UTF-8 normalized name, salt = share ID bytes, t, m, p, 32); K = HKDF(A XOR link key, share ID bytes, hort/v4/share); enc = HKDF(K, share ID bytes, hort/v4/share-enc); token = HKDF(K, share ID bytes, hort/v4/share-token); token_hash = SHA-256(token). ct = nonce(12) || AES-256-GCM(enc, JSON {name, description, fields: [{field, value}], kind}, aad = canon(\"hort/v4/share-ct\\n\", share ID bytes)); kind is share or request, a plaintext without kind (older form) reads as share, a request may carry empty values. answer = nonce(12) || AES-256-GCM(enc, JSON {name, description, fields: [{field, value}]}, aad = canon(\"hort/v4/share-answer\\n\", share ID bytes)). meta_ct = nonce(12) || AES-256-GCM(RK, JSON {name, recipient, fields: [field], kind, env, context, link_key}, aad = canon(\"hort/v4/share-meta\\n\", account_id, share ID bytes)); link_key is the unpadded base64url link key for a request and \"\" for a share; a meta with only name, recipient and fields (older form) reads as kind share, env, context and link_key \"\".",
 		Vectors: map[string]any{
 			"normalize": normalize,
 			"keys":      keyVecs,
 			"ct":        cts,
-			"meta": []metaVec{{shareID, meta, keys.RK, vecAccountID, shareMetaAAD(vecAccountID, idBytes), metaNonce,
-				string(must(json.Marshal(meta))), metaCT, base64.StdEncoding.EncodeToString(metaCT)}},
+			"answer": []answerVec{{shareID, answer, enc, shareAnswerAAD(idBytes), answerNonce, string(must(json.Marshal(answer))),
+				answerCT, base64.StdEncoding.EncodeToString(answerCT)}},
+			"meta": metas,
 			"link": links,
 		},
 	}
