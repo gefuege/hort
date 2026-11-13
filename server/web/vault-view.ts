@@ -2,11 +2,12 @@
 // visit pulls every revision from cursor 0, later visits in the same tab pull
 // deltas. Revisions are decrypted and reduced in memory only. Every write goes
 // through validateWrite and the Append rule against the in-memory entry, then
-// POST /revisions. Values reach the DOM only on an explicit "Show".
+// POST /revisions. Values reach the DOM only once an entry's editor or "Show" is
+// opened; the editor grid keeps them masked until "Show values".
 import { b64Decode, b64Encode } from "../src/wire";
 import { formatTime } from "./format-time";
 import { notALogin } from "./not-a-login";
-import { accountIdEncode, appendStamp, current, entries, entryOf, foldKey, lookupKey, newId, nowNs, openRevision, resolve, sealRevision, spelling, validateWrite, type AccountKeys, type Op, type Revision } from "./vault-core";
+import { accountIdEncode, appendStamp, current, entries, entryOf, foldKey, lookupKey, newId, nowNs, openRevision, resolve, sealRevision, spelling, validateWrite, type AccountKeys, type Current, type Op, type Revision } from "./vault-core";
 import { deriveShareKeys, formatShareLink, normalizeShareName, openShareMeta, sealShare, sealShareMeta, SHARE_LINK_KEY_BYTES, type SharedField, type SharedSecret } from "./share-core";
 
 type Child = Node | string | null | false | undefined;
@@ -110,21 +111,6 @@ export async function write(host: Api, u: Unlocked, typed: string, changes: Chan
   const stored = new Set([...result.accepted, ...result.duplicate]);
   for (const r of built) if (stored.has(r.id)) remember(v, name, r);
   return { name, written: built };
-}
-
-// The set changes of the editor's rows for one env and context. A row with
-// neither field nor value is ignored unless no row has either, then the first
-// row is used as before. On an existing secret an empty value means unchanged.
-// Two rows naming the same field (in any letter case) are refused.
-export function rowChanges(rows: { field: string; value: string }[], key: string, editing: boolean): Change[] {
-  const filled = rows.filter((x) => x.field !== "" || x.value !== "");
-  const used = filled.length ? filled : rows.slice(0, 1);
-  const seen = new Set<string>();
-  for (const x of used) {
-    if (seen.has(foldKey(x.field))) throw new Error(`Field ${x.field || "(default)"} appears in two rows.`);
-    seen.add(foldKey(x.field));
-  }
-  return used.filter((x) => !(editing && x.value === "")).map((x) => ({ op: "set", field: x.field, key, value: x.value }));
 }
 
 // ---------------------------------------------------------------------------
@@ -261,6 +247,12 @@ const splitKey = (key: string) => {
   return colon < 0 ? { env: part(key), context: "" } : { env: part(key.slice(0, colon)), context: part(key.slice(colon + 1)) };
 };
 const order = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
+// The list without names that fold alike (foldKey), each in its first spelling.
+const uniqueFold = (list: string[]) => {
+  const seen = new Map<string, string>();
+  for (const x of list) if (!seen.has(foldKey(x))) seen.set(foldKey(x), x);
+  return [...seen.values()];
+};
 
 export function rows(stored: Map<string, Revision[]>, filter: string): { rows: Row[]; secrets: number; values: number } {
   const terms = filter.toLowerCase().split(/\s+/).filter(Boolean);
@@ -352,6 +344,8 @@ export function command(key: string, focus: Focus, confirming: boolean): Command
 // Editor input ids come from a counter, so each label points at its own input.
 let inputs = 0;
 
+type Grid = { el: HTMLElement; sync: () => void; dirty: () => boolean };
+
 export async function vaultView(main: HTMLElement, host: Host): Promise<void> {
   const { h, messageOf } = host;
   const body = h("div", {});
@@ -395,7 +389,7 @@ export async function vaultView(main: HTMLElement, host: Host): Promise<void> {
   let selected: string | null = null;
   let confirming: string | null = null;
   // The one inline panel under an entry: the editor or the share panel.
-  let editing: { name: string | null; el: HTMLElement } | null = null;
+  let editing: { name: string | null; el: HTMLElement; grid?: Grid } | null = null;
   let shares = new Map<string, OwnShare[]>();
   const revealed = new Map<string, { deadline: number; timer: number; ttl?: HTMLElement }>();
   let deleting = false;
@@ -454,6 +448,7 @@ export async function vaultView(main: HTMLElement, host: Host): Promise<void> {
   const focusSelected = () => list.querySelector<HTMLElement>(".v-row.sel")?.focus();
 
   function draw(): void {
+    editing?.grid?.sync();
     const result = rows(v.entries, filter.value);
     shown = result.rows;
     if (selected && !rowById(selected)) selected = null;
@@ -702,13 +697,19 @@ export async function vaultView(main: HTMLElement, host: Host): Promise<void> {
   }
 
   function openEditor(r: Row | null): void {
+    if (editing?.grid && (r ? editing.name !== null && foldKey(editing.name) === foldKey(r.name) : editing.name === null)) {
+      editing.el.querySelector<HTMLElement>(r ? "textarea" : "input")?.focus();
+      return;
+    }
+    if (!leave()) return;
     confirming = null;
-    editing = { name: r?.name ?? null, el: editorEl(r) };
+    editing = { name: r?.name ?? null, ...editorEl(r) };
     draw();
     editing.el.querySelector<HTMLElement>(r ? "textarea" : "input")?.focus();
   }
 
   function openShare(r: Row): void {
+    if (!leave()) return;
     confirming = null;
     selected = r.id;
     editing = { name: r.name, el: shareEl(r) };
@@ -717,45 +718,367 @@ export async function vaultView(main: HTMLElement, host: Host): Promise<void> {
   }
 
   function closeEditor(): void {
+    if (!leave()) return;
     editing = null;
     draw();
     focusSelected();
   }
 
-  // The one inline editor: a new secret, or a value and the description of an entry.
-  function editorEl(r: Row | null): HTMLElement {
-    const input = (label: string, el: HTMLInputElement | HTMLTextAreaElement, cls?: string) => {
-      el.id = `v-${++inputs}`;
-      return h("div", { class: cls }, h("label", { htmlFor: el.id }, label), el);
+  const text = (value = "", placeholder = "") => h("input", { autocomplete: "off", spellcheck: false, value, placeholder });
+  const labelled = (label: string, el: HTMLInputElement | HTMLTextAreaElement, cls?: string) => {
+    el.id = `v-${++inputs}`;
+    return h("div", { class: cls }, h("label", { htmlFor: el.id }, label), el);
+  };
+
+  // False when the open editor holds unsaved edits and the user keeps them.
+  const leave = () => !editing?.grid?.dirty() || confirm(editing.name === null ? "Discard the new secret?" : `Close ${editing.name} and discard its unsaved changes?`);
+
+  // Env and context names used anywhere in the loaded vault.
+  function usedNames(): { envs: string[]; contexts: string[] } {
+    const envs: string[] = [];
+    const contexts: string[] = [];
+    for (const revisions of entries(v.entries).values()) {
+      for (const x of current(revisions).values.values()) {
+        const { env, context } = splitKey(x.key);
+        if (env) envs.push(env);
+        if (context) contexts.push(context);
+      }
+    }
+    return { envs: uniqueFold(envs).sort(order), contexts: uniqueFold(contexts).sort(order) };
+  }
+
+  // The value grid: rows are env/context combinations, columns are fields.
+  // `commit` receives every change (values, deletions, description) at once;
+  // with `cancel` the grid belongs to a new secret (Save / Cancel instead of Save changes / Discard).
+  function valueGrid(o: { saved: () => Current; commit: (changes: Change[]) => Promise<void>; done: string; cancel?: () => void }): Grid {
+    const cellId = (f: string, key: string) => `${foldKey(f)}\0${foldKey(key)}`;
+    const tokens = (input: HTMLInputElement) => uniqueFold(input.value.split(/[,\s]+/).filter(Boolean));
+    type Saved = { field: string; key: string; value: string };
+    let saved = new Map<string, Saved>();
+    let savedDesc = o.saved().description;
+    const draft = new Map<string, Saved>(); // cells whose text differs from the saved value
+    const removed = new Set<string>(); // folded keys of saved rows marked for deletion
+    let newRows: string[] = [];
+    let extraFields: string[] = [];
+    let masked = true;
+    let addingField = false;
+    let hideTimer: number | undefined;
+
+    const out = h("span", { class: "g-msg", role: "status" });
+    const note = (message: string, error = false) => {
+      out.textContent = message;
+      out.classList.toggle("err", error);
     };
-    const text = (value = "", placeholder = "") => h("input", { autocomplete: "off", spellcheck: false, value, placeholder });
-    const name = r ? null : text("", "e.g. db");
-    if (name) name.required = true;
-    const field = text(r?.field, "default");
-    const env = text(r?.env, "any");
-    const ctx = text(r?.context, "any");
-    const value = h("textarea", { autocomplete: "off", spellcheck: false, rows: 1, placeholder: r ? "unchanged" : "", ...notALogin });
-    const desc = text(r?.description);
-    // Further rows of field and value; env and context apply to all of them.
-    const extra: { field: HTMLInputElement; value: HTMLTextAreaElement }[] = [];
-    const addField: HTMLDivElement = h(
+    const desc = text(savedDesc);
+    const table = h("table", { class: "vgrid masked" });
+    const sum = h("span", { class: "sum" });
+    const saveButton = h("button", { class: "tbtn tbtn-primary", type: "button" }, o.cancel ? "Save" : "Save changes");
+    const discardButton = h("button", { class: "tbtn", type: "button" }, o.cancel ? "Cancel" : "Discard");
+    const showButton = h("button", { class: "tbtn", type: "button" }, "Show values");
+    const envInput = text("", "dev, staging, prod");
+    const contextInput = text("", "any");
+    const addRowsButton = h("button", { class: "tbtn", type: "button" });
+    const envSuggest = h("div", { class: "sugg" });
+    const contextSuggest = h("div", { class: "sugg" });
+
+    const eff = (f: string, key: string) => (removed.has(foldKey(key)) ? "" : (draft.get(cellId(f, key))?.value ?? saved.get(cellId(f, key))?.value ?? ""));
+    // Where an empty cell gets its value from: the lookup fallback.
+    const origin = (f: string, key: string) => {
+      const { env, context } = splitKey(key);
+      if (context && env && eff(f, lookupKey(env, ""))) return `↳ ${env}`;
+      if (key !== "*:*" && eff(f, "*:*")) return "↳ any";
+      return "";
+    };
+    const rowKeys = () => uniqueFold(["*:*", ...[...saved.values()].map((x) => x.key).sort(order), ...newRows]);
+    const fields = () => {
+      const all = uniqueFold([...[...saved.values()].map((x) => x.field).sort(order), ...extraFields]);
+      return all.length ? all : [""];
+    };
+    const cells = () => [...table.querySelectorAll<HTMLTextAreaElement>(".cell")];
+
+    function diff() {
+      const changes: Change[] = [];
+      let added = 0;
+      let changed = 0;
+      let deleted = 0;
+      for (const x of draft.values()) {
+        if (removed.has(foldKey(x.key))) continue;
+        if (x.value === "") {
+          changes.push({ op: "delete", field: x.field, key: x.key, value: "" });
+          deleted++;
+        } else {
+          changes.push({ op: "set", field: x.field, key: x.key, value: x.value });
+          if (saved.has(cellId(x.field, x.key))) changed++;
+          else added++;
+        }
+      }
+      for (const x of saved.values()) {
+        if (!removed.has(foldKey(x.key))) continue;
+        changes.push({ op: "delete", field: x.field, key: x.key, value: "" });
+        deleted++;
+      }
+      const described = desc.value.trim() !== savedDesc;
+      if (described) changes.push({ op: "describe", field: "", key: "", value: desc.value.trim() });
+      return { changes, parts: [added && `${added} new`, changed && `${changed} changed`, deleted && `${deleted} deleted`, described && "description"].filter(Boolean) };
+    }
+
+    function summary(): void {
+      const { parts } = diff();
+      sum.textContent = parts.length ? parts.join(" · ") : "No changes";
+      saveButton.disabled = !parts.length;
+      discardButton.disabled = !parts.length && !o.cancel;
+      for (const c of cells()) c.placeholder = origin(c.dataset.f!, c.dataset.key!);
+    }
+
+    const fit = (t: HTMLTextAreaElement) => {
+      t.style.height = "auto";
+      t.style.height = `${t.scrollHeight}px`;
+    };
+
+    function drawTable(): void {
+      const cols = fields();
+      const head = h("tr", {}, h("th", { class: "dim" }, "Env"), h("th", { class: "dim" }, "Context"), ...cols.map((f) => h("th", {}, f || "default")));
+      const last = h("th", { class: "g-act" });
+      let fieldInput: HTMLInputElement | null = null;
+      if (addingField) {
+        const fin = h("input", { class: "th-in", placeholder: "field name", "aria-label": "New field name", autocomplete: "off" });
+        const commitField = () => {
+          if (!addingField) return;
+          const typed = fin.value.trim();
+          const name = typed === "default" ? "" : typed;
+          const known = cols.some((c) => foldKey(c) === foldKey(name));
+          addingField = false;
+          if (typed && !known) extraFields.push(name);
+          note(typed && known ? `Field ${typed} already exists.` : "", Boolean(typed && known));
+          drawTable();
+          if (typed) cells().find((c) => foldKey(c.dataset.f!) === foldKey(name))?.focus();
+        };
+        fin.addEventListener("keydown", (e) => {
+          if (e.key === "Enter") commitField();
+          if (e.key === "Escape") {
+            e.stopPropagation();
+            fin.value = "";
+            commitField();
+          }
+        });
+        fin.addEventListener("blur", commitField);
+        last.append(fin);
+        fieldInput = fin;
+      } else {
+        last.append(h("button", { class: "th-add", type: "button", onclick: () => { addingField = true; drawTable(); } }, "+ Field"));
+      }
+      head.append(last);
+      const bodyRows = rowKeys().map((key) => {
+        const { env, context } = splitKey(key);
+        const gone = removed.has(foldKey(key));
+        const tr = h("tr", { class: gone ? "removed" : "" }, h("td", { class: `g-scope${env ? "" : " none"}` }, env || "any"), h("td", { class: `g-scope${context ? "" : " none"}` }, context || "any"));
+        for (const f of cols) {
+          const id = cellId(f, key);
+          const cell = h("textarea", {
+            class: "cell",
+            rows: 1,
+            value: eff(f, key),
+            disabled: gone,
+            autocomplete: "off",
+            "aria-label": `${f || "default"}, env ${env || "any"}, context ${context || "any"}`,
+            ...notALogin,
+          });
+          cell.spellcheck = false;
+          Object.assign(cell.dataset, { f, key });
+          const mark = () => cell.classList.toggle("changed", draft.has(id));
+          mark();
+          cell.addEventListener("input", () => {
+            if (cell.value === (saved.get(id)?.value ?? "")) draft.delete(id);
+            else draft.set(id, { field: f, key, value: cell.value });
+            mark();
+            fit(cell);
+            summary();
+          });
+          cell.addEventListener("focus", () => fit(cell));
+          cell.addEventListener("blur", () => (cell.style.height = ""));
+          cell.addEventListener("keydown", (e) => {
+            if (e.key !== "Enter" || e.shiftKey || e.metaKey || e.ctrlKey || e.isComposing) return;
+            e.preventDefault();
+            const column = cells().filter((c) => c.dataset.f === f && !c.disabled);
+            column[column.indexOf(cell) + 1]?.focus();
+          });
+          tr.append(h("td", { class: "val", "data-label": f || "default" }, cell));
+        }
+        const isNew = newRows.some((k) => foldKey(k) === foldKey(key));
+        tr.append(
+          h(
+            "td",
+            { class: "g-act" },
+            key === "*:*"
+              ? null
+              : h(
+                  "button",
+                  {
+                    class: "tbtn",
+                    type: "button",
+                    "aria-label": `${gone ? "Keep" : "Remove"} ${key}`,
+                    onclick: () => {
+                      if (isNew) {
+                        newRows = newRows.filter((k) => foldKey(k) !== foldKey(key));
+                        for (const [id, x] of draft) if (foldKey(x.key) === foldKey(key)) draft.delete(id);
+                      } else if (gone) removed.delete(foldKey(key));
+                      else removed.add(foldKey(key));
+                      drawTable();
+                    },
+                  },
+                  gone ? "Undo" : "Remove",
+                ),
+          ),
+        );
+        return tr;
+      });
+      table.replaceChildren(h("thead", {}, head), h("tbody", {}, ...bodyRows));
+      fieldInput?.focus();
+      summary();
+    }
+
+    function combos(): string[] {
+      const envs = tokens(envInput);
+      const contexts = tokens(contextInput);
+      const have = new Set(rowKeys().map(foldKey));
+      const list: string[] = [];
+      for (const env of envs.length ? envs : [""]) for (const context of contexts.length ? contexts : [""]) if (!have.has(foldKey(lookupKey(env, context)))) list.push(lookupKey(env, context));
+      return list;
+    }
+
+    function addState(): void {
+      const n = combos().length;
+      addRowsButton.textContent = n === 1 ? "Add 1 row" : `Add ${n} rows`;
+      addRowsButton.disabled = n === 0;
+      for (const [box, input] of [[envSuggest, envInput], [contextSuggest, contextInput]] as const) {
+        for (const b of box.children) b.setAttribute("aria-pressed", String(tokens(input).some((t) => foldKey(t) === foldKey(b.textContent ?? ""))));
+      }
+    }
+
+    function suggest(box: HTMLElement, input: HTMLInputElement, names: string[]): void {
+      box.replaceChildren(
+        ...names.map((name) =>
+          h("button", { type: "button", onclick: () => { const t = tokens(input); input.value = (t.some((x) => foldKey(x) === foldKey(name)) ? t.filter((x) => foldKey(x) !== foldKey(name)) : [...t, name]).join(", "); addState(); } }, name),
+        ),
+      );
+    }
+
+    // Reads the saved entry again, keeps every unsaved edit.
+    function sync(): void {
+      const cur = o.saved();
+      saved = new Map([...cur.values.values()].map((x) => [cellId(x.field, x.key), x]));
+      if (desc.value === savedDesc) desc.value = cur.description;
+      savedDesc = cur.description;
+      const used = usedNames();
+      suggest(envSuggest, envInput, used.envs);
+      suggest(contextSuggest, contextInput, used.contexts);
+      addState();
+      drawTable();
+    }
+
+    const reset = () => {
+      draft.clear();
+      removed.clear();
+      newRows = [];
+      extraFields = [];
+    };
+
+    envInput.addEventListener("input", addState);
+    contextInput.addEventListener("input", addState);
+    desc.addEventListener("input", summary);
+    addRowsButton.addEventListener("click", () => {
+      const list = combos();
+      newRows.push(...list);
+      envInput.value = contextInput.value = "";
+      addState();
+      drawTable();
+      cells().find((c) => c.dataset.key === list[0])?.focus();
+    });
+    showButton.addEventListener("click", () => {
+      window.clearTimeout(hideTimer);
+      masked = !masked;
+      table.classList.toggle("masked", masked);
+      showButton.textContent = masked ? "Show values" : "Hide values";
+      if (!masked) {
+        hideTimer = window.setTimeout(() => {
+          masked = true;
+          table.classList.add("masked");
+          showButton.textContent = "Show values";
+        }, REVEAL_S * 1000);
+      }
+    });
+    saveButton.addEventListener("click", async () => {
+      const { changes } = diff();
+      if (!changes.length) return;
+      saveButton.disabled = true;
+      note("");
+      try {
+        await o.commit(changes);
+        reset();
+        sync();
+        note(o.done);
+      } catch (err) {
+        note(messageOf(err), true);
+        summary();
+      }
+    });
+    discardButton.addEventListener("click", () => {
+      if (o.cancel) return o.cancel();
+      reset();
+      desc.value = savedDesc;
+      note("");
+      drawTable();
+    });
+
+    const envField = labelled("Envs", envInput);
+    envField.append(envSuggest);
+    const contextField = labelled("Contexts", contextInput);
+    contextField.append(contextSuggest);
+    const el = h(
       "div",
-      { class: "full" },
-      h("button", {
-        class: "tbtn",
-        type: "button",
-        onclick: () => {
-          const row = { field: text(), value: h("textarea", { autocomplete: "off", spellcheck: false, rows: 1, ...notALogin }) };
-          extra.push(row);
-          addField.before(input("Field", row.field, "wide"), input("Value", row.value, "wide"));
-          row.field.focus();
-        },
-      }, "add field"),
+      {},
+      labelled("Description", desc, "g-field"),
+      h("div", { class: "grid-bar" }, h("h4", {}, "Values"), showButton),
+      table,
+      h("div", { class: "addrows" }, envField, h("span", { class: "times", "aria-hidden": "true" }, "×"), contextField, addRowsButton),
+      h("div", { class: "savebar" }, sum, saveButton, discardButton, out),
     );
+    el.addEventListener("keydown", (e) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === "Enter" && !saveButton.disabled) {
+        e.preventDefault();
+        saveButton.click();
+      }
+    });
+    sync();
+    return { el, sync, dirty: () => diff().changes.length > 0 };
+  }
+
+  // The one inline editor: a new secret, or every value and the description of an entry.
+  function editorEl(r: Row | null): { el: HTMLElement; grid: Grid } {
+    const name = r ? null : text("", "e.g. db");
     const err = h("span", { class: "err", role: "status" });
-    const saveButton = h("button", { class: "tbtn tbtn-primary", type: "submit" }, "save");
-    const cancel = h("button", { class: "tbtn", type: "button", onclick: closeEditor }, h("kbd", {}, "esc"), "cancel");
-    let deleteEntry: HTMLButtonElement | null = null;
+    const grid = valueGrid({
+      saved: () => current(r ? entryOf(v.entries, r.name).revisions : []),
+      done: r ? `Saved ${r.name}.` : "",
+      cancel: r ? undefined : closeEditor,
+      commit: async (changes) => {
+        const entry = r?.name ?? name!.value.trim();
+        if (!entry) {
+          name?.focus();
+          throw new Error("Name is required.");
+        }
+        const result = await run(() => write(host, u, entry, changes));
+        if (!result) return;
+        if (r) return draw();
+        editing = null;
+        const first = result.written.find((x) => x.op === "set");
+        if (first) selected = JSON.stringify([result.name, first.field, first.key]);
+        draw();
+        focusSelected();
+        say(`Saved ${result.name}.`, "ok");
+      },
+    });
+    let foot: HTMLElement | null = null;
     if (r) {
       const entry = r.name;
       const b = h("button", { class: "tbtn danger", type: "button" }, "delete secret");
@@ -777,64 +1100,9 @@ export async function vaultView(main: HTMLElement, host: Host): Promise<void> {
           b.disabled = false;
         }
       });
-      deleteEntry = b;
+      foot = h("div", { class: "e-foot" }, h("button", { class: "tbtn", type: "button", onclick: closeEditor }, h("kbd", {}, "esc"), "close"), err, h("span", { class: "grow" }), b);
     }
-    const form = h(
-      "form",
-      { novalidate: true },
-      h(
-        "div",
-        { class: "grid" },
-        name ? input("Name", name) : null,
-        input("Field", field, r ? "wide" : undefined),
-        input("Env", env),
-        input("Context", ctx),
-        input(r ? "New value" : "Value", value, "full"),
-        addField,
-        input("Description", desc, "full"),
-      ),
-      h("p", { class: "e-note" }, "Leave field, env and context empty for the default value. Env and context apply to every field. A new value replaces the current one; earlier values stay in history."),
-      h("div", { class: "e-foot" }, saveButton, cancel, err, h("span", { class: "grow" }), deleteEntry),
-    );
-    form.addEventListener("submit", async (e) => {
-      e.preventDefault();
-      const entry = r?.name ?? name!.value.trim();
-      if (!entry) {
-        err.textContent = "Name is required.";
-        name?.focus();
-        return;
-      }
-      let changes: Change[];
-      try {
-        const rows = [{ field: field.value.trim(), value: value.value }, ...extra.map((x) => ({ field: x.field.value.trim(), value: x.value.value }))];
-        changes = rowChanges(rows, lookupKey(env.value.trim(), ctx.value.trim()), r !== null);
-      } catch (e) {
-        err.textContent = messageOf(e);
-        return;
-      }
-      const d = desc.value.trim();
-      if (d !== current(entryOf(v.entries, entry).revisions).description && (r || d)) changes.push({ op: "describe", field: "", key: "", value: d });
-      if (!changes.length) return closeEditor();
-      saveButton.disabled = true;
-      err.textContent = "";
-      try {
-        const saved = await run(() => write(host, u, entry, changes));
-        if (!saved) return;
-        editing = null;
-        const first = saved.written[0];
-        const savedKey = { name: saved.name, ...splitKey(first.key), field: first.field };
-        selected = first.op === "set" ? JSON.stringify([saved.name, first.field, first.key]) : selected;
-        draw();
-        focusSelected();
-        const sets = saved.written.filter((x) => x.op === "set").length;
-        say(`Saved ${sets > 1 ? `${saved.name} with ${sets} fields` : first.op === "set" ? rowLabel(savedKey) : saved.name}.`, "ok");
-      } catch (e) {
-        err.textContent = messageOf(e);
-      } finally {
-        saveButton.disabled = false;
-      }
-    });
-    return h("li", { class: "editor" }, h("h3", {}, r ? `> edit ${r.name}` : "> new secret"), form);
+    return { el: h("li", { class: "editor" }, h("h3", {}, r ? `> edit ${r.name}` : "> new secret"), name ? labelled("Name", name, "g-field") : null, grid.el, foot), grid };
   }
 
   // The share panel: who it is for, which fields, how long; then the link, once.
